@@ -11,3 +11,4 @@ export * from "./constants/money.js";
 export * from "./schemas/tip.schema.js";
 export * from "./schemas/health.schema.js";
 export * from "./schemas/staff.schema.js";
+export * from "./schemas/store.schema.js";

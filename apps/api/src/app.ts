@@ -37,7 +37,20 @@ import {
 import { createStaffRepository } from "./features/staff/staff.repository.js";
 import { createInMemoryStaffRepository } from "./features/staff/staff.repository.memory.js";
 import { buildTipUrl } from "./features/staff/staff.model.js";
-import { resolveApproval } from "./features/store/store.service.js";
+import {
+  getMyStore,
+  claimStore,
+  getStore,
+  approveStore,
+  updateStore,
+  createStoreInvite,
+  listStoreInvites,
+  listStoreStaff,
+  getStoreGratitude,
+} from "./features/store/store.service.js";
+import { createStoreRepository } from "./features/store/store.repository.js";
+import { createInMemoryStoreRepository } from "./features/store/store.repository.memory.js";
+import { buildInviteUrl } from "./features/store/store.model.js";
 
 // 認証ミドルウェア（JWKS 検証は infrastructure に隔離。配線はここで行う）
 import { createAuthMiddleware } from "./middleware/auth.js";
@@ -74,6 +87,9 @@ export function createApp() {
   const staffRepo = useDb
     ? createStaffRepository()
     : createInMemoryStaffRepository();
+  const storeRepo = useDb
+    ? createStoreRepository()
+    : createInMemoryStoreRepository();
 
   // フロントのベース URL（WEB_BASE_URL、未設定はローカル）。決済戻り先と QR用URL の組み立てに使う。
   const webBaseUrl = process.env.WEB_BASE_URL ?? "http://localhost:5173";
@@ -87,6 +103,9 @@ export function createApp() {
 
   // QR用URL（/tip/:staffId）の組み立てに使うフロントのベース URL（QR が指す固定 URL）
   const buildStaffTipUrl = (staffId: string) => buildTipUrl(webBaseUrl, staffId);
+
+  // スタッフ招待リンク（/invite/:code）の組み立てに使うフロントのベース URL
+  const buildStoreInviteUrl = (code: string) => buildInviteUrl(webBaseUrl, code);
 
   // Connect オンボーディングの戻り先 URL を組み立てる。
   // 完了後は本人確認完了画面へ、中断・期限切れ時は残高ステータス画面へ戻す（完了の正は Webhook）。
@@ -137,7 +156,25 @@ export function createApp() {
   const inviteRoute = createInviteRoute({
     getInviteInfo: (code) => getInviteInfo(staffRepo, code),
   });
-  const storeRoute = createStoreRoute({ resolveApproval });
+  // store（認証必須・店スコープ）。承認・招待・スタッフ一覧・感謝の可視化のユースケースを注入する。
+  // 店向けの全ユースケースは Service 層で「自店の所有者か」を検証し、金額・残高・着金を一切返さない。
+  const storeRoute = createStoreRoute({
+    authMiddleware,
+    getMyStore: (authUserId) => getMyStore(storeRepo, authUserId),
+    claimStore: (authUserId, storeId) => claimStore(storeRepo, authUserId, storeId),
+    getStore: (authUserId, storeId) => getStore(storeRepo, authUserId, storeId),
+    approveStore: (authUserId, storeId) => approveStore(storeRepo, authUserId, storeId),
+    updateStore: (authUserId, storeId, input) =>
+      updateStore(storeRepo, authUserId, storeId, input),
+    createStoreInvite: (authUserId, storeId) =>
+      createStoreInvite(storeRepo, buildStoreInviteUrl, authUserId, storeId),
+    listStoreInvites: (authUserId, storeId) =>
+      listStoreInvites(storeRepo, buildStoreInviteUrl, authUserId, storeId),
+    listStoreStaff: (authUserId, storeId) => listStoreStaff(storeRepo, authUserId, storeId),
+    // 感謝の件数集計の基準時刻はサーバーの現在時刻（now）を渡す（Model で JST 判定）
+    getStoreGratitude: (authUserId, storeId) =>
+      getStoreGratitude(storeRepo, authUserId, storeId, new Date()),
+  });
 
   // Webhook ルートを配線（署名検証＝infrastructure、処理＝webhook Service + tip 更新）。
   const webhookRoute = createWebhookRoute({

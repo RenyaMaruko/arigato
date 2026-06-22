@@ -1,0 +1,192 @@
+import { useState } from "react";
+import { useTranslation } from "react-i18next";
+import { useNavigate } from "@tanstack/react-router";
+import type { StoreProfile, StoreInviteCreated } from "@arigato/shared";
+import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StoreBottomNav } from "../components/StoreBottomNav.js";
+import { StoreGuard } from "../components/StoreGuard.js";
+import { useCreateStoreInvite } from "../hooks/useStore.js";
+
+/**
+ * スタッフ招待（リンク発行）画面（/store/invites/new）。モック04に対応。
+ * 「招待リンクを発行」で一意の招待リンク（/invite/:code）を生成する（方式A）。
+ * このリンクから登録した店員さんは自動で自店に所属する。
+ */
+export function StoreInviteCreatePage() {
+  return <StoreGuard>{(store) => <StoreInviteCreateContent store={store} />}</StoreGuard>;
+}
+
+function StoreInviteCreateContent({ store }: { store: StoreProfile }) {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  const createMutation = useCreateStoreInvite(store.id);
+
+  const [issued, setIssued] = useState<StoreInviteCreated | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [copied, setCopied] = useState(false);
+
+  // 招待リンクを発行する
+  const handleIssue = () => {
+    setError(null);
+    createMutation.mutate(undefined, {
+      onSuccess: (invite) => setIssued(invite),
+      onError: () => setError(t("store.inviteError")),
+    });
+  };
+
+  // 招待リンクをクリップボードへコピー
+  const handleCopy = async () => {
+    if (!issued) return;
+    try {
+      await navigator.clipboard.writeText(issued.inviteUrl);
+      setCopied(true);
+      window.setTimeout(() => setCopied(false), 2000);
+    } catch {
+      // コピー不可の環境では何もしない（リンク自体は画面に表示済み）
+    }
+  };
+
+  return (
+    <PhoneFrame>
+      {/* ヘッダー（戻る） */}
+      <div className="flex flex-none items-center gap-3.5 px-5 pb-4 pt-2">
+        <button
+          type="button"
+          onClick={() => navigate({ to: "/store/staff" })}
+          className="text-ink"
+          aria-label={t("store.back")}
+        >
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            aria-hidden="true"
+          >
+            <path d="M15 5 8 12l7 7" />
+          </svg>
+        </button>
+        <span className="text-token-2xl font-bold text-ink">{t("store.inviteTitle")}</span>
+      </div>
+
+      {/* ステップインジケータ */}
+      <div className="flex flex-none items-center justify-center gap-2 px-5 pb-5 pt-1.5">
+        <Step n={1} label={t("store.inviteStep1")} active={!issued} />
+        <span className="h-px w-[18px] bg-handle" />
+        <Step n={2} label={t("store.inviteStep2")} active={Boolean(issued)} />
+        <span className="h-px w-[18px] bg-handle" />
+        <Step n={3} label={t("store.inviteStep3")} active={false} />
+      </div>
+
+      <div className="flex flex-1 flex-col overflow-y-auto px-7 pb-6 pt-2.5">
+        {/* 封筒アイコン */}
+        <div className="mt-6 flex justify-center">
+          <svg width="120" height="100" viewBox="0 0 120 100" fill="none" aria-hidden="true">
+            <rect x="10" y="22" width="100" height="68" rx="8" fill="#fde8ee" />
+            <path
+              d="M10 30 L60 64 L110 30"
+              stroke="#ec3a6d"
+              strokeWidth="3"
+              fill="none"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            {/* 折り返しの側面ライン（モック04の封筒） */}
+            <path
+              d="M10 90 L48 56 M110 90 L72 56"
+              stroke="#ec3a6d"
+              strokeWidth="3"
+              fill="none"
+              strokeLinecap="round"
+            />
+            <circle cx="60" cy="34" r="16" fill="#ec3a6d" />
+            {/* 封筒の上のハート（感謝のしるし） */}
+            <path
+              d="M55 34a4 4 0 0 1 4-4h2a4 4 0 0 1 0 8M65 34a4 4 0 0 1-4 4h-2a4 4 0 0 1 0-8"
+              stroke="#fff"
+              strokeWidth="2"
+              fill="none"
+              strokeLinecap="round"
+            />
+          </svg>
+        </div>
+
+        {!issued ? (
+          <>
+            <div className="mt-6 whitespace-pre-line text-center text-token-2xl font-bold leading-snug text-ink">
+              {t("store.inviteHeading")}
+            </div>
+            <div className="mt-3.5 whitespace-pre-line text-center text-token-base leading-relaxed text-ink-sub">
+              {t("store.inviteLead")}
+            </div>
+
+            <div className="mt-auto flex flex-col gap-3 pt-9">
+              <button
+                type="button"
+                onClick={handleIssue}
+                disabled={createMutation.isPending}
+                className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page disabled:opacity-60"
+              >
+                {createMutation.isPending ? t("store.inviteIssuing") : t("store.inviteIssue")}
+              </button>
+              {error && <div className="text-center text-token-sm text-rose">{error}</div>}
+            </div>
+          </>
+        ) : (
+          <>
+            <div className="mt-6 text-center text-token-2xl font-bold text-ink">
+              {t("store.inviteIssuedTitle")}
+            </div>
+            {/* 発行された招待リンク */}
+            <div className="mt-5 break-all rounded-xl border-[1.5px] border-line bg-surface-subtle px-4 py-4 text-token-sm text-ink">
+              {issued.inviteUrl}
+            </div>
+
+            <div className="mt-auto flex flex-col gap-3 pt-9">
+              <button
+                type="button"
+                onClick={handleCopy}
+                className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
+              >
+                {copied ? t("store.inviteCopied") : t("store.inviteCopy")}
+              </button>
+              <button
+                type="button"
+                onClick={() => navigate({ to: "/store/invites" })}
+                className="rounded-xl border-[1.5px] border-line bg-page py-4 text-center text-token-md font-semibold text-ink-label"
+              >
+                {t("store.inviteSeeList")}
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+
+      <StoreBottomNav active="staff" />
+    </PhoneFrame>
+  );
+}
+
+/**
+ * 招待フローのステップ表示（番号バッジ＋ラベル）。
+ */
+function Step({ n, label, active }: { n: number; label: string; active: boolean }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span
+        className={`flex h-5 w-5 items-center justify-center rounded-full text-token-xs font-bold ${
+          active ? "bg-rose text-page" : "border-[1.5px] border-handle text-muted"
+        }`}
+      >
+        {n}
+      </span>
+      <span className={`text-token-sm ${active ? "font-bold text-rose" : "text-muted"}`}>
+        {label}
+      </span>
+    </span>
+  );
+}

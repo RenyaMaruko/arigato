@@ -18,6 +18,15 @@ import { StaffBalancePage } from "../features/staff/pages/StaffBalancePage.js";
 import { StaffIdentityFlowPage } from "../features/staff/pages/StaffIdentityFlowPage.js";
 import { StaffIdentityCompletePage } from "../features/staff/pages/StaffIdentityCompletePage.js";
 import { StaffTaxExportPage } from "../features/staff/pages/StaffTaxExportPage.js";
+import { StorePage } from "../features/store/pages/StorePage.js";
+import { StoreLoginPage } from "../features/store/pages/StoreLoginPage.js";
+import { StoreApprovalPage } from "../features/store/pages/StoreApprovalPage.js";
+import { StoreStaffPage } from "../features/store/pages/StoreStaffPage.js";
+import { StoreInviteCreatePage } from "../features/store/pages/StoreInviteCreatePage.js";
+import { StoreInvitesPage } from "../features/store/pages/StoreInvitesPage.js";
+import { StoreGratitudePage } from "../features/store/pages/StoreGratitudePage.js";
+import { StoreSettingsPage } from "../features/store/pages/StoreSettingsPage.js";
+import { StoreProfilePage } from "../features/store/pages/StoreProfilePage.js";
 
 /**
  * TanStack Router のルーティング定義。
@@ -153,6 +162,69 @@ const inviteRoute = createRoute({
   component: StaffInviteAcceptPage,
 });
 
+// "/store" 店入口（認証ゲート。ログイン/導入セットアップ/ホームを内部で出し分ける）
+const storeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store",
+  component: StorePage,
+});
+
+// "/store/login" 店ログイン画面（直接アクセス用）
+const storeLoginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/login",
+  component: StoreLoginPage,
+});
+
+// "/store/approval" 導入・承認画面（pending→approved）
+const storeApprovalRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/approval",
+  component: StoreApprovalPage,
+});
+
+// "/store/staff" スタッフ一覧（在籍管理）
+const storeStaffRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/staff",
+  component: StoreStaffPage,
+});
+
+// "/store/invites/new" スタッフ招待（リンク発行）
+const storeInviteCreateRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/invites/new",
+  component: StoreInviteCreatePage,
+});
+
+// "/store/invites" 招待中の一覧
+const storeInvitesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/invites",
+  component: StoreInvitesPage,
+});
+
+// "/store/gratitude" 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし）
+const storeGratitudeRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/gratitude",
+  component: StoreGratitudePage,
+});
+
+// "/store/settings" 設定
+const storeSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/settings",
+  component: StoreSettingsPage,
+});
+
+// "/store/profile" 店舗プロフィール編集
+const storeProfileRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/profile",
+  component: StoreProfilePage,
+});
+
 // ルートツリーを組み立てる
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -170,6 +242,15 @@ const routeTree = rootRoute.addChildren([
   staffIdentityCompleteRoute,
   staffExportRoute,
   inviteRoute,
+  storeRoute,
+  storeLoginRoute,
+  storeApprovalRoute,
+  storeStaffRoute,
+  storeInviteCreateRoute,
+  storeInvitesRoute,
+  storeGratitudeRoute,
+  storeSettingsRoute,
+  storeProfileRoute,
 ]);
 
 export const router = createRouter({ routeTree });

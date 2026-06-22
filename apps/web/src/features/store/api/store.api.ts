@@ -1,0 +1,139 @@
+import {
+  StoreProfileSchema,
+  StoreInviteCreatedSchema,
+  StoreInvitesResponseSchema,
+  StoreStaffResponseSchema,
+  StoreGratitudeSchema,
+  type StoreProfile,
+  type StoreInviteCreated,
+  type StoreInvitesResponse,
+  type StoreStaffResponse,
+  type StoreGratitude,
+  type UpdateStoreProfileInput,
+} from "@arigato/shared";
+import { apiClient } from "../../../lib/api-client.js";
+
+/**
+ * store feature の API 通信（Hono RPC `hc` 経由）。
+ * バックの型を import して型安全に呼び、応答は shared の Zod スキーマで実行時検証する。
+ * キャッシュ管理（useQuery 等）は hooks 側で行い、ここは通信関数だけを置く。
+ * 認証トークンの付与は api-client（authedFetch）が自動で行う。
+ *
+ * 店向けの応答には金額が含まれない（バックが返さない）。フロントも金額を組み立てない。
+ */
+
+// 店未紐付け（404）を呼び出し側が分岐できるようにするセンチネル
+export const STORE_NOT_FOUND = "store_not_found" as const;
+
+/**
+ * GET /store/me — ログイン中の店アカウントが所有する店を取得する。
+ * 未紐付け（初回ログイン）なら null を返す（フロントは導入セットアップへ誘導）。
+ */
+export async function fetchMyStore(): Promise<StoreProfile | null> {
+  const res = await apiClient.store.me.$get();
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`store me request failed: ${res.status}`);
+  }
+  return StoreProfileSchema.parse(await res.json());
+}
+
+/**
+ * POST /store/:storeId/claim — 未所有の店を引き受けて自アカウントに紐付ける（導入セットアップ）。
+ */
+export async function claimStore(storeId: string): Promise<StoreProfile> {
+  const res = await apiClient.store[":storeId"].claim.$post({ param: { storeId } });
+  if (!res.ok) {
+    let code = `status_${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) code = body.error;
+    } catch {
+      // JSON でなければステータスのみ
+    }
+    throw new Error(code);
+  }
+  return StoreProfileSchema.parse(await res.json());
+}
+
+/**
+ * GET /store/:storeId — 自店プロフィールを取得する（店スコープ）。
+ */
+export async function fetchStore(storeId: string): Promise<StoreProfile> {
+  const res = await apiClient.store[":storeId"].$get({ param: { storeId } });
+  if (!res.ok) {
+    throw new Error(`store request failed: ${res.status}`);
+  }
+  return StoreProfileSchema.parse(await res.json());
+}
+
+/**
+ * PATCH /store/:storeId — 自店プロフィールを更新する（名前・紹介・業種・ロゴ）。
+ */
+export async function updateStore(
+  storeId: string,
+  input: UpdateStoreProfileInput,
+): Promise<StoreProfile> {
+  const res = await apiClient.store[":storeId"].$patch({ param: { storeId }, json: input });
+  if (!res.ok) {
+    throw new Error(`store update failed: ${res.status}`);
+  }
+  return StoreProfileSchema.parse(await res.json());
+}
+
+/**
+ * POST /store/:storeId/approve — 導入を承認する（pending→approved）。
+ */
+export async function approveStore(storeId: string): Promise<StoreProfile> {
+  const res = await apiClient.store[":storeId"].approve.$post({ param: { storeId } });
+  if (!res.ok) {
+    throw new Error(`store approve failed: ${res.status}`);
+  }
+  return StoreProfileSchema.parse(await res.json());
+}
+
+/**
+ * POST /store/:storeId/invites — スタッフ招待リンクを発行する（方式A）。
+ */
+export async function createStoreInvite(storeId: string): Promise<StoreInviteCreated> {
+  const res = await apiClient.store[":storeId"].invites.$post({ param: { storeId } });
+  if (!res.ok) {
+    throw new Error(`store invite create failed: ${res.status}`);
+  }
+  return StoreInviteCreatedSchema.parse(await res.json());
+}
+
+/**
+ * GET /store/:storeId/invites — 発行済み招待の一覧を取得する（招待中・所属確定・失効）。
+ */
+export async function fetchStoreInvites(storeId: string): Promise<StoreInvitesResponse> {
+  const res = await apiClient.store[":storeId"].invites.$get({ param: { storeId } });
+  if (!res.ok) {
+    throw new Error(`store invites request failed: ${res.status}`);
+  }
+  return StoreInvitesResponseSchema.parse(await res.json());
+}
+
+/**
+ * GET /store/:storeId/staff — 所属スタッフ一覧を取得する（在籍管理）。
+ */
+export async function fetchStoreStaff(storeId: string): Promise<StoreStaffResponse> {
+  const res = await apiClient.store[":storeId"].staff.$get({ param: { storeId } });
+  if (!res.ok) {
+    throw new Error(`store staff request failed: ${res.status}`);
+  }
+  return StoreStaffResponseSchema.parse(await res.json());
+}
+
+/**
+ * GET /store/:storeId/gratitude — 感謝の可視化を取得する（件数・お客さまの声・スタッフ別件数。金額なし）。
+ */
+export async function fetchStoreGratitude(storeId: string): Promise<StoreGratitude> {
+  const res = await apiClient.store[":storeId"].gratitude.$get({ param: { storeId } });
+  if (!res.ok) {
+    throw new Error(`store gratitude request failed: ${res.status}`);
+  }
+  return StoreGratitudeSchema.parse(await res.json());
+}

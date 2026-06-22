@@ -69,6 +69,38 @@ export async function signInWithGoogle(): Promise<void> {
 }
 
 /**
+ * 店アカウント向け: メールアドレスでサインイン/サインアップ（マジックリンク）。
+ * 認証後の戻り先を店入口（/store）にする点だけが店員さん向けと異なる。
+ */
+export async function signInWithEmailForStore(email: string): Promise<void> {
+  const { error } = await supabase.auth.signInWithOtp({
+    email,
+    options: {
+      emailRedirectTo: `${window.location.origin}/store`,
+    },
+  });
+  if (error) {
+    throw error;
+  }
+}
+
+/**
+ * 店アカウント向け: Google でサインイン/サインアップ（OAuth リダイレクト）。
+ * 認証後の戻り先を店入口（/store）にする。
+ */
+export async function signInWithGoogleForStore(): Promise<void> {
+  const { error } = await supabase.auth.signInWithOAuth({
+    provider: "google",
+    options: {
+      redirectTo: `${window.location.origin}/store`,
+    },
+  });
+  if (error) {
+    throw error;
+  }
+}
+
+/**
  * サインアウトする。
  */
 export async function signOut(): Promise<void> {

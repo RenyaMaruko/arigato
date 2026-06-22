@@ -1,0 +1,105 @@
+import { useTranslation } from "react-i18next";
+import { Link } from "@tanstack/react-router";
+
+/**
+ * 店画面の共通ボトムナビ（ホーム / スタッフ / 感謝の可視化 / 設定）。
+ * 現在地（active）をローズで強調し、それ以外は淡色にする。モック01/03/06/07 共通の下部ナビ。
+ */
+type NavKey = "home" | "staff" | "gratitude" | "settings";
+
+export function StoreBottomNav({ active }: { active: NavKey }) {
+  const { t } = useTranslation();
+
+  // 各タブの色（現在地はローズ・それ以外は淡いグレー）
+  const colorFor = (key: NavKey) => (active === key ? "text-rose" : "text-muted-soft");
+
+  return (
+    <nav className="flex flex-none items-center justify-around border-t border-line-soft px-1.5 pb-4 pt-2.5">
+      {/* ホーム */}
+      <Link to="/store" className={`flex flex-col items-center gap-[3px] ${colorFor("home")}`}>
+        <svg
+          width="23"
+          height="23"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M3 10.5 12 3l9 7.5" />
+          <path d="M5 9.7V20h5v-6h4v6h5V9.7" />
+        </svg>
+        <span className="text-[10px]">{t("store.navHome")}</span>
+      </Link>
+
+      {/* スタッフ */}
+      <Link
+        to="/store/staff"
+        className={`flex flex-col items-center gap-[3px] ${colorFor("staff")}`}
+      >
+        <svg
+          width="23"
+          height="23"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="8" r="4" />
+          <path d="M4.5 20c0-4 3.5-6 7.5-6s7.5 2 7.5 6" />
+        </svg>
+        <span className="text-[10px]">{t("store.navStaff")}</span>
+      </Link>
+
+      {/* 感謝の可視化 */}
+      <Link
+        to="/store/gratitude"
+        className={`flex flex-col items-center gap-[3px] ${colorFor("gratitude")}`}
+      >
+        <svg
+          width="23"
+          height="23"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <path d="M4 5h16a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 20 16H9l-4 3v-3.2A1.5 1.5 0 0 1 3.5 14.3V6.5A1.5 1.5 0 0 1 5 5z" />
+          <circle cx="9" cy="10.5" r="0.9" fill="currentColor" stroke="none" />
+          <circle cx="13" cy="10.5" r="0.9" fill="currentColor" stroke="none" />
+        </svg>
+        <span className="text-[10px]">{t("store.navGratitude")}</span>
+      </Link>
+
+      {/* 設定 */}
+      <Link
+        to="/store/settings"
+        className={`flex flex-col items-center gap-[3px] ${colorFor("settings")}`}
+      >
+        <svg
+          width="23"
+          height="23"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.8"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          aria-hidden="true"
+        >
+          <circle cx="12" cy="12" r="3.2" />
+          <path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1M18.7 18.7l-2.1-2.1M7.4 7.4 5.3 5.3" />
+        </svg>
+        <span className="text-[10px]">{t("store.navSettings")}</span>
+      </Link>
+    </nav>
+  );
+}
