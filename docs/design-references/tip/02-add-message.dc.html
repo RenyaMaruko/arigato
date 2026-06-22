@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  a { text-decoration: none; }
+</style>
+</helmet>
+
+<div style="position:absolute; width:0; height:0; overflow:hidden; pointer-events:none;"><x-import component-from-global-scope="image-slot" from="./image-slot.js" hint-size="0,0"></x-import></div>
+
+<div style="min-height:100%; background:#e9e9ec; display:flex; justify-content:center; font-family:'Noto Sans JP', sans-serif;">
+  <div style="width:100%; max-width:430px; min-height:100vh; background:#fff; display:flex; flex-direction:column; box-shadow:0 0 50px rgba(20,20,40,.1);">
+
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:15px 24px 6px; flex:none;">
+      <span style="font-size:15px; font-weight:600; color:#111;">9:41</span>
+      <div style="display:flex; align-items:center; gap:6px; color:#111;">
+        <span style="font-size:12px;">●●●●</span>
+        <span style="font-size:14px;">📶</span>
+        <span style="display:inline-block; width:24px; height:12px; border:1px solid #111; border-radius:3px; position:relative;"><span style="position:absolute; inset:1.5px; right:5px; background:#111; border-radius:1px;"></span></span>
+      </div>
+    </div>
+
+    <div style="flex:1; overflow-y:auto; padding:8px 24px 28px;">
+      <div style="display:flex; justify-content:flex-end;">
+        <span style="font-size:13px; color:#6b6e76;">🌐 日本語 ⌄</span>
+      </div>
+      <div style="display:flex; justify-content:center; margin-top:6px;">
+        <image-slot id="staffAvatar" shape="circle" style="width:120px; height:120px;" placeholder="顔写真"></image-slot>
+      </div>
+      <div style="text-align:center; margin-top:16px;">
+        <span style="font-size:21px; font-weight:700; color:#1f2024;">山田 さくら </span><span style="font-size:14px; color:#1f2024;">さん</span>
+      </div>
+      <div style="text-align:center; font-size:14px; color:#8b8e96; margin-top:4px;">カフェ Arigato</div>
+
+      <div style="font-size:13px; font-weight:700; color:#3a3c42; margin-top:30px;">金額を選ぶ</div>
+      <div style="display:flex; gap:12px; margin-top:12px;">
+        <div style="flex:1; text-align:center; padding:13px 0; border:1.5px solid #e6e7ea; border-radius:12px; font-size:15px; font-weight:600; color:#1f2024;">¥100</div>
+        <div style="flex:1; text-align:center; padding:13px 0; background:#ec3a6d; border:1.5px solid #ec3a6d; border-radius:12px; font-size:15px; font-weight:700; color:#fff;">¥300</div>
+        <div style="flex:1; text-align:center; padding:13px 0; border:1.5px solid #e6e7ea; border-radius:12px; font-size:15px; font-weight:600; color:#1f2024;">¥500</div>
+      </div>
+
+      <div style="font-size:13px; font-weight:700; color:#3a3c42; margin-top:26px;">メッセージを添える <span style="font-weight:400; color:#9a9da4;">（任意）</span></div>
+      <div style="margin-top:10px; position:relative; border:1.5px solid #e6e7ea; border-radius:13px; padding:13px 14px; min-height:74px;">
+        <span style="font-size:14px; color:#1f2024; line-height:1.6;">接客がとても素敵でした！<br>ありがとうございました😊</span>
+        <span style="position:absolute; right:13px; bottom:11px; font-size:11px; color:#b6b9c0;">20/80</span>
+      </div>
+
+      <div style="font-size:13px; font-weight:700; color:#3a3c42; margin-top:22px;">スタンプを選ぶ <span style="font-weight:400; color:#9a9da4;">（任意）</span></div>
+      <div style="display:flex; gap:14px; margin-top:12px;">
+        <div style="width:48px; height:48px; border-radius:50%; background:#fde8ee; border:2px solid #ec3a6d; display:flex; align-items:center; justify-content:center; font-size:21px;">❤️</div>
+        <div style="width:48px; height:48px; border-radius:50%; background:#f3f4f6; display:flex; align-items:center; justify-content:center; font-size:21px;">🙂</div>
+        <div style="width:48px; height:48px; border-radius:50%; background:#f3f4f6; display:flex; align-items:center; justify-content:center; font-size:21px;">👍</div>
+        <div style="width:48px; height:48px; border-radius:50%; background:#f3f4f6; display:flex; align-items:center; justify-content:center; font-size:21px;">🌸</div>
+      </div>
+
+      <div style="margin-top:28px; display:flex; flex-direction:column; gap:11px;">
+        <a href="03-支払い方法.dc.html" style="text-align:center; padding:16px 0; background:#ec3a6d; border-radius:14px; font-size:15px; font-weight:700; color:#fff;"> Pay で送る</a>
+        <a href="03-支払い方法.dc.html" style="text-align:center; padding:16px 0; background:#fff; border:1.5px solid #e6e7ea; border-radius:14px; font-size:15px; font-weight:600; color:#1f2024; display:flex; align-items:center; justify-content:center; gap:7px;"><span style="font-weight:700; font-size:16px; color:#4285F4;">G</span> Pay で送る</a>
+      </div>
+      <div style="text-align:center; font-size:11px; color:#9a9da4; margin-top:16px;">🔒 安全な決済で、満額が届きます</div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

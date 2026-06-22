@@ -1,0 +1,30 @@
+{
+  "name": "@arigato/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./src/app.js": "./src/app.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch src/server.ts",
+    "start": "tsx src/server.ts",
+    "build": "tsc --noEmit",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@arigato/db": "workspace:*",
+    "@arigato/shared": "workspace:*",
+    "@hono/node-server": "^1.11.0",
+    "@hono/zod-validator": "^0.2.0",
+    "hono": "^4.4.0",
+    "tsx": "^4.10.0",
+    "zod": "^3.23.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.0",
+    "typescript": "^5.4.0",
+    "vitest": "^2.0.0"
+  }
+}
