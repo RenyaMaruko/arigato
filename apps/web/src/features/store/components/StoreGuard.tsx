@@ -4,7 +4,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import type { StoreProfile } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
-import { useAuthSession } from "../../staff/hooks/useAuthSession.js";
+import { useAuthSession } from "../../../lib/use-auth-session.js";
 import { useMyStore } from "../hooks/useStore.js";
 
 /**

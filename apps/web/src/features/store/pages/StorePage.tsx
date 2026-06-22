@@ -1,6 +1,6 @@
 import { useTranslation } from "react-i18next";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
-import { useAuthSession } from "../../staff/hooks/useAuthSession.js";
+import { useAuthSession } from "../../../lib/use-auth-session.js";
 import { useMyStore } from "../hooks/useStore.js";
 import { StoreLoginPage } from "./StoreLoginPage.js";
 import { StoreSetupPage } from "./StoreSetupPage.js";

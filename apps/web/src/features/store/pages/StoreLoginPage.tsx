@@ -6,7 +6,7 @@ import {
   signInWithGoogleForStore,
   signInWithEmailForStore,
 } from "../../../lib/auth.js";
-import { useAuthSession } from "../../staff/hooks/useAuthSession.js";
+import { useAuthSession } from "../../../lib/use-auth-session.js";
 
 /**
  * 店舗ログイン画面（/store のログイン前状態）。

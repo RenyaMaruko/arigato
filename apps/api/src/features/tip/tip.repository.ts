@@ -1,5 +1,6 @@
 import { getDb, sql } from "@arigato/db";
-import type { TipStatus, SettlementStatus } from "@arigato/shared";
+import type { TipStatus, SettlementStatus, IdentityStatus } from "@arigato/shared";
+import { initialSettlementStatusOnSucceeded } from "./tip.model.js";
 
 /**
  * tip feature の Repository 層（DB アクセス専用・生 SQL）。
@@ -197,13 +198,48 @@ export function createTipRepository(): TipRepository {
     // tip ID をキーに status を更新し、確定した PaymentIntent ID も記録する（Webhook を正とする確定）。
     // ホスト型 Checkout では PaymentIntent が支払い時に作られるため、ここで初めて PI が判明することが多い。
     // 既に同じ status へ確定済みなら 0 件（冪等性の補助。重複イベントは webhook_event でも弾く）。
+    //
+    // succeeded 確定時は、送り先店員さんの本人確認状態（identity_status）から settlement_status を確定する
+    // （spec §7「本人確認済の状態で成立した分は succeeded 時に payable から開始」）。判定は Model 純粋関数に委ねる。
     async updateTipStatusByTipId(tipId, status, paymentIntentId) {
       const db = getDb();
+      // succeeded への確定は、staff の identity_status を見て settlement_status を決める（1トランザクション）
+      if (status === "succeeded") {
+        return await db.transaction(async (tx) => {
+          // 対象 tip と送り先店員さんの本人確認状態を取得（未確定の tip のみ）
+          const found = await tx.execute<{ identityStatus: IdentityStatus }>(sql`
+            SELECT s.identity_status AS "identityStatus"
+            FROM tip t
+            JOIN staff s ON s.id = t.staff_id
+            WHERE t.id = ${tipId}
+              AND t.status <> 'succeeded'
+            LIMIT 1
+            FOR UPDATE OF t
+          `);
+          const target = found[0];
+          if (!target) return 0;
+
+          // 本人確認済なら payable、未verified なら held から開始（判定は Model 純粋関数）
+          const settlement = initialSettlementStatusOnSucceeded(target.identityStatus);
+          const rows = await tx.execute<{ id: string }>(sql`
+            UPDATE tip
+            SET status = 'succeeded',
+                settlement_status = ${settlement},
+                stripe_payment_intent_id = COALESCE(${paymentIntentId}, stripe_payment_intent_id),
+                succeeded_at = now()
+            WHERE id = ${tipId}
+              AND status <> 'succeeded'
+            RETURNING id
+          `);
+          return rows.length;
+        });
+      }
+
+      // succeeded 以外（failed 等）は settlement_status を触らずステータスのみ更新する
       const rows = await db.execute<{ id: string }>(sql`
         UPDATE tip
         SET status = ${status},
-            stripe_payment_intent_id = COALESCE(${paymentIntentId}, stripe_payment_intent_id),
-            succeeded_at = ${status === "succeeded" ? sql`now()` : sql`succeeded_at`}
+            stripe_payment_intent_id = COALESCE(${paymentIntentId}, stripe_payment_intent_id)
         WHERE id = ${tipId}
           AND status <> ${status}
         RETURNING id
@@ -211,15 +247,46 @@ export function createTipRepository(): TipRepository {
       return rows.length;
     },
 
-    // PaymentIntent ID をキーに tip のステータスを更新する（Webhook 確定）。
-    // succeeded のときは succeeded_at も now() で記録する。更新できた行数を返す。
+    // PaymentIntent ID をキーに tip のステータスを更新する（Webhook 確定。tipId が無い場合の従経路）。
+    // succeeded のときは staff の identity_status から settlement_status を確定する（Model 純粋関数で判定）。
+    // succeeded 以外は settlement_status を触らない。更新できた行数を返す。
     async updateTipStatusByPaymentIntentId(paymentIntentId, status) {
       const db = getDb();
+      if (status === "succeeded") {
+        return await db.transaction(async (tx) => {
+          // PaymentIntent ID で未確定の tip と送り先店員さんの本人確認状態を取得
+          const found = await tx.execute<{ id: string; identityStatus: IdentityStatus }>(sql`
+            SELECT t.id AS "id", s.identity_status AS "identityStatus"
+            FROM tip t
+            JOIN staff s ON s.id = t.staff_id
+            WHERE t.stripe_payment_intent_id = ${paymentIntentId}
+              AND t.status <> 'succeeded'
+            LIMIT 1
+            FOR UPDATE OF t
+          `);
+          const target = found[0];
+          if (!target) return 0;
+
+          // 本人確認済なら payable、未verified なら held から開始（判定は Model 純粋関数）
+          const settlement = initialSettlementStatusOnSucceeded(target.identityStatus);
+          const rows = await tx.execute<{ id: string }>(sql`
+            UPDATE tip
+            SET status = 'succeeded',
+                settlement_status = ${settlement},
+                succeeded_at = now()
+            WHERE id = ${target.id}
+            RETURNING id
+          `);
+          return rows.length;
+        });
+      }
+
+      // succeeded 以外（failed 等）は settlement_status を触らずステータスのみ更新する
       const rows = await db.execute<{ id: string }>(sql`
         UPDATE tip
-        SET status = ${status},
-            succeeded_at = ${status === "succeeded" ? sql`now()` : sql`succeeded_at`}
+        SET status = ${status}
         WHERE stripe_payment_intent_id = ${paymentIntentId}
+          AND status <> ${status}
         RETURNING id
       `);
       return rows.length;

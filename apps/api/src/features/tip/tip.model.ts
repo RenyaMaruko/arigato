@@ -1,10 +1,26 @@
 import { PLATFORM_FEE_RATE } from "@arigato/shared";
+import type { IdentityStatus, SettlementStatus } from "@arigato/shared";
 
 /**
  * tip feature の Model 層（純粋関数・金額計算）。
- * DB アクセスを持たず、投げ銭の金額計算ルールのみを記述する。Vitest のテスト対象。
- * Sprint 1 では基盤として骨格を用意し、本実装（PaymentIntent 連携）は後続スプリントで拡張する。
+ * DB アクセスを持たず、投げ銭の金額計算・着金状態の判定ルールのみを記述する。Vitest のテスト対象。
  */
+
+/**
+ * 決済が succeeded（成立）した時点での、投げ銭の初期 settlement_status を判定する純粋関数。
+ *
+ * spec §7「本人確認済の状態で成立した分は succeeded 時に payable から開始」を表す。
+ * 送り先店員さんが本人確認済（identity_status = verified）なら着金可能（payable）から開始し、
+ * 未verified（none / pending）なら保留残高（held）から開始する。
+ * held のままの分は、後で account.updated（本人確認完了）で payable へ昇格する。
+ *
+ * 決済の確定はブラウザでなく Webhook を正とするため、この判定は succeeded 確定時に使う。
+ */
+export function initialSettlementStatusOnSucceeded(
+  identityStatus: IdentityStatus,
+): SettlementStatus {
+  return identityStatus === "verified" ? "payable" : "held";
+}
 
 /**
  * 運営の取り分（application_fee）を計算する。

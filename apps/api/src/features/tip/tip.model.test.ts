@@ -5,6 +5,7 @@ import {
   calculatePlatformFee,
   calculateStaffAmount,
   buildTipAmounts,
+  initialSettlementStatusOnSucceeded,
 } from "./tip.model.js";
 
 /**
@@ -59,5 +60,22 @@ describe("tip.model 金額計算", () => {
     expect(calculatePlatformFee(333)).toBe(34);
     expect(calculateCustomerTotal(333)).toBe(367);
     expect(calculateStaffAmount(333)).toBe(333);
+  });
+});
+
+describe("tip.model initialSettlementStatusOnSucceeded（succeeded 時の初期着金状態）", () => {
+  // spec §7: 本人確認済（verified）で成立した分は payable から開始する
+  it("verified なら payable から開始する", () => {
+    expect(initialSettlementStatusOnSucceeded("verified")).toBe("payable");
+  });
+
+  // 未着手（none）はまだ着金できないため保留（held）から開始する
+  it("none なら held から開始する", () => {
+    expect(initialSettlementStatusOnSucceeded("none")).toBe("held");
+  });
+
+  // 審査中（pending）もまだ着金できないため保留（held）から開始する
+  it("pending なら held から開始する", () => {
+    expect(initialSettlementStatusOnSucceeded("pending")).toBe("held");
   });
 });

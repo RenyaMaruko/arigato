@@ -1,38 +1,6 @@
-import { useEffect, useState } from "react";
-import type { Session } from "@supabase/supabase-js";
-import { supabase } from "../../../lib/auth.js";
-
 /**
- * Supabase の認証セッションを購読するフック。
- * 初回にセッションを取得し、以降は onAuthStateChange で変化を反映する。
- * ログイン/ログアウト・OAuth リダイレクト後の復帰を画面に伝える。
+ * 認証セッション購読フックの再エクスポート。
+ * 実体は横断的な lib/use-auth-session に移動した（staff / store 双方が同じ実装を共有するため）。
+ * staff 側の既存 import を壊さないよう、ここからは lib の実装を再エクスポートするだけにする。
  */
-export function useAuthSession() {
-  const [session, setSession] = useState<Session | null>(null);
-  // 初回のセッション取得が終わるまでは loading（ガードで画面を出し分ける）
-  const [loading, setLoading] = useState(true);
-
-  useEffect(() => {
-    let mounted = true;
-
-    // 初回セッションを取得する
-    supabase.auth.getSession().then(({ data }) => {
-      if (!mounted) return;
-      setSession(data.session);
-      setLoading(false);
-    });
-
-    // セッション変化（ログイン/ログアウト/トークン更新）を購読する
-    const { data: sub } = supabase.auth.onAuthStateChange((_event, next) => {
-      setSession(next);
-      setLoading(false);
-    });
-
-    return () => {
-      mounted = false;
-      sub.subscription.unsubscribe();
-    };
-  }, []);
-
-  return { session, loading, isAuthenticated: Boolean(session) };
-}
+export { useAuthSession } from "../../../lib/use-auth-session.js";
