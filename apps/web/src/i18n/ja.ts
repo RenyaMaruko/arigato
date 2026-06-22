@@ -18,7 +18,6 @@ export const ja = {
       san: "さん",
       selectAmount: "金額を選ぶ",
       addMessage: "メッセージを添える",
-      selectStamp: "スタンプを選ぶ",
       optional: "（任意）",
       messagePlaceholder: "例）ありがとう！",
       payWithApplePay: " Pay で送る",

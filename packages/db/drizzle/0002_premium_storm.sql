@@ -1,0 +1,1 @@
+ALTER TABLE "tip" DROP COLUMN IF EXISTS "stamp";

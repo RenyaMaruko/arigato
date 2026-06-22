@@ -14,8 +14,9 @@
 
 - [ ] 店が Supabase Auth でログインでき、店スコープの認証必須ルートが JWT を検証する
 - [ ] `POST /store/:storeId/approve` で店の status が pending から approved に遷移する
-- [ ] `GET /store/:storeId/staff` が所属スタッフ一覧を返し、店ホームから各スタッフの QR 発行窓口に到達できる
-- [ ] `GET /store/:storeId/gratitude` が「ありがとうの件数」と「お客さまの声（メッセージ・スタンプ）」を返す
+- [ ] `GET /store/:storeId/staff` が所属スタッフ一覧を返す（在籍管理。QR は店員本人が発行するため店は発行主体ではない）
+- [ ] `POST /store/:storeId/invites` でスタッフ招待（リンク/コード）を発行でき、店員はその招待経由で所属が確定する（方式A）
+- [ ] `GET /store/:storeId/gratitude` が「ありがとうの件数」と「お客さまの声（メッセージ）」を返す
 - [ ] `GET /store/:storeId/gratitude` のレスポンスに金額（amount / customer_total / platform_fee）が一切含まれない
 - [ ] 店向けのどの API・画面にも金額ランキング・金額レポートが存在しない
 - [ ] 感謝の可視化画面に件数とお客さまの声が表示され、金額は画面のどこにも表示されない

@@ -1,9 +1,8 @@
 import { create } from "zustand";
-import type { Stamp } from "@arigato/shared";
 
 /**
  * 投げ銭画面の UI 状態ストア（Zustand）。
- * 「選択中の金額・メッセージ・スタンプ・支払いシートの開閉」だけを持つ。
+ * 「選択中の金額・メッセージ・支払いシートの開閉」だけを持つ。
  * サーバー状態（店員情報・tip 記録結果）は TanStack Query 側で扱い、ここには持たない。
  * シートを開閉しても入力が保持されるよう、フォーム状態をここに集約する。
  */
@@ -13,8 +12,6 @@ type TipFormState = {
   amount: number | null;
   // 一言メッセージ（任意・最大80文字）
   message: string;
-  // 選択中のスタンプ（任意・未選択は null）
-  stamp: Stamp | null;
   // 支払い方法ボトムシートの開閉
   sheetOpen: boolean;
 
@@ -22,8 +19,6 @@ type TipFormState = {
   setAmount: (amount: number) => void;
   // メッセージを更新する
   setMessage: (message: string) => void;
-  // スタンプを選択/解除する（同じものを再タップしたら解除）
-  toggleStamp: (stamp: Stamp) => void;
   // シートを開く
   openSheet: () => void;
   // シートを閉じる（入力は保持したまま）
@@ -36,7 +31,6 @@ type TipFormState = {
 const initialState = {
   amount: 300 as number | null,
   message: "",
-  stamp: null as Stamp | null,
   sheetOpen: false,
 };
 
@@ -45,8 +39,6 @@ export const useTipFormStore = create<TipFormState>((set) => ({
 
   setAmount: (amount) => set({ amount }),
   setMessage: (message) => set({ message }),
-  // 同じスタンプを再タップしたら解除、違うものなら切り替え
-  toggleStamp: (stamp) => set((s) => ({ stamp: s.stamp === stamp ? null : stamp })),
   openSheet: () => set({ sheetOpen: true }),
   closeSheet: () => set({ sheetOpen: false }),
   reset: () => set({ ...initialState }),

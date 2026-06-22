@@ -2,13 +2,6 @@ import { z } from "zod";
 import { MAX_TIP_AMOUNT, MESSAGE_MAX_LENGTH, MIN_TIP_AMOUNT } from "../constants/money.js";
 
 /**
- * 投げ銭に添えられるスタンプの種類。
- * お客さまが感情を添えるための4種（heart / smile / thumb / flower）。
- */
-export const StampSchema = z.enum(["heart", "smile", "thumb", "flower"]);
-export type Stamp = z.infer<typeof StampSchema>;
-
-/**
  * 投げ銭の決済ステータス（Stripe の PaymentIntent 状態に対応）。
  */
 export const TipStatusSchema = z.enum(["pending", "succeeded", "failed"]);
@@ -23,15 +16,13 @@ export type SettlementStatus = z.infer<typeof SettlementStatusSchema>;
 
 /**
  * 投げ銭を作成する際にお客さまから受け取る入力（PaymentIntent 作成リクエスト）。
- * 金額・メッセージ・スタンプを検証する。フロント・バックで共有する Schema First の起点。
+ * 金額・メッセージを検証する。フロント・バックで共有する Schema First の起点。
  */
 export const CreateTipInputSchema = z.object({
   // 店員さんに届く満額（円）。最小・最大の範囲で検証する。
   amount: z.number().int().min(MIN_TIP_AMOUNT).max(MAX_TIP_AMOUNT),
   // 任意の一言メッセージ（最大80文字）
   message: z.string().max(MESSAGE_MAX_LENGTH).optional(),
-  // 任意のスタンプ
-  stamp: StampSchema.optional(),
 });
 export type CreateTipInput = z.infer<typeof CreateTipInputSchema>;
 
@@ -47,7 +38,6 @@ export const TipSchema = z.object({
   platformFee: z.number().int(),
   customerTotal: z.number().int(),
   message: z.string().max(MESSAGE_MAX_LENGTH).nullable(),
-  stamp: StampSchema.nullable(),
   status: TipStatusSchema,
   settlementStatus: SettlementStatusSchema,
   createdAt: z.string(),
@@ -89,14 +79,13 @@ export type TipIntentResult = z.infer<typeof TipIntentResultSchema>;
 
 /**
  * 完了画面（GET /tip/:staffId/complete）の表示情報。
- * 誰に・¥◯◯（当該 tip の送金額のみ）・どのメッセージ・スタンプを再掲する。
+ * 誰に・¥◯◯（当該 tip の送金額のみ）・どのメッセージを再掲する。
  */
 export const TipCompleteSchema = z.object({
   tipId: z.string().uuid(),
   staffDisplayName: z.string(),
   amount: z.number().int(),
   message: z.string().nullable(),
-  stamp: StampSchema.nullable(),
   // 決済の確定状況（Webhook を正とする）。完了表示は succeeded 確定後に成立させる
   status: TipStatusSchema,
 });

@@ -5,14 +5,13 @@ import { useStaffDisplayInfo, useCreateTipIntent } from "../hooks/useTip.js";
 import { useTipFormStore } from "../stores/tipFormStore.js";
 import { AmountSelector } from "../components/AmountSelector.js";
 import { MessageInput } from "../components/MessageInput.js";
-import { StampPicker } from "../components/StampPicker.js";
 import { PaymentSheet } from "../components/PaymentSheet.js";
 import { redirectToStripeCheckout } from "../lib/stripe.js";
 
 /**
  * 投げ銭画面（/tip/:staffId、モック 01/02）。
  * 店員さんの表示情報（顔写真枠・名前・店名・一言）を出し、
- * 金額3択・メッセージ・スタンプを選んで「Pay で送る / G Pay で送る」から支払いシートを開く。
+ * 金額3択・メッセージを選んで「Pay で送る / G Pay で送る」から支払いシートを開く。
  * シート内のいずれかの支払い方法でモック決済が成立し、完了画面へ遷移する。
  * お客さま向けのため認証は不要（ログイン/登録なしで完結）。
  */
@@ -26,14 +25,12 @@ export function TipPage() {
   // 投げ銭作成（モック決済成立）ミューテーション
   const createIntent = useCreateTipIntent(staffId);
 
-  // UI 状態（選択中金額・メッセージ・スタンプ・シート開閉）は Zustand に集約
+  // UI 状態（選択中金額・メッセージ・シート開閉）は Zustand に集約
   const amount = useTipFormStore((s) => s.amount);
   const message = useTipFormStore((s) => s.message);
-  const stamp = useTipFormStore((s) => s.stamp);
   const sheetOpen = useTipFormStore((s) => s.sheetOpen);
   const setAmount = useTipFormStore((s) => s.setAmount);
   const setMessage = useTipFormStore((s) => s.setMessage);
-  const toggleStamp = useTipFormStore((s) => s.toggleStamp);
   const openSheet = useTipFormStore((s) => s.openSheet);
   const closeSheet = useTipFormStore((s) => s.closeSheet);
 
@@ -48,7 +45,6 @@ export function TipPage() {
         amount,
         // 空文字メッセージは送らず undefined にする（任意入力のため）
         message: message.trim() === "" ? undefined : message.trim(),
-        stamp: stamp ?? undefined,
       },
       {
         onSuccess: async (result) => {
@@ -122,13 +118,6 @@ export function TipPage() {
               onChange={setMessage}
               placeholder={t("tip.messagePlaceholder")}
             />
-
-            {/* スタンプを選ぶ（任意） */}
-            <div className="mt-[22px] text-token-base font-bold text-ink-label">
-              {t("tip.selectStamp")}{" "}
-              <span className="font-normal text-muted">{t("tip.optional")}</span>
-            </div>
-            <StampPicker selected={stamp} onToggle={toggleStamp} />
 
             {/* 送るボタン群（押下で支払いシートを開く） */}
             <div className="mt-7 flex flex-col gap-[11px]">

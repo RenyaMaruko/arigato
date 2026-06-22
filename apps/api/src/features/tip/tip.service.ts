@@ -129,7 +129,6 @@ export async function createTipIntent(
     platformFee: amounts.platformFee,
     customerTotal: amounts.customerTotal,
     message: input.message ?? null,
-    stamp: input.stamp ?? null,
     // 決済はまだ成立していない → pending
     status: "pending",
     // 本人確認前に受けた分は保留残高（held）から開始
@@ -173,7 +172,7 @@ export async function createTipIntent(
 
 /**
  * 完了画面の表示情報を取得する。
- * 当該 tip の送金額・メッセージ・スタンプと、送り先店員さんの名前を再掲する。
+ * 当該 tip の送金額・メッセージと、送り先店員さんの名前を再掲する。
  * amount は「当該 tip の送金額のみ」を返す（履歴・合算は返さない）。
  */
 export async function getTipComplete(
@@ -197,7 +196,6 @@ export async function getTipComplete(
     staffDisplayName: staffRow.displayName,
     amount: tip.amount,
     message: tip.message,
-    stamp: tip.stamp,
     // 完了表示は succeeded 確定後に成立させるため、決済ステータスも返す（Webhook を正とする）
     status: tip.status,
   };

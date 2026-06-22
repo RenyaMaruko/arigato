@@ -1,5 +1,5 @@
 import { getDb, sql } from "@arigato/db";
-import type { Stamp, TipStatus, SettlementStatus } from "@arigato/shared";
+import type { TipStatus, SettlementStatus } from "@arigato/shared";
 
 /**
  * tip feature の Repository 層（DB アクセス専用・生 SQL）。
@@ -31,7 +31,6 @@ export type InsertTipParams = {
   platformFee: number;
   customerTotal: number;
   message: string | null;
-  stamp: Stamp | null;
   status: TipStatus;
   settlementStatus: SettlementStatus;
   stripePaymentIntentId: string | null;
@@ -61,7 +60,6 @@ export type TipRow = {
   platformFee: number;
   customerTotal: number;
   message: string | null;
-  stamp: Stamp | null;
   status: TipStatus;
   settlementStatus: SettlementStatus;
 };
@@ -136,12 +134,12 @@ export function createTipRepository(): TipRepository {
       const rows = await db.execute<TipRow>(sql`
         INSERT INTO tip (
           staff_id, store_id, amount, platform_fee, customer_total,
-          message, stamp, status, settlement_status,
+          message, status, settlement_status,
           stripe_payment_intent_id, stripe_checkout_session_id, succeeded_at
         ) VALUES (
           ${params.staffId}, ${params.storeId}, ${params.amount},
           ${params.platformFee}, ${params.customerTotal},
-          ${params.message}, ${params.stamp}, ${params.status},
+          ${params.message}, ${params.status},
           ${params.settlementStatus}, ${params.stripePaymentIntentId},
           ${params.stripeCheckoutSessionId},
           ${params.status === "succeeded" ? sql`now()` : sql`NULL`}
@@ -149,7 +147,7 @@ export function createTipRepository(): TipRepository {
         RETURNING
           id, staff_id AS "staffId", store_id AS "storeId",
           amount, platform_fee AS "platformFee", customer_total AS "customerTotal",
-          message, stamp, status, settlement_status AS "settlementStatus"
+          message, status, settlement_status AS "settlementStatus"
       `);
       return rows[0]!;
     },
@@ -161,7 +159,7 @@ export function createTipRepository(): TipRepository {
         SELECT
           id, staff_id AS "staffId", store_id AS "storeId",
           amount, platform_fee AS "platformFee", customer_total AS "customerTotal",
-          message, stamp, status, settlement_status AS "settlementStatus"
+          message, status, settlement_status AS "settlementStatus"
         FROM tip
         WHERE id = ${tipId}
         LIMIT 1
@@ -188,7 +186,7 @@ export function createTipRepository(): TipRepository {
         SELECT
           id, staff_id AS "staffId", store_id AS "storeId",
           amount, platform_fee AS "platformFee", customer_total AS "customerTotal",
-          message, stamp, status, settlement_status AS "settlementStatus"
+          message, status, settlement_status AS "settlementStatus"
         FROM tip
         WHERE stripe_payment_intent_id = ${paymentIntentId}
         LIMIT 1

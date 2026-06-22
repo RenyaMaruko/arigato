@@ -25,8 +25,6 @@ export const tip = pgTable("tip", {
   customerTotal: integer("customer_total").notNull(),
   // 任意の一言メッセージ（最大80文字。検証は shared の Zod で担保）
   message: text("message"),
-  // 任意のスタンプ（heart / smile / thumb / flower）
-  stamp: text("stamp"),
   stripePaymentIntentId: text("stripe_payment_intent_id"),
   // Direct charge の Checkout Session ID（Webhook 取りこぼし時の突合・参照に使う）
   stripeCheckoutSessionId: text("stripe_checkout_session_id"),

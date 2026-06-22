@@ -3,12 +3,11 @@ import { useTranslation } from "react-i18next";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { useTipComplete } from "../hooks/useTip.js";
 import { useTipFormStore } from "../stores/tipFormStore.js";
-import { STAMP_EMOJI } from "../components/stamps.js";
 
 /**
  * 完了画面（/tip/:staffId/complete?tipId=、モック 04）。
  * 「ありがとうを届けました！」を主役に大きく見せ、誰に・¥◯◯（当該 tip の送金額）・
- * 入力したメッセージ（とスタンプ）を再掲する。メッセージ未入力なら枠は出さない。
+ * 入力したメッセージを再掲する。メッセージ未入力なら枠は出さない。
  * 「もう一度送る」で投げ銭画面へ戻り、「閉じる」も同様に投げ銭画面へ戻る。
  */
 export function TipCompletePage() {
@@ -18,7 +17,7 @@ export function TipCompletePage() {
   const { staffId } = useParams({ from: "/tip/$staffId/complete" });
   const { tipId } = useSearch({ from: "/tip/$staffId/complete" });
 
-  // サーバー状態: 完了画面の再掲情報（誰に・金額・メッセージ・スタンプ）
+  // サーバー状態: 完了画面の再掲情報（誰に・金額・メッセージ）
   const { data: complete, isLoading, isError } = useTipComplete(staffId, tipId);
   // フォームを初期化する（もう一度送る/閉じる で新規入力に戻すため）
   const reset = useTipFormStore((s) => s.reset);
@@ -128,15 +127,9 @@ export function TipCompletePage() {
             {complete.message && (
               <div className="mt-6 rounded-xl border-[1.5px] border-line-soft bg-surface-subtle px-4 py-[15px]">
                 <span className="text-token-md leading-[1.7] text-ink-label">
-                  {complete.stamp && <span className="mr-1.5">{STAMP_EMOJI[complete.stamp]}</span>}
                   {complete.message}
                 </span>
               </div>
-            )}
-
-            {/* メッセージは無いがスタンプだけ添えた場合の再掲 */}
-            {!complete.message && complete.stamp && (
-              <div className="mt-6 text-center text-token-3xl">{STAMP_EMOJI[complete.stamp]}</div>
             )}
 
             {/* アクション（下寄せ） */}

@@ -37,12 +37,11 @@
 - 高: 決済（Apple Pay / Google Pay 最優先、カード）
 - 高: 送信後の完了表示（誰に・いくら・どのメッセージを再掲）
 - 中: 一言メッセージ（任意・最大80文字）
-- 中: スタンプ選択（任意・heart / smile / thumb / flower）
 - 低: 言語切替UI（構造のみ。初期は日本語固定で可）
 
 ### 店員さん（staff）
-- 高: アカウント作成（Google / メール）。本人確認なしで QR 発行まで到達
-- 高: 個人QR の発行（印刷可能な形）
+- 高: 店の招待リンク/コード経由でアカウント作成（Google / メール）し所属確定。本人確認なしで QR 発行まで到達
+- 高: 個人QR の発行（印刷可能な形・固定URL）
 - 高: 受け取った投げ銭が「保留残高（未着金）」として溜まる
 - 高: 受取履歴の閲覧（**金額は本人のみ**）とメッセージ閲覧
 - 高: 本人確認・口座登録（Stripe Connect オンボーディング、後回し可）。完了で着金可能へ遷移
@@ -51,7 +50,8 @@
 
 ### 店（store）
 - 高: 導入の承認
-- 高: 所属スタッフ一覧の管理（QR発行の窓口）
+- 高: スタッフの招待（招待リンク/コード発行）＝スタッフ追加方式A
+- 高: 所属スタッフ一覧の管理（招待・在籍管理。QR発行の主体は店員本人）
 - 中: 感謝の可視化（ありがとうの件数・お客さまの声）
 - 高（禁止事項）: 金額・金額ランキングは見せない
 
@@ -81,7 +81,7 @@
 QR読取
   ↓
 [01 金額を選ぶ]  /tip/:staffId
-  - 顔写真・名前・店名 / 金額3択 / メッセージ(任意) / スタンプ(任意)
+  - 顔写真・名前・店名 / 金額3択 / メッセージ(任意)
   - 「Pay で送る」「G Pay で送る」
   ↓
 [03 支払い方法]（ボトムシート sheetUp / 背面スクリム）
@@ -97,7 +97,7 @@ QR読取
 ```
 ログイン → ホーム（保留残高・着金状態サマリ）
   ├ 自分のQR（印刷用）
-  ├ 受取履歴（金額あり・本人のみ）→ 各投げ銭の詳細（メッセージ・スタンプ・文脈）
+  ├ 受取履歴（金額あり・本人のみ）→ 各投げ銭の詳細（メッセージ・文脈）
   ├ 本人確認・口座登録（Stripe Connect オンボーディングへ遷移 → 戻り）
   └ 申告データ出力（CSV）
 ```
@@ -125,22 +125,27 @@ QR読取
 - id, name, status（pending / approved）, approved_at, created_at
 - 店はお金に触れないため、決済・残高に関わるカラムを持たない。
 
+### staff_invite（スタッフ招待）— 追加方式A
+- id, store_id, code（一意・招待コード/リンク用トークン）, status（pending / accepted / revoked）, created_at, accepted_at, accepted_staff_id
+- **スタッフ追加は店が招待を発行 → 店員が招待経由でアカウント作成し所属確定**。これにより「店承認」が招待で自然に担保される。
+- 店員は自分のアカウント作成時に code を消費して staff.store_id が確定する。
+
 ### staff（店員さん）
-- id, auth_user_id（Supabase auth.users 参照）, store_id, display_name, headline（一言）, avatar_url
+- id, auth_user_id（Supabase auth.users 参照）, store_id（招待経由で確定）, display_name, headline（一言）, avatar_url
 - stripe_account_id（Connect の Connected Account。未連携は null）
 - identity_status（本人確認・着金可否の状態。下記7参照）
 - created_at
-- **QR は staff.id を指す URL（`/tip/:staffId`）として発行**。別テーブルを持たず staff に紐づく。
+- **QR は staff.id を指す固定 URL（`/tip/:staffId`）として発行**。別テーブルを持たず staff に紐づく。**一度発行したら不変（再発行・失効は当面なし）**。発行主体は店員本人（店ではない）。
 
 ### tip（投げ銭）— 構造化された感謝データの中核
 - id, staff_id, store_id（送信時点の所属を固定保存＝後で異動しても文脈が残る）
 - amount（店員さんに届く満額・円）, platform_fee（運営手数料・円）, customer_total（お客さま支払額・円）
-- message（任意・最大80文字）, stamp（任意・heart/smile/thumb/flower のいずれか）
+- message（任意・最大80文字）
 - stripe_payment_intent_id, status（pending / succeeded / failed）
 - settlement_status（保留 held / 着金可能 payable / 着金済 paid）
 - created_at, succeeded_at
-- 「いつ・どの店で・誰が・どんな文脈で」を構造化: created_at（いつ）/ store_id（どの店）/ staff_id（誰）/ message・stamp（どんな文脈）。
-- **金額は本人のみ閲覧可**: amount を含む読み取りは Service 層で staff 本人に限定。店・他スタッフ向け取得経路は amount を返さない（件数・message・stamp のみ）。
+- 「いつ・どの店で・誰が・どんな文脈で」を構造化: created_at（いつ）/ store_id（どの店）/ staff_id（誰）/ message（どんな文脈）。
+- **金額は本人のみ閲覧可**: amount を含む読み取りは Service 層で staff 本人に限定。店・他スタッフ向け取得経路は amount を返さない（件数・message のみ）。
 
 ### 保留残高 / 着金（保留残高モデル）
 - 残高は tip の `settlement_status` を真実の源泉とし、合算は Service/Model で算出する（held 合計＝保留残高）。
@@ -191,7 +196,7 @@ verified（着金可能）
 | メソッド | パス | 役割 |
 |---|---|---|
 | GET | `/tip/:staffId` | 投げ銭画面の表示情報（顔写真・名前・店名・一言）。金額・履歴は返さない |
-| POST | `/tip/:staffId/intent` | 投げ銭の PaymentIntent 作成（金額・メッセージ・スタンプを受け、Direct charge / application_fee を構成）。tip を pending で記録 |
+| POST | `/tip/:staffId/intent` | 投げ銭の PaymentIntent 作成（金額・メッセージを受け、Direct charge / application_fee を構成）。tip を pending で記録 |
 | GET | `/tip/:staffId/complete?tipId=` | 完了表示用（誰に・¥◯◯・メッセージ）。amount は当該 tip の送金額のみ |
 
 ### webhooks（認証なし・raw body）
@@ -202,7 +207,7 @@ verified（着金可能）
 ### staff（認証必須・本人スコープ）
 | メソッド | パス | 役割 |
 |---|---|---|
-| POST | `/staff/me` | 初回プロフィール作成（display_name・headline・store 紐付け）。本人確認なしで成立 |
+| POST | `/staff/me` | 初回プロフィール作成（display_name・headline・**招待コードで store 紐付け**）。本人確認なしで成立 |
 | GET | `/staff/me` | 自分のプロフィール・identity_status・QR用URL |
 | GET | `/staff/me/balance` | 保留残高（held合計）・着金可能額の集計（**本人のみ**） |
 | GET | `/staff/me/tips` | 受取履歴（**金額・メッセージ含む。本人のみ**） |
@@ -213,8 +218,11 @@ verified（着金可能）
 | メソッド | パス | 役割 |
 |---|---|---|
 | POST | `/store/:storeId/approve` | 導入承認（status を approved に） |
-| GET | `/store/:storeId/staff` | 所属スタッフ一覧（QR発行窓口） |
-| GET | `/store/:storeId/gratitude` | 感謝の可視化（**件数・お客さまの声のみ。金額は返さない**） |
+| POST | `/store/:storeId/invites` | スタッフ招待の発行（招待リンク/コード生成）＝方式A |
+| GET | `/store/:storeId/invites` | 発行済み招待の一覧・状態（pending/accepted/revoked） |
+| GET | `/store/:storeId/staff` | 所属スタッフ一覧（在籍管理） |
+| GET | `/store/:storeId/gratitude` | 感謝の可視化（店全体の件数・お客さまの声フィード・スタッフ別件数。**金額は返さない／件数で並べ替え・順位付けしない**） |
+| GET | `/invites/:code` | 招待コードの検証（店員のアカウント作成画面で所属先を表示。認証なし可） |
 
 ### admin（認証必須・運営 / PC）
 | メソッド | パス | 役割 |
@@ -246,7 +254,7 @@ verified（着金可能）
 
 ## 10. 横断ルール（実装時の不変条件）
 
-- 金額は本人のみ: amount を返す経路は staff 本人 API のみ。store / admin（集計除く）/ 他スタッフへは件数・message・stamp のみ。
+- 金額は本人のみ: amount を返す経路は staff 本人 API のみ。store / admin（集計除く）/ 他スタッフへは件数・message のみ。
 - 店はお金に触れない: store 系 API・モデルに残高 / 着金 / amount を持たせない。
 - 運営の残高を経由しない: Direct charge を使い、Separate charges and transfers を実装しない。
 - Webhook を正: 完了確定はブラウザの戻り値でなく Webhook を真実とする。

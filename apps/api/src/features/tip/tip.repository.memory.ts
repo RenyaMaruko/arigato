@@ -56,7 +56,6 @@ export function createInMemoryTipRepository(): TipRepository {
         platformFee: params.platformFee,
         customerTotal: params.customerTotal,
         message: params.message,
-        stamp: params.stamp,
         status: params.status,
         settlementStatus: params.settlementStatus,
       };
