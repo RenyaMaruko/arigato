@@ -42,7 +42,48 @@ export function TipCompletePage() {
           <p className="mt-10 text-center text-token-md text-rose">{t("tip.notFound")}</p>
         )}
 
-        {complete && (
+        {/* 決済確認中（pending）: 決済成立は Webhook を正とするため、succeeded を待ってから完了表示する */}
+        {complete && complete.status === "pending" && (
+          <div className="mt-16 flex flex-1 flex-col items-center">
+            {/* くるくる回るスピナー（確認中の表現） */}
+            <div className="h-12 w-12 animate-spin rounded-full border-4 border-line-soft border-t-rose" />
+            <p className="mt-6 text-center text-token-lg font-bold text-ink">
+              {t("tip.confirming")}
+            </p>
+            <p className="mt-2 text-center text-token-md leading-[1.7] text-ink-sub">
+              {t("tip.confirmingNote")}
+            </p>
+          </div>
+        )}
+
+        {/* 決済失敗（failed）: 完了表示はせず、再試行を促す */}
+        {complete && complete.status === "failed" && (
+          <div className="flex flex-1 flex-col">
+            <div className="mt-16 flex flex-col items-center">
+              <div className="flex h-[88px] w-[88px] items-center justify-center rounded-full bg-surface-subtle text-token-display text-muted">
+                ×
+              </div>
+              <p className="mt-6 text-center text-token-2xl font-bold text-ink">
+                {t("tip.paymentFailed")}
+              </p>
+              <p className="mt-2 text-center text-token-md leading-[1.7] text-ink-sub">
+                {t("tip.paymentFailedNote")}
+              </p>
+            </div>
+            <div className="mt-auto pt-[30px]">
+              <button
+                type="button"
+                onClick={backToTip}
+                className="w-full rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
+              >
+                {t("tip.retry")}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* 決済成立（succeeded）: 完了表示。Webhook で確定したものだけがここに到達する */}
+        {complete && complete.status === "succeeded" && (
           <>
             {/* 成功チェック（pop アニメ + 周囲の輝き spark） */}
             <div className="mt-14 flex justify-center">

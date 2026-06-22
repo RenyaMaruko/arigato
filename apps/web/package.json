@@ -12,6 +12,7 @@
   "dependencies": {
     "@arigato/api": "workspace:*",
     "@arigato/shared": "workspace:*",
+    "@stripe/stripe-js": "^9.8.0",
     "@tanstack/react-query": "^5.40.0",
     "@tanstack/react-router": "^1.34.0",
     "hono": "^4.4.0",

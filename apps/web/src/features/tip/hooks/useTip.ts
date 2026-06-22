@@ -41,12 +41,17 @@ export function useCreateTipIntent(staffId: string) {
 }
 
 /**
- * 完了画面の表示情報（誰に・¥◯◯・メッセージ）を取得するフック。
+ * 完了画面の表示情報（誰に・¥◯◯・メッセージ・決済ステータス）を取得するフック。
+ * 決済の確定は Webhook を正とするため、status が pending の間はポーリングして
+ * succeeded（または failed）に確定するのを待つ（ブラウザの戻り値では確定しない）。
  */
 export function useTipComplete(staffId: string, tipId: string) {
   return useQuery({
     queryKey: tipKeys.complete(staffId, tipId),
     queryFn: () => fetchTipComplete(staffId, tipId),
     enabled: Boolean(staffId) && Boolean(tipId),
+    // pending の間は2秒ごとに再取得（Webhook 確定を待つ）。確定したら止める。
+    refetchInterval: (query) =>
+      query.state.data?.status === "pending" ? 2000 : false,
   });
 }

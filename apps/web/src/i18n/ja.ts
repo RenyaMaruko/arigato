@@ -40,6 +40,14 @@ export const ja = {
       completeDelivered: "を届けました",
       sendAgain: "もう一度送る",
       close: "閉じる",
+      // 決済確定（Webhook を正とするため、確定待ち・失敗の状態を持つ）
+      confirming: "決済を確認しています…",
+      confirmingNote: "決済が成立すると、この画面が完了表示に切り替わります。",
+      paymentFailed: "決済が成立しませんでした",
+      paymentFailedNote: "お手数ですが、もう一度お試しください。",
+      retry: "もう一度試す",
+      // 決済開始（Checkout 作成）に失敗したとき
+      payStartError: "決済を開始できませんでした。もう一度お試しください。",
     },
   },
 } as const;

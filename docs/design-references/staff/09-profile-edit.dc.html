@@ -1,0 +1,68 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  a { text-decoration: none; color: inherit; }
+  input { font-family:'Noto Sans JP', sans-serif; }
+  input:focus { outline:none; border-color:#ec3a6d !important; }
+</style>
+</helmet>
+
+<div style="position:absolute; width:0; height:0; overflow:hidden; pointer-events:none;"><x-import component-from-global-scope="image-slot" from="./image-slot.js" hint-size="0,0"></x-import></div>
+
+<div style="min-height:100%; background:#e9e9ec; display:flex; justify-content:center; font-family:'Noto Sans JP', sans-serif;">
+  <div style="width:100%; max-width:430px; min-height:100vh; background:#fff; display:flex; flex-direction:column; box-shadow:0 0 50px rgba(20,20,40,.1);">
+
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:15px 24px 6px;">
+      <span style="font-size:15px; font-weight:600; color:#111;">9:41</span>
+      <div style="display:flex; align-items:center; gap:6px; color:#111;"><span style="font-size:12px;">●●●●</span><span style="font-size:14px;">📶</span><span style="display:inline-block; width:24px; height:12px; border:1px solid #111; border-radius:3px; position:relative;"><span style="position:absolute; inset:1.5px; right:5px; background:#111; border-radius:1px;"></span></span></div>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:14px; padding:8px 22px 14px;">
+      <a href="店員-01-ホーム.dc.html" style="color:#1f2024;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></a>
+      <span style="font-size:17px; font-weight:700; color:#1f2024;">プロフィール編集</span>
+    </div>
+
+    <div style="flex:1; overflow-y:auto; padding:18px 26px 28px;">
+      <div style="display:flex; justify-content:center; margin-top:8px;">
+        <div style="position:relative;">
+          <image-slot id="staffAvatar" shape="circle" style="width:96px; height:96px;" placeholder="顔写真"></image-slot>
+          <span style="position:absolute; bottom:0; right:0; width:32px; height:32px; border-radius:50%; background:#ec3a6d; border:2.5px solid #fff; display:flex; align-items:center; justify-content:center; color:#fff;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5a2 2 0 0 1 2-2h2l1.2-1.8h7.6L19 6.5h2a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z" transform="translate(0 0)"/><circle cx="12" cy="13" r="3.4"/></svg></span>
+        </div>
+      </div>
+
+      <div style="margin-top:28px;">
+        <label style="font-size:12px; color:#8b8e96;">表示名</label>
+        <input type="text" value="山田 さくら" style="display:block; width:100%; margin-top:8px; border:1.5px solid #e6e7ea; border-radius:12px; padding:14px; font-size:15px; color:#1f2024;" />
+      </div>
+
+      <div style="margin-top:18px;">
+        <label style="font-size:12px; color:#8b8e96;">一言（任意）</label>
+        <input type="text" value="カフェで働いています☕" style="display:block; width:100%; margin-top:8px; border:1.5px solid #e6e7ea; border-radius:12px; padding:14px; font-size:15px; color:#1f2024;" />
+      </div>
+
+      <div style="margin-top:18px;">
+        <label style="font-size:12px; color:#8b8e96;">所属店</label>
+        <div style="margin-top:8px; border:1.5px solid #e6e7ea; border-radius:12px; padding:14px; font-size:15px; color:#1f2024; display:flex; align-items:center; justify-content:between;">
+          <span style="flex:1;">カフェ Arigato</span>
+          <span style="color:#c2c4ca;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg></span>
+        </div>
+      </div>
+
+      <div style="text-align:center; padding:16px 0; margin-top:34px; background:#ec3a6d; border-radius:14px; font-size:15px; font-weight:700; color:#fff;">保存する</div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

@@ -11,13 +11,15 @@ type Props = {
   open: boolean;
   // 決済処理中（連打防止・ボタン無効化に使う）
   processing: boolean;
+  // 決済開始（Checkout 作成）に失敗したか（エラー表示の出し分けに使う）
+  hasError?: boolean;
   // ✕・スクリムで閉じる
   onClose: () => void;
-  // 支払い方法を選んだ（モック決済を成立させる）
+  // 支払い方法を選んだ（Stripe Checkout を作成して遷移する）
   onPay: () => void;
 };
 
-export function PaymentSheet({ open, processing, onClose, onPay }: Props) {
+export function PaymentSheet({ open, processing, hasError, onClose, onPay }: Props) {
   const { t } = useTranslation();
 
   // 閉じているときは何も描画しない（背面操作を妨げない）
@@ -91,6 +93,13 @@ export function PaymentSheet({ open, processing, onClose, onPay }: Props) {
         >
           {t("tip.cardPay")}
         </button>
+
+        {/* 決済開始に失敗したときのエラー（Checkout 作成失敗・着金口未準備など） */}
+        {hasError && (
+          <div className="mt-[18px] text-center text-token-sm text-rose">
+            {t("tip.payStartError")}
+          </div>
+        )}
 
         {/* 安心メッセージ */}
         <div className="mt-[22px] text-center text-token-xs text-muted">{t("tip.secureNote")}</div>

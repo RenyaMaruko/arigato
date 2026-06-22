@@ -42,15 +42,23 @@ export function createTipRoute(deps: TipDeps) {
       }
       return c.json(info);
     })
-    // 投げ銭の作成（PaymentIntent 相当）。本スプリントはモック決済成立まで進める
+    // 投げ銭の作成（Stripe Direct charge）。Checkout の URL を返す（決済確定は Webhook を正とする）
     .post("/:staffId/intent", zValidator("json", CreateTipInputSchema), async (c) => {
       const staffId = c.req.param("staffId");
       const input = c.req.valid("json");
-      const result = await deps.createTipIntent(staffId, input);
-      if (!result) {
-        return c.json({ error: "staff_not_found" }, 404);
+      try {
+        const result = await deps.createTipIntent(staffId, input);
+        if (!result) {
+          return c.json({ error: "staff_not_found" }, 404);
+        }
+        return c.json(result, 201);
+      } catch (err) {
+        // 店員さんが Connected Account 未連携で Direct charge を作れない（着金口が未準備）
+        if (err instanceof Error && err.message === "staff_not_chargeable") {
+          return c.json({ error: "staff_not_chargeable" }, 409);
+        }
+        throw err;
       }
-      return c.json(result, 201);
     })
     // 完了画面の表示情報（誰に・¥◯◯・メッセージ・スタンプの再掲）
     .get("/:staffId/complete", zValidator("query", CompleteQuerySchema), async (c) => {

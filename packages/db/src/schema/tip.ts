@@ -28,6 +28,8 @@ export const tip = pgTable("tip", {
   // 任意のスタンプ（heart / smile / thumb / flower）
   stamp: text("stamp"),
   stripePaymentIntentId: text("stripe_payment_intent_id"),
+  // Direct charge の Checkout Session ID（Webhook 取りこぼし時の突合・参照に使う）
+  stripeCheckoutSessionId: text("stripe_checkout_session_id"),
   // 決済ステータス（pending / succeeded / failed）
   status: text("status").notNull().default("pending"),
   // 着金ステータス（held: 保留 / payable: 着金可能 / paid: 着金済）

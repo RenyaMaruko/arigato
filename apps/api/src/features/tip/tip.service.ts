@@ -4,16 +4,48 @@ import type {
   TipComplete,
   TipIntentResult,
 } from "@arigato/shared";
+import { CURRENCY } from "@arigato/shared";
 import { buildTipAmounts } from "./tip.model.js";
 import type { TipRepository } from "./tip.repository.js";
 
 /**
  * tip feature の Service 層（ユースケースの指揮者・アクセス制御）。
  * Model（金額計算）と Repository（DB）を組み合わせて投げ銭のユースケースを実現する。
- * Repository は引数で受け取り（注入）、feature 同士・外部依存を直接 import しない。
+ * Repository・外部依存（Stripe）は引数で受け取り（注入）、feature から infrastructure を
+ * 直接 import しない（依存はコンポジションルート app.ts で配線する）。
  *
- * 本スプリントは Stripe 本接続を行わず、決済はモック成立（succeeded）として完了画面まで通す。
+ * Stripe 本接続: Direct charge（店員さんの Connected Account へ直課金）。
+ * 決済の確定はブラウザの戻り値ではなく Webhook を正とするため、ここでは tip を pending で記録し、
+ * Stripe Checkout の URL を返す（succeeded への遷移は Webhook 経由で行う）。
  */
+
+/**
+ * Direct charge の決済セッション作成を Service に注入する関数の型。
+ * 実体は infrastructure/stripe/stripe-connect。Service は Stripe SDK を直接知らない。
+ */
+export type CreateDirectCharge = (params: {
+  connectedAccountId: string;
+  amount: number;
+  applicationFeeAmount: number;
+  customerTotal: number;
+  currency: string;
+  staffDisplayName: string;
+  successUrl: string;
+  cancelUrl: string;
+  tipId: string;
+}) => Promise<{
+  checkoutUrl: string;
+  // ホスト型 Checkout では PaymentIntent はお客さまが支払った時点で作られるため、
+  // セッション作成直後は null のことがある（その場合は Webhook の metadata.tipId で tip を突合する）。
+  paymentIntentId: string | null;
+  checkoutSessionId: string;
+}>;
+
+// 決済後にお客さまを戻すフロントの URL を組み立てる関数の型（コンポジションルートで配線）
+export type BuildReturnUrls = (
+  staffId: string,
+  tipId: string,
+) => { successUrl: string; cancelUrl: string };
 
 /**
  * 投げ銭額からそのまま見積もりを返す純粋ユースケース。
@@ -45,13 +77,34 @@ export async function getStaffDisplayInfo(
   };
 }
 
+// createTipIntent が必要とする依存（コンポジションルートで注入する）
+export type CreateTipIntentDeps = {
+  // Direct charge の Checkout セッションを作る（infrastructure/stripe を配線）
+  createDirectCharge: CreateDirectCharge;
+  // 決済後にお客さまを戻すフロントの URL を組み立てる
+  buildReturnUrls: BuildReturnUrls;
+};
+
+// 店員さんが Connected Account 未連携で Direct charge を作れないことを示すエラー
+export class StaffNotChargeableError extends Error {
+  constructor() {
+    super("staff_not_chargeable");
+    this.name = "StaffNotChargeableError";
+  }
+}
+
 /**
- * 投げ銭の作成（PaymentIntent 相当）。
- * 金額を Model で計算 → tip を記録する。本スプリントは Stripe を呼ばずモックで決済成立させ、
- * status=succeeded・settlement_status=held（本人確認前提）で確定まで進める。
+ * 投げ銭の作成（Stripe Direct charge）。
+ * 金額を Model で計算 → tip を pending で記録 → 店員さんの Connected Account へ Direct charge の
+ * Checkout セッションを作成 → tip に PaymentIntent ID を紐付け、Checkout の URL を返す。
+ *
+ * 決済の確定はブラウザの戻り値ではなく Webhook を正とするため、ここでは succeeded にしない
+ * （tip は pending のまま。payment_intent.succeeded の Webhook で succeeded へ遷移させる）。
+ * 課金タイプは Direct charge のみ。Separate charges and transfers（transfer 経由の着金）は使わない。
  */
 export async function createTipIntent(
   repo: TipRepository,
+  deps: CreateTipIntentDeps,
   staffId: string,
   input: CreateTipInput,
 ): Promise<TipIntentResult | null> {
@@ -59,13 +112,16 @@ export async function createTipIntent(
   const staffRow = await repo.findStaffDisplay(staffId);
   if (!staffRow) return null;
 
+  // Connected Account が無いと Direct charge の課金先が存在しない（着金口の準備が未了）
+  if (!staffRow.stripeAccountId) {
+    throw new StaffNotChargeableError();
+  }
+
   // 金額3点を Model（純粋関数）で算出
   const amounts = buildTipAmounts(input.amount);
 
-  // モック決済を成立させた前提で tip を記録する
-  // （Stripe 本接続は次スプリント。ここではダミーの PaymentIntent ID を付与）
-  const mockPaymentIntentId = `pi_mock_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-
+  // まず tip を pending で記録する（決済確定は Webhook を正とするため succeeded にしない）。
+  // PaymentIntent ID は Direct charge 作成後に後付けする。
   const saved = await repo.insertTip({
     staffId: staffRow.staffId,
     storeId: staffRow.storeId,
@@ -74,11 +130,35 @@ export async function createTipIntent(
     customerTotal: amounts.customerTotal,
     message: input.message ?? null,
     stamp: input.stamp ?? null,
-    // モック決済成立 → 決済は succeeded
-    status: "succeeded",
-    // 本人確認前に成立した分は保留残高（held）から開始
+    // 決済はまだ成立していない → pending
+    status: "pending",
+    // 本人確認前に受けた分は保留残高（held）から開始
     settlementStatus: "held",
-    stripePaymentIntentId: mockPaymentIntentId,
+    // この時点では Checkout Session も PaymentIntent も未作成（Direct charge 作成後に後付けする）
+    stripePaymentIntentId: null,
+    stripeCheckoutSessionId: null,
+  });
+
+  // 戻り先 URL を組み立て、Direct charge の Checkout セッションを作成する
+  const { successUrl, cancelUrl } = deps.buildReturnUrls(staffId, saved.id);
+  const charge = await deps.createDirectCharge({
+    connectedAccountId: staffRow.stripeAccountId,
+    amount: amounts.amount,
+    applicationFeeAmount: amounts.platformFee,
+    customerTotal: amounts.customerTotal,
+    currency: CURRENCY,
+    staffDisplayName: staffRow.displayName,
+    successUrl,
+    cancelUrl,
+    tipId: saved.id,
+  });
+
+  // 作成した Checkout Session ID（と分かれば PaymentIntent ID）を tip に紐付ける。
+  // ホスト型 Checkout では PaymentIntent は支払い時に作られるため作成直後は null のことがある。
+  // その場合でも Webhook は PaymentIntent の metadata.tipId で当該 tip を特定できる（突合の二重化）。
+  await repo.setTipStripeRefs(saved.id, {
+    checkoutSessionId: charge.checkoutSessionId,
+    paymentIntentId: charge.paymentIntentId,
   });
 
   return {
@@ -87,6 +167,7 @@ export async function createTipIntent(
     amount: saved.amount,
     platformFee: saved.platformFee,
     customerTotal: saved.customerTotal,
+    checkoutUrl: charge.checkoutUrl,
   };
 }
 
@@ -117,5 +198,7 @@ export async function getTipComplete(
     amount: tip.amount,
     message: tip.message,
     stamp: tip.stamp,
+    // 完了表示は succeeded 確定後に成立させるため、決済ステータスも返す（Webhook を正とする）
+    status: tip.status,
   };
 }

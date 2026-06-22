@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  a { text-decoration: none; color: inherit; }
+</style>
+</helmet>
+
+<div style="position:absolute; width:0; height:0; overflow:hidden; pointer-events:none;"><x-import component-from-global-scope="image-slot" from="./image-slot.js" hint-size="0,0"></x-import></div>
+
+<div style="min-height:100%; background:#e9e9ec; display:flex; justify-content:center; font-family:'Noto Sans JP', sans-serif;">
+  <div style="width:100%; max-width:430px; min-height:100vh; background:#fafafb; display:flex; flex-direction:column; box-shadow:0 0 50px rgba(20,20,40,.1);">
+
+    <div style="background:#fff; display:flex; justify-content:space-between; align-items:center; padding:15px 24px 6px;">
+      <span style="font-size:15px; font-weight:600; color:#111;">9:41</span>
+      <div style="display:flex; align-items:center; gap:6px; color:#111;"><span style="font-size:12px;">●●●●</span><span style="font-size:14px;">📶</span><span style="display:inline-block; width:24px; height:12px; border:1px solid #111; border-radius:3px; position:relative;"><span style="position:absolute; inset:1.5px; right:5px; background:#111; border-radius:1px;"></span></span></div>
+    </div>
+
+    <div style="background:#fff; display:flex; align-items:center; justify-content:space-between; padding:8px 22px 14px;">
+      <a href="店員-01-ホーム.dc.html" style="color:#1f2024;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></a>
+      <span style="font-size:17px; font-weight:700; color:#1f2024;">受取履歴</span>
+      <span style="font-size:13px; color:#6b6e76;">すべて ⌄</span>
+    </div>
+
+    <div style="flex:1; overflow-y:auto; padding:18px 20px 24px;">
+      <div style="display:flex; align-items:baseline; justify-content:space-between; padding:0 2px 12px;">
+        <span style="font-size:14px; font-weight:700; color:#1f2024;">2025年5月</span>
+        <span style="font-size:13px; color:#6b6e76;">合計 <span style="font-weight:700; color:#1f2024;">¥18,600</span></span>
+      </div>
+
+      <div style="background:#fff; border-radius:16px; box-shadow:0 2px 10px rgba(20,20,40,.05); overflow:hidden;">
+        <!-- item -->
+        <div style="display:flex; gap:12px; padding:16px;">
+          <div style="width:34px; flex:none; font-size:13px; font-weight:700; color:#6b6e76; padding-top:18px;">5/15</div>
+          <image-slot id="cust_emily" shape="circle" style="width:42px; height:42px; flex:none;" placeholder="客"></image-slot>
+          <div style="flex:1;">
+            <div style="font-size:11px; color:#a9acb3;">5/15 19:32</div>
+            <div style="font-size:14px; font-weight:700; color:#1f2024; margin-top:1px;">Emily <span style="font-weight:400;">さん</span></div>
+            <div style="font-size:12px; color:#6b6e76; margin-top:4px; line-height:1.4;">笑顔が素敵で元気になりました！<br>ありがとうございました😊</div>
+          </div>
+          <div style="text-align:right; flex:none;"><div style="font-size:15px; font-weight:700; color:#1f2024;">¥300</div><span style="display:inline-block; margin-top:8px; width:26px; height:26px; border-radius:50%; background:#fde8ee; text-align:center; line-height:26px; font-size:12px;">❤️</span></div>
+        </div>
+        <div style="height:1px; background:#f1f1f3; margin:0 16px;"></div>
+        <!-- item -->
+        <div style="display:flex; gap:12px; padding:16px;">
+          <div style="width:34px; flex:none; font-size:13px; font-weight:700; color:#6b6e76; padding-top:18px;">5/15</div>
+          <image-slot id="cust_david" shape="circle" style="width:42px; height:42px; flex:none;" placeholder="客"></image-slot>
+          <div style="flex:1;">
+            <div style="font-size:11px; color:#a9acb3;">5/15 13:10</div>
+            <div style="font-size:14px; font-weight:700; color:#1f2024; margin-top:1px;">David <span style="font-weight:400;">さん</span></div>
+            <div style="font-size:12px; color:#6b6e76; margin-top:4px; line-height:1.4;">丁寧な接客に感動しました！</div>
+          </div>
+          <div style="text-align:right; flex:none;"><div style="font-size:15px; font-weight:700; color:#1f2024;">¥500</div><span style="display:inline-block; margin-top:8px; width:26px; height:26px; border-radius:50%; background:#e8f0fe; text-align:center; line-height:26px; font-size:12px;">👍</span></div>
+        </div>
+        <div style="height:1px; background:#f1f1f3; margin:0 16px;"></div>
+        <!-- item -->
+        <div style="display:flex; gap:12px; padding:16px;">
+          <div style="width:34px; flex:none; font-size:13px; font-weight:700; color:#6b6e76; padding-top:18px;">5/14</div>
+          <image-slot id="cust_anna" shape="circle" style="width:42px; height:42px; flex:none;" placeholder="客"></image-slot>
+          <div style="flex:1;">
+            <div style="font-size:11px; color:#a9acb3;">5/14 18:45</div>
+            <div style="font-size:14px; font-weight:700; color:#1f2024; margin-top:1px;">Anna <span style="font-weight:400;">さん</span></div>
+            <div style="font-size:12px; color:#6b6e76; margin-top:4px; line-height:1.4;">また来ます！応援してます🌸</div>
+          </div>
+          <div style="text-align:right; flex:none;"><div style="font-size:15px; font-weight:700; color:#1f2024;">¥300</div><span style="display:inline-block; margin-top:8px; width:26px; height:26px; border-radius:50%; background:#fdeef4; text-align:center; line-height:26px; font-size:12px;">🌸</span></div>
+        </div>
+        <div style="height:1px; background:#f1f1f3; margin:0 16px;"></div>
+        <!-- item -->
+        <div style="display:flex; gap:12px; padding:16px;">
+          <div style="width:34px; flex:none; font-size:13px; font-weight:700; color:#6b6e76; padding-top:18px;">5/14</div>
+          <image-slot id="cust_mike" shape="circle" style="width:42px; height:42px; flex:none;" placeholder="客"></image-slot>
+          <div style="flex:1;">
+            <div style="font-size:11px; color:#a9acb3;">5/14 12:22</div>
+            <div style="font-size:14px; font-weight:700; color:#1f2024; margin-top:1px;">Mike <span style="font-weight:400;">さん</span></div>
+            <div style="font-size:12px; color:#6b6e76; margin-top:4px; line-height:1.4;">Thank you so much!</div>
+          </div>
+          <div style="text-align:right; flex:none;"><div style="font-size:15px; font-weight:700; color:#1f2024;">¥100</div><span style="display:inline-block; margin-top:8px; width:26px; height:26px; border-radius:50%; background:#fff4d9; text-align:center; line-height:26px; font-size:12px;">😊</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="display:flex; justify-content:space-around; align-items:center; padding:10px 8px 16px; border-top:1px solid #f0f0f2; background:#fff;">
+      <a href="店員-01-ホーム.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#b3b6bd;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.7V20h5v-6h4v6h5V9.7"/></svg><span style="font-size:10px;">ホーム</span></a>
+      <a href="店員-04-受取履歴.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#ec3a6d;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="5" y="3" width="14" height="18" rx="2"/><path d="M8.5 8h7M8.5 12h7M8.5 16h4"/></svg><span style="font-size:10px;">履歴</span></a>
+      <a href="店員-02-QRコード.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#b3b6bd;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><path d="M14 14h3v3M21 14v7M17 21h4M14 18.5v2.5"/></svg><span style="font-size:10px;">QR</span></a>
+      <a href="店員-10-設定.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#b3b6bd;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1M18.7 18.7l-2.1-2.1M7.4 7.4 5.3 5.3"/></svg><span style="font-size:10px;">設定</span></a>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

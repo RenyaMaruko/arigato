@@ -70,15 +70,20 @@ export type StaffDisplayInfo = z.infer<typeof StaffDisplayInfoSchema>;
 
 /**
  * 投げ銭作成（POST /tip/:staffId/intent）の結果。
- * 本スプリントは決済をモック成立させ、succeeded まで進めた tip の最小情報を返す。
- * 完了画面はこの tipId を使って GET /tip/:staffId/complete を引く。
+ * Stripe Direct charge の Checkout Session を作り、tip を pending で記録した時点の情報を返す。
+ * フロントは checkoutUrl にリダイレクトして Stripe で決済する（カード情報は自前 API に通さない）。
+ * 決済の確定はブラウザの戻り値ではなく Webhook を正とするため、ここでは status=pending。
+ * 完了画面はこの tipId を使って GET /tip/:staffId/complete を引き、succeeded を待つ。
  */
 export const TipIntentResultSchema = z.object({
   tipId: z.string().uuid(),
+  // 記録時点のステータス（Webhook 確定前は pending）
   status: TipStatusSchema,
   amount: z.number().int(),
   platformFee: z.number().int(),
   customerTotal: z.number().int(),
+  // お客さまをリダイレクトする Stripe Checkout の URL
+  checkoutUrl: z.string().url(),
 });
 export type TipIntentResult = z.infer<typeof TipIntentResultSchema>;
 
@@ -92,5 +97,7 @@ export const TipCompleteSchema = z.object({
   amount: z.number().int(),
   message: z.string().nullable(),
   stamp: StampSchema.nullable(),
+  // 決済の確定状況（Webhook を正とする）。完了表示は succeeded 確定後に成立させる
+  status: TipStatusSchema,
 });
 export type TipComplete = z.infer<typeof TipCompleteSchema>;

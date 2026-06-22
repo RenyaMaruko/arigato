@@ -8,6 +8,13 @@
       "when": 1782060124766,
       "tag": "0000_lazy_earthquake",
       "breakpoints": true
+    },
+    {
+      "idx": 1,
+      "version": "7",
+      "when": 1782107537196,
+      "tag": "0001_groovy_vector",
+      "breakpoints": true
     }
   ]
 }

@@ -1,4 +1,4 @@
-import { useNavigate, useParams } from "@tanstack/react-router";
+import { useParams } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { useStaffDisplayInfo, useCreateTipIntent } from "../hooks/useTip.js";
@@ -7,6 +7,7 @@ import { AmountSelector } from "../components/AmountSelector.js";
 import { MessageInput } from "../components/MessageInput.js";
 import { StampPicker } from "../components/StampPicker.js";
 import { PaymentSheet } from "../components/PaymentSheet.js";
+import { redirectToStripeCheckout } from "../lib/stripe.js";
 
 /**
  * 投げ銭画面（/tip/:staffId、モック 01/02）。
@@ -17,7 +18,6 @@ import { PaymentSheet } from "../components/PaymentSheet.js";
  */
 export function TipPage() {
   const { t } = useTranslation();
-  const navigate = useNavigate();
   // URL パラメータ（/tip/$staffId）
   const { staffId } = useParams({ from: "/tip/$staffId" });
 
@@ -37,7 +37,9 @@ export function TipPage() {
   const openSheet = useTipFormStore((s) => s.openSheet);
   const closeSheet = useTipFormStore((s) => s.closeSheet);
 
-  // 支払い方法を選んだとき: モック決済を成立させ、成功したら完了画面へ遷移する
+  // 支払い方法を選んだとき: Stripe Direct charge の Checkout を作り、その URL へ遷移する。
+  // カード情報は自前 API に通さず、Stripe Checkout（ホスト型）で入力させる。
+  // 決済成立の確定は Webhook を正とし、完了画面は succeeded を待ってから表示する。
   const handlePay = () => {
     // 金額未選択時は送らない（UI 上は常にデフォルト選択済みだが安全のため）
     if (amount == null) return;
@@ -49,14 +51,11 @@ export function TipPage() {
         stamp: stamp ?? undefined,
       },
       {
-        onSuccess: (result) => {
-          // シートを閉じてから完了画面へ。tipId をクエリで渡して再掲情報を引く
+        onSuccess: async (result) => {
+          // シートを閉じてから Stripe Checkout へリダイレクト（カード情報は Stripe 側で入力）。
+          // Stripe.js を初期化してからホスト型 Checkout の URL へ遷移する。
           closeSheet();
-          navigate({
-            to: "/tip/$staffId/complete",
-            params: { staffId },
-            search: { tipId: result.tipId },
-          });
+          await redirectToStripeCheckout(result.checkoutUrl);
         },
       },
     );
@@ -158,6 +157,7 @@ export function TipPage() {
       <PaymentSheet
         open={sheetOpen}
         processing={createIntent.isPending}
+        hasError={createIntent.isError}
         onClose={closeSheet}
         onPay={handlePay}
       />

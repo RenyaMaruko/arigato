@@ -1,0 +1,60 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  a { text-decoration: none; color: inherit; }
+  @keyframes pop { 0% { transform: scale(.4); opacity: 0; } 60% { transform: scale(1.08); } 100% { transform: scale(1); opacity: 1; } }
+  @keyframes fall { 0% { transform: translateY(-14px) rotate(0); opacity: 0; } 30% { opacity: 1; } 100% { transform: translateY(10px) rotate(40deg); opacity: 1; } }
+</style>
+</helmet>
+
+<div style="min-height:100%; background:#e9e9ec; display:flex; justify-content:center; font-family:'Noto Sans JP', sans-serif;">
+  <div style="width:100%; max-width:430px; min-height:100vh; background:#fff; display:flex; flex-direction:column; box-shadow:0 0 50px rgba(20,20,40,.1); position:relative; overflow:hidden;">
+
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:15px 24px 6px;">
+      <span style="font-size:15px; font-weight:600; color:#111;">9:41</span>
+      <div style="display:flex; align-items:center; gap:6px; color:#111;"><span style="font-size:12px;">●●●●</span><span style="font-size:14px;">📶</span><span style="display:inline-block; width:24px; height:12px; border:1px solid #111; border-radius:3px; position:relative;"><span style="position:absolute; inset:1.5px; right:5px; background:#111; border-radius:1px;"></span></span></div>
+    </div>
+
+    <!-- confetti -->
+    <span style="position:absolute; top:120px; left:48px; width:9px; height:9px; background:#f7c948; border-radius:2px; animation:fall .6s .1s both;"></span>
+    <span style="position:absolute; top:110px; left:120px; width:8px; height:8px; background:#5b8def; border-radius:2px; animation:fall .6s .2s both;"></span>
+    <span style="position:absolute; top:130px; left:200px; width:9px; height:9px; background:#ec3a6d; border-radius:50%; animation:fall .6s .15s both;"></span>
+    <span style="position:absolute; top:115px; right:90px; width:8px; height:8px; background:#3fbf7f; border-radius:2px; animation:fall .6s .25s both;"></span>
+    <span style="position:absolute; top:135px; right:40px; width:9px; height:9px; background:#f7c948; border-radius:50%; animation:fall .6s .12s both;"></span>
+    <span style="position:absolute; top:160px; left:80px; width:7px; height:7px; background:#ec3a6d; border-radius:2px; animation:fall .6s .3s both;"></span>
+    <span style="position:absolute; top:165px; right:120px; width:7px; height:7px; background:#5b8def; border-radius:50%; animation:fall .6s .22s both;"></span>
+
+    <div style="flex:1; display:flex; flex-direction:column; padding:8px 28px 30px;">
+      <div style="display:flex; justify-content:center; margin-top:64px;">
+        <div style="width:104px; height:104px; border-radius:50%; background:#ec3a6d; display:flex; align-items:center; justify-content:center; color:#fff; animation:pop .5s cubic-bezier(.22,1,.36,1);"><svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="M5 12.5 10 17.5 19 7"/></svg></div>
+      </div>
+
+      <div style="text-align:center; margin-top:30px; font-size:24px; font-weight:700; color:#1f2024;">本人確認が完了しました！</div>
+      <div style="text-align:center; margin-top:12px; font-size:14px; color:#8b8e96;">保留残高が着金可能になりました</div>
+
+      <div style="margin-top:28px; background:#fff2f6; border:1px solid #fbd5e1; border-radius:18px; padding:22px; text-align:center;">
+        <div style="font-size:13px; color:#a85a72;">着金可能額として利用できます</div>
+        <div style="font-size:34px; font-weight:700; color:#ec3a6d; margin-top:8px;">¥12,300</div>
+      </div>
+
+      <div style="margin-top:auto; display:flex; flex-direction:column; gap:12px; padding-top:30px;">
+        <a href="店員-05-残高ステータス.dc.html" style="display:block; text-align:center; padding:16px 0; background:#ec3a6d; border-radius:14px; font-size:15px; font-weight:700; color:#fff;">残高を確認する</a>
+        <a href="店員-04-受取履歴.dc.html" style="display:block; text-align:center; padding:16px 0; background:#fff; border:1.5px solid #e6e7ea; border-radius:14px; font-size:14px; font-weight:600; color:#3a3c42;">履歴を見る</a>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

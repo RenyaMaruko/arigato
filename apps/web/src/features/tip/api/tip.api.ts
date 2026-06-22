@@ -27,7 +27,8 @@ export async function fetchStaffDisplayInfo(staffId: string): Promise<StaffDispl
 }
 
 /**
- * POST /tip/:staffId/intent — 投げ銭を作成（本スプリントはモック決済成立まで）する。
+ * POST /tip/:staffId/intent — 投げ銭を作成し、Stripe Direct charge の Checkout URL を得る。
+ * カード情報は自前 API に通さず、返ってきた checkoutUrl で Stripe Checkout へリダイレクトする。
  */
 export async function createTipIntent(
   staffId: string,
