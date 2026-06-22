@@ -3,7 +3,9 @@ import type {
   StaffRepository,
   InviteRow,
   StaffProfileRow,
+  StaffConnectRow,
 } from "./staff.repository.js";
+import type { IdentityStatus } from "./staff.model.js";
 
 /**
  * staff feature の Repository インメモリ実装。
@@ -18,6 +20,11 @@ export function createInMemoryStaffRepository(): StaffRepository {
   const invites = new Map<string, InviteRow>();
   // staff の簡易ストア（authUserId をキー）
   const staffByAuth = new Map<string, StaffProfileRow>();
+  // Connect 連携状態（authUserId をキー）。Stripe Account ID と identity_status を持つ
+  const connectByAuth = new Map<
+    string,
+    { stripeAccountId: string | null; identityStatus: IdentityStatus }
+  >();
 
   // 開発用シード招待（任意）。承認済み店の pending 招待を1件用意する
   const seedCode = process.env.SEED_INVITE_CODE;
@@ -59,6 +66,8 @@ export function createInMemoryStaffRepository(): StaffRepository {
       // 招待を消費し、staff を登録する
       invites.set(code, { ...invite, inviteStatus: "accepted" });
       staffByAuth.set(params.authUserId, row);
+      // Connect 連携状態は初期値（未連携・identity_status=none）で持つ
+      connectByAuth.set(params.authUserId, { stripeAccountId: null, identityStatus: "none" });
       return row;
     },
 
@@ -73,6 +82,74 @@ export function createInMemoryStaffRepository(): StaffRepository {
       };
       staffByAuth.set(authUserId, updated);
       return updated;
+    },
+
+    // 本人の Connect 連携状態を返す（オンボーディングの起点）
+    async findStaffConnect(authUserId) {
+      const profile = staffByAuth.get(authUserId);
+      if (!profile) return null;
+      const connect = connectByAuth.get(authUserId) ?? {
+        stripeAccountId: null,
+        identityStatus: profile.identityStatus,
+      };
+      const row: StaffConnectRow = {
+        id: profile.id,
+        displayName: profile.displayName,
+        stripeAccountId: connect.stripeAccountId,
+        identityStatus: connect.identityStatus,
+      };
+      return row;
+    },
+
+    // 新規作成した Connected Account を保存する
+    async setStripeAccountId(authUserId, stripeAccountId) {
+      const existing = connectByAuth.get(authUserId) ?? {
+        stripeAccountId: null,
+        identityStatus: "none" as IdentityStatus,
+      };
+      connectByAuth.set(authUserId, { ...existing, stripeAccountId });
+    },
+
+    // インメモリ実装は tip を保持しないため受取履歴は空（実 DB 環境で本実装が動く）
+    async listTipsByAuthUserId() {
+      return [];
+    },
+
+    // 同上。保留残高集計の元になる成立済み tip も空
+    async listSettlementsByAuthUserId() {
+      return [];
+    },
+
+    // 同上。申告データの受取記録も空
+    async listTaxRecordsByAuthUserId() {
+      return [];
+    },
+
+    // account.updated を反映する。Connect ストアから対象を引き、payouts_enabled=true なら verified へ。
+    // 既に verified なら二重遷移しない。tip を持たないため promotedTips は 0。
+    async applyAccountUpdate(stripeAccountId, payoutsEnabled) {
+      // Stripe Account ID で本人を逆引きする
+      let foundAuth: string | null = null;
+      for (const [authUserId, connect] of connectByAuth) {
+        if (connect.stripeAccountId === stripeAccountId) {
+          foundAuth = authUserId;
+          break;
+        }
+      }
+      if (!foundAuth) return { found: false, verified: false, promotedTips: 0 };
+
+      const connect = connectByAuth.get(foundAuth)!;
+      if (!payoutsEnabled) {
+        return { found: true, verified: connect.identityStatus === "verified", promotedTips: 0 };
+      }
+      if (connect.identityStatus === "verified") {
+        return { found: true, verified: true, promotedTips: 0 };
+      }
+      // verified へ確定し、プロフィールの identity_status も同期する
+      connectByAuth.set(foundAuth, { ...connect, identityStatus: "verified" });
+      const profile = staffByAuth.get(foundAuth);
+      if (profile) staffByAuth.set(foundAuth, { ...profile, identityStatus: "verified" });
+      return { found: true, verified: true, promotedTips: 0 };
     },
   };
 }

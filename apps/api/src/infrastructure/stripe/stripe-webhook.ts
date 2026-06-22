@@ -52,11 +52,19 @@ export function verifyWebhookEvent(
   // 対象 PaymentIntent ID と metadata.tipId を抽出する（payment_intent.* 系イベント）
   let paymentIntentId: string | null = null;
   let tipId: string | null = null;
+  // account.updated 系の Connected Account ID と着金可否
+  let accountId: string | null = null;
+  let payoutsEnabled: boolean | null = null;
 
   if (event.type === "payment_intent.succeeded" || event.type === "payment_intent.payment_failed") {
     const pi = event.data.object as Stripe.PaymentIntent;
     paymentIntentId = pi.id;
     tipId = (pi.metadata?.tipId as string | undefined) ?? null;
+  } else if (event.type === "account.updated") {
+    // Connected Account のオンボーディング状態変化。payouts_enabled が着金可否の起点。
+    const account = event.data.object as Stripe.Account;
+    accountId = account.id;
+    payoutsEnabled = account.payouts_enabled === true;
   }
 
   return {
@@ -64,5 +72,7 @@ export function verifyWebhookEvent(
     type: event.type,
     paymentIntentId,
     tipId,
+    accountId,
+    payoutsEnabled,
   };
 }

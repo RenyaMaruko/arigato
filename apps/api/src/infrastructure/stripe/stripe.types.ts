@@ -41,12 +41,36 @@ export type DirectChargeResult = {
 export type VerifiedWebhookEvent = {
   // Stripe のイベント ID（冪等性キー。webhook_event に記録する）
   id: string;
-  // イベント種別（payment_intent.succeeded など）
+  // イベント種別（payment_intent.succeeded / account.updated など）
   type: string;
   // 対象 PaymentIntent の ID（tip との突合に使う。該当しないイベントは null）
   paymentIntentId: string | null;
   // PaymentIntent の metadata に載せた tip ID（あれば tip 特定に優先利用）
   tipId: string | null;
+  // account.updated 系の Connected Account ID（該当しないイベントは null）
+  accountId: string | null;
+  // Connected Account の payouts_enabled（着金可否の起点。account.updated 以外は null）
+  payoutsEnabled: boolean | null;
+};
+
+// Connect オンボーディングリンク発行の入力（infrastructure が受け取るパラメータ）
+export type CreateOnboardingLinkParams = {
+  // 既存の Connected Account ID（未連携は null。null のときは新規作成する）
+  connectedAccountId: string | null;
+  // 表示用の店員さん名（新規アカウント作成時のビジネス名に使う）
+  staffDisplayName: string;
+  // オンボーディング完了後に戻すフロントの URL
+  returnUrl: string;
+  // オンボーディング中断・期限切れ時にやり直すフロントの URL
+  refreshUrl: string;
+};
+
+// Connect オンボーディングリンク発行の結果
+export type CreateOnboardingLinkResult = {
+  // 店員さんを遷移させるオンボーディングリンク（本人確認・口座登録の Stripe ホスト画面）
+  onboardingUrl: string;
+  // 使用した Connected Account ID（新規作成した場合は staff に保存する）
+  connectedAccountId: string;
 };
 
 // 突合ジョブが Stripe へ問い合わせて得る PaymentIntent の状態（DB の tip と突合する）

@@ -28,6 +28,11 @@ import {
   getStaffMe,
   createStaffProfile,
   updateStaffProfile,
+  getStaffTips,
+  getStaffBalance,
+  getStaffTaxReport,
+  startConnectOnboarding,
+  applyConnectAccountUpdate,
 } from "./features/staff/staff.service.js";
 import { createStaffRepository } from "./features/staff/staff.repository.js";
 import { createInMemoryStaffRepository } from "./features/staff/staff.repository.memory.js";
@@ -39,7 +44,10 @@ import { createAuthMiddleware } from "./middleware/auth.js";
 
 // 外部 API（Stripe）は infrastructure に隔離。feature ではなく、ここ（コンポジションルート）で
 // 配線して feature の Service へコールバック注入する。feature から infrastructure を直接 import しない。
-import { createDirectChargeSession } from "./infrastructure/stripe/stripe-connect.js";
+import {
+  createDirectChargeSession,
+  createConnectOnboardingLink,
+} from "./infrastructure/stripe/stripe-connect.js";
 import { verifyWebhookEvent } from "./infrastructure/stripe/stripe-webhook.js";
 // Supabase JWT の検証（JWKS / 非対称鍵）は infrastructure/auth に隔離する
 import { verifySupabaseJwt } from "./infrastructure/auth/supabase-jwt.js";
@@ -80,6 +88,13 @@ export function createApp() {
   // QR用URL（/tip/:staffId）の組み立てに使うフロントのベース URL（QR が指す固定 URL）
   const buildStaffTipUrl = (staffId: string) => buildTipUrl(webBaseUrl, staffId);
 
+  // Connect オンボーディングの戻り先 URL を組み立てる。
+  // 完了後は本人確認完了画面へ、中断・期限切れ時は残高ステータス画面へ戻す（完了の正は Webhook）。
+  const buildOnboardingUrls = () => ({
+    returnUrl: `${webBaseUrl}/staff/identity/complete`,
+    refreshUrl: `${webBaseUrl}/staff/balance`,
+  });
+
   // Supabase JWT 検証ミドルウェア（JWKS）。infrastructure の verifier を注入して配線する
   const authMiddleware = createAuthMiddleware((token) => verifySupabaseJwt(token));
 
@@ -105,6 +120,18 @@ export function createApp() {
       createStaffProfile(staffRepo, buildStaffTipUrl, authUserId, input),
     updateStaffProfile: (authUserId, input) =>
       updateStaffProfile(staffRepo, buildStaffTipUrl, authUserId, input),
+    // 受取履歴・保留残高・申告 CSV は本人スコープのユースケースを注入する
+    getStaffTips: (authUserId) => getStaffTips(staffRepo, authUserId),
+    getStaffBalance: (authUserId) => getStaffBalance(staffRepo, authUserId),
+    getStaffTaxReport: (authUserId, year) => getStaffTaxReport(staffRepo, authUserId, year),
+    // Connect オンボーディング（infrastructure のリンク発行を注入。feature は Stripe SDK を直接知らない）
+    startConnectOnboarding: (authUserId) =>
+      startConnectOnboarding(
+        staffRepo,
+        createConnectOnboardingLink,
+        buildOnboardingUrls,
+        authUserId,
+      ),
   });
   // 招待検証（認証不要）。店員さんのアカウント作成画面で所属先を表示するために使う。
   const inviteRoute = createInviteRoute({
@@ -126,6 +153,10 @@ export function createApp() {
           byPaymentIntentId: (paymentIntentId, status) =>
             tipRepo.updateTipStatusByPaymentIntentId(paymentIntentId, status),
         },
+        // account.updated の反映（identity_status verified・held→payable）は staff Service を配線
+        // （webhook feature は staff feature を直接 import せず、ここで接続する）。
+        (stripeAccountId, payoutsEnabled) =>
+          applyConnectAccountUpdate(staffRepo, stripeAccountId, payoutsEnabled),
         event,
       ),
   });

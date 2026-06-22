@@ -8,6 +8,9 @@ import {
   createStaffProfile,
   updateStaffProfile,
   fetchInviteInfo,
+  fetchStaffTips,
+  fetchStaffBalance,
+  startConnectOnboard,
 } from "../api/staff.api.js";
 
 /**
@@ -72,5 +75,39 @@ export function useUpdateStaffProfile() {
       qc.setQueryData(STAFF_ME_KEY, me);
       qc.invalidateQueries({ queryKey: STAFF_ME_KEY });
     },
+  });
+}
+
+/**
+ * 受取履歴（GET /staff/me/tips）を取得する。本人のみ・ログイン済みのときだけ走らせる。
+ */
+export function useStaffTips(enabled: boolean) {
+  return useQuery({
+    queryKey: ["staff", "tips"],
+    queryFn: fetchStaffTips,
+    enabled,
+    retry: false,
+  });
+}
+
+/**
+ * 保留残高サマリ（GET /staff/me/balance）を取得する。本人のみ・ログイン済みのときだけ走らせる。
+ */
+export function useStaffBalance(enabled: boolean) {
+  return useQuery({
+    queryKey: ["staff", "balance"],
+    queryFn: fetchStaffBalance,
+    enabled,
+    retry: false,
+  });
+}
+
+/**
+ * Stripe Connect オンボーディングの開始（POST /staff/me/connect/onboard）。
+ * 成功時に返る URL へ遷移して本人確認・口座登録を行う。
+ */
+export function useStartConnectOnboard() {
+  return useMutation({
+    mutationFn: () => startConnectOnboard(),
   });
 }

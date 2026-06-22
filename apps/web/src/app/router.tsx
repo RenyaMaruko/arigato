@@ -13,6 +13,11 @@ import { StaffProfileCreatePage } from "../features/staff/pages/StaffProfileCrea
 import { StaffQrPage } from "../features/staff/pages/StaffQrPage.js";
 import { StaffProfileEditPage } from "../features/staff/pages/StaffProfileEditPage.js";
 import { StaffInviteAcceptPage } from "../features/staff/pages/StaffInviteAcceptPage.js";
+import { StaffTipsHistoryPage } from "../features/staff/pages/StaffTipsHistoryPage.js";
+import { StaffBalancePage } from "../features/staff/pages/StaffBalancePage.js";
+import { StaffIdentityFlowPage } from "../features/staff/pages/StaffIdentityFlowPage.js";
+import { StaffIdentityCompletePage } from "../features/staff/pages/StaffIdentityCompletePage.js";
+import { StaffTaxExportPage } from "../features/staff/pages/StaffTaxExportPage.js";
 
 /**
  * TanStack Router のルーティング定義。
@@ -106,6 +111,41 @@ const staffProfileRoute = createRoute({
   component: StaffProfileEditPage,
 });
 
+// "/staff/history" 受取履歴画面（金額・メッセージ・受取日時。本人のみ）
+const staffHistoryRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/history",
+  component: StaffTipsHistoryPage,
+});
+
+// "/staff/balance" 残高・ステータス画面（保留残高・着金可能額。本人のみ）
+const staffBalanceRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/balance",
+  component: StaffBalancePage,
+});
+
+// "/staff/identity" 本人確認・口座登録の流れ（Connect オンボーディングへ遷移）
+const staffIdentityRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/identity",
+  component: StaffIdentityFlowPage,
+});
+
+// "/staff/identity/complete" 本人確認完了（Stripe オンボーディングからの戻り先）
+const staffIdentityCompleteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/identity/complete",
+  component: StaffIdentityCompletePage,
+});
+
+// "/staff/export" 申告データ出力（受取記録の CSV。本人のみ）
+const staffExportRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/export",
+  component: StaffTaxExportPage,
+});
+
 // "/invite/$code" 招待受け入れ画面（招待コードは URL パラメータ）
 const inviteRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -124,6 +164,11 @@ const routeTree = rootRoute.addChildren([
   staffOnboardRoute,
   staffQrRoute,
   staffProfileRoute,
+  staffHistoryRoute,
+  staffBalanceRoute,
+  staffIdentityRoute,
+  staffIdentityCompleteRoute,
+  staffExportRoute,
   inviteRoute,
 ]);
 

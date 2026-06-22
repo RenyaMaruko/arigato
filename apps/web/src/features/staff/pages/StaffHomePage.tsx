@@ -86,7 +86,7 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           {identityLabel}
         </div>
 
-        {/* 主要アクション（QR発行・プロフィール編集） */}
+        {/* 主要アクション（QR発行・残高・受取履歴・プロフィール編集・申告データ） */}
         <div className="mt-7 flex flex-col gap-[11px]">
           <button
             type="button"
@@ -97,10 +97,32 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           </button>
           <button
             type="button"
+            onClick={() => navigate({ to: "/staff/balance" })}
+            className="rounded-xl border-[1.5px] border-line bg-page py-4 text-center text-token-lg font-semibold text-ink"
+          >
+            {t("staff.homeBalance")}
+          </button>
+          <button
+            type="button"
+            onClick={() => navigate({ to: "/staff/history" })}
+            className="rounded-xl border-[1.5px] border-line bg-page py-4 text-center text-token-lg font-semibold text-ink"
+          >
+            {t("staff.homeHistory")}
+          </button>
+          <button
+            type="button"
             onClick={() => navigate({ to: "/staff/profile" })}
             className="rounded-xl border-[1.5px] border-line bg-page py-4 text-center text-token-lg font-semibold text-ink"
           >
             {t("staff.homeProfile")}
+          </button>
+          {/* 申告データ（CSV）への控えめな導線 */}
+          <button
+            type="button"
+            onClick={() => navigate({ to: "/staff/export" })}
+            className="mt-1 text-center text-token-sm text-ink-sub underline-offset-2 hover:underline"
+          >
+            {t("staff.exportLink")}
           </button>
         </div>
       </div>

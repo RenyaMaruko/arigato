@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { SettlementStatusSchema } from "./tip.schema.js";
 
 /**
  * staff feature の共有 Zod スキーマ（フロント・バック共有）。
@@ -72,3 +73,64 @@ export const InviteInfoSchema = z.object({
   valid: z.boolean(),
 });
 export type InviteInfo = z.infer<typeof InviteInfoSchema>;
+
+/**
+ * GET /staff/me/tips の1件分（受取履歴・本人のみ）。
+ * 「いつ・どんな文脈で・いくら」を構造化した感謝データを本人に表示するための型。
+ * 金額（amount）を含むのは本人スコープのこの経路だけ（横断ルール: 金額は本人のみ）。
+ */
+export const StaffTipItemSchema = z.object({
+  id: z.string().uuid(),
+  // 店員さんに届く満額（円）。本人のみ閲覧可
+  amount: z.number().int(),
+  // 任意の一言メッセージ（80文字まで・未入力は null）
+  message: z.string().nullable(),
+  // 受け取った日時（決済成立日時。ISO 文字列）
+  receivedAt: z.string(),
+  // 送信時点の所属店名（後で異動しても文脈が残る）
+  storeName: z.string(),
+  // 着金ステータス（held: 保留 / payable: 着金可能 / paid: 着金済）
+  settlementStatus: SettlementStatusSchema,
+});
+export type StaffTipItem = z.infer<typeof StaffTipItemSchema>;
+
+/**
+ * GET /staff/me/tips の応答（受取履歴・本人のみ）。
+ * 成立済み（succeeded）の投げ銭を新しい順に返す。合計も併せて本人に返す。
+ */
+export const StaffTipsResponseSchema = z.object({
+  items: z.array(StaffTipItemSchema),
+  // 受取総額（成立済み・円）。本人のみ
+  totalAmount: z.number().int(),
+});
+export type StaffTipsResponse = z.infer<typeof StaffTipsResponseSchema>;
+
+/**
+ * GET /staff/me/balance の応答（保留残高サマリ・本人のみ）。
+ * 保留残高（held 合計）と着金可能額（payable 合計）を本人に返す。
+ * 金額を含むのは本人スコープのこの経路だけ（店・他スタッフには返さない）。
+ */
+export const StaffBalanceSchema = z.object({
+  // 保留残高（本人確認前に成立した held の合計・円）
+  heldAmount: z.number().int(),
+  // 着金可能額（本人確認後の payable の合計・円）
+  payableAmount: z.number().int(),
+  // 着金済（paid の合計・円。参考表示）
+  paidAmount: z.number().int(),
+  // 着金可能かどうか（identity_status から判定）。フロントの導線出し分けに使う
+  canPayout: z.boolean(),
+  // 本人確認の状態（none / pending / verified）
+  identityStatus: IdentityStatusSchema,
+});
+export type StaffBalance = z.infer<typeof StaffBalanceSchema>;
+
+/**
+ * POST /staff/me/connect/onboard の応答。
+ * Stripe Connect のオンボーディング（本人確認・口座登録）へ遷移する URL を返す。
+ * 店員さんはこの URL に遷移して手続きし、完了は account.updated Webhook を正として反映する。
+ */
+export const ConnectOnboardResponseSchema = z.object({
+  // Stripe が発行するオンボーディングリンク（このURLへ店員さんを遷移させる）
+  onboardingUrl: z.string().url(),
+});
+export type ConnectOnboardResponse = z.infer<typeof ConnectOnboardResponseSchema>;

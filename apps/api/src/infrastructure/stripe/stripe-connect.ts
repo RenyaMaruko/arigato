@@ -3,6 +3,8 @@ import type {
   CreateDirectChargeParams,
   DirectChargeResult,
   PaymentIntentStatusSnapshot,
+  CreateOnboardingLinkParams,
+  CreateOnboardingLinkResult,
 } from "./stripe.types.js";
 
 /**
@@ -139,6 +141,55 @@ export async function fetchCheckoutSessionPaymentStatus(
     paymentIntentId: session.payment_intent.id,
     status: session.payment_intent.status,
   };
+}
+
+/**
+ * Stripe Connect のオンボーディングリンク（本人確認・口座登録）を発行する（infrastructure 層）。
+ *
+ * 流れ:
+ *  - まだ Connected Account を持っていなければ新規作成する（本人確認は後ろ倒し＝この時点では未確認でよい）。
+ *    controller プロパティで責務を明示する（Accounts v2 の思想。legacy `type` は使わない）。
+ *  - Account Link（account_onboarding）を発行し、店員さんを Stripe ホストの本人確認画面へ遷移させる。
+ *
+ * 完了の判定はこのリンクの戻りではなく、account.updated Webhook（payouts_enabled=true）を正とする。
+ * 新規作成した場合は呼び出し元（Service）が staff.stripe_account_id に保存する。
+ */
+export async function createConnectOnboardingLink(
+  params: CreateOnboardingLinkParams,
+): Promise<CreateOnboardingLinkResult> {
+  const stripe = getStripe();
+
+  // 既存の Connected Account が無ければ作成する（本人確認は後ろ倒し。未確認でも作れる）
+  let connectedAccountId = params.connectedAccountId;
+  if (!connectedAccountId) {
+    const account = await stripe.accounts.create({
+      country: "JP",
+      // controller で責務を明示（Express 相当: 手数料は運営負担、Express ダッシュボード、要件は Stripe 収集）
+      controller: {
+        losses: { payments: "application" },
+        fees: { payer: "application" },
+        stripe_dashboard: { type: "express" },
+        requirement_collection: "stripe",
+      },
+      capabilities: {
+        card_payments: { requested: true },
+        transfers: { requested: true },
+      },
+      business_profile: { name: params.staffDisplayName },
+    });
+    connectedAccountId = account.id;
+  }
+
+  // オンボーディングリンク（account_onboarding）を発行する。
+  // refresh_url はリンク期限切れ・中断時、return_url は手続き後に戻る先。
+  const link = await stripe.accountLinks.create({
+    account: connectedAccountId,
+    refresh_url: params.refreshUrl,
+    return_url: params.returnUrl,
+    type: "account_onboarding",
+  });
+
+  return { onboardingUrl: link.url, connectedAccountId };
 }
 
 /**

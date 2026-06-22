@@ -3,15 +3,25 @@ import type {
   UpdateStaffProfileInput,
   StaffMe,
   InviteInfo,
+  StaffTipsResponse,
+  StaffBalance,
+  ConnectOnboardResponse,
 } from "@arigato/shared";
 import {
   canPayout,
   isInviteUsable,
   buildTipUrl,
   normalizeHeadline,
+  summarizeBalance,
+  buildTaxReportCsv,
   type IdentityStatus,
 } from "./staff.model.js";
-import type { StaffRepository, StaffProfileRow } from "./staff.repository.js";
+import type {
+  StaffRepository,
+  StaffProfileRow,
+  ApplyAccountUpdateResult,
+} from "./staff.repository.js";
+import type { CreateOnboardingLinkResult } from "../../infrastructure/stripe/stripe.types.js";
 
 /**
  * staff feature の Service 層（ユースケースの指揮者・アクセス制御）。
@@ -161,4 +171,138 @@ export async function updateStaffProfile(
   });
   if (!row) return null;
   return toStaffMe(row, buildUrl);
+}
+
+/**
+ * 受取履歴を取得する（GET /staff/me/tips・本人スコープ）。
+ * 認証済みの authUserId をキーに本人の成立済み投げ銭だけを新しい順に返す。
+ * 金額・メッセージを含むのは本人スコープのこの経路だけ（横断ルール: 金額は本人のみ）。
+ * プロフィール未作成なら null。
+ */
+export async function getStaffTips(
+  repo: StaffRepository,
+  authUserId: string,
+): Promise<StaffTipsResponse | null> {
+  // 本人が存在するか（未作成なら履歴も無い）
+  const me = await repo.findStaffByAuthUserId(authUserId);
+  if (!me) return null;
+
+  // 本人の受取履歴を取得（Repository が auth_user_id で本人に限定する）
+  const rows = await repo.listTipsByAuthUserId(authUserId);
+  // 受取総額を合算する（本人のみに見せる）
+  const totalAmount = rows.reduce((sum, t) => sum + t.amount, 0);
+  return {
+    items: rows.map((t) => ({
+      id: t.id,
+      amount: t.amount,
+      message: t.message,
+      receivedAt: t.receivedAt,
+      storeName: t.storeName,
+      settlementStatus: t.settlementStatus,
+    })),
+    totalAmount,
+  };
+}
+
+/**
+ * 保留残高サマリを取得する（GET /staff/me/balance・本人スコープ）。
+ * 本人の成立済み投げ銭から held 合計（保留残高）・payable 合計（着金可能額）・paid 合計を集計する。
+ * 集計は Model の純粋関数に委ねる。金額を返すのは本人スコープのこの経路だけ。
+ * プロフィール未作成なら null。
+ */
+export async function getStaffBalance(
+  repo: StaffRepository,
+  authUserId: string,
+): Promise<StaffBalance | null> {
+  const me = await repo.findStaffByAuthUserId(authUserId);
+  if (!me) return null;
+
+  // 成立済み tip の settlement 状態と金額を取得し、Model で合算する
+  const settlements = await repo.listSettlementsByAuthUserId(authUserId);
+  const summary = summarizeBalance(settlements);
+  return {
+    heldAmount: summary.heldAmount,
+    payableAmount: summary.payableAmount,
+    paidAmount: summary.paidAmount,
+    // 本人確認の状態から着金可否を判定（Model の純粋関数）
+    canPayout: canPayout(me.identityStatus),
+    identityStatus: me.identityStatus,
+  };
+}
+
+/**
+ * 申告データ CSV を生成する（GET /staff/me/tax-report・本人スコープ）。
+ * 本人の成立済み受取記録を年で絞り、「受取日 / 金額 / 店名」を含む CSV 文字列を返す。
+ * プロフィール未作成なら null。
+ */
+export async function getStaffTaxReport(
+  repo: StaffRepository,
+  authUserId: string,
+  year: number,
+): Promise<string | null> {
+  const me = await repo.findStaffByAuthUserId(authUserId);
+  if (!me) return null;
+
+  // 本人の受取記録を取得し、Model で CSV へ整形する
+  const records = await repo.listTaxRecordsByAuthUserId(authUserId, year);
+  return buildTaxReportCsv(records);
+}
+
+// Connect オンボーディングリンクを発行する infrastructure 関数の型（コンポジションルートで注入）
+export type CreateOnboardingLink = (params: {
+  connectedAccountId: string | null;
+  staffDisplayName: string;
+  returnUrl: string;
+  refreshUrl: string;
+}) => Promise<CreateOnboardingLinkResult>;
+
+// オンボーディングの戻り先 URL を組み立てる関数の型（フロントのベース URL から作る）
+export type BuildOnboardingUrls = () => { returnUrl: string; refreshUrl: string };
+
+/**
+ * Stripe Connect オンボーディングを開始する（POST /staff/me/connect/onboard・本人スコープ）。
+ * 本人の Connected Account（無ければ作成）に対してオンボーディングリンクを発行し、URL を返す。
+ * 新規作成した Connected Account は本人の staff に保存する。
+ * 完了の判定はこのリンクの戻りではなく account.updated Webhook を正とする。
+ * プロフィール未作成なら null。
+ */
+export async function startConnectOnboarding(
+  repo: StaffRepository,
+  createLink: CreateOnboardingLink,
+  buildUrls: BuildOnboardingUrls,
+  authUserId: string,
+): Promise<ConnectOnboardResponse | null> {
+  // 本人の Connect 連携状態を取得（未作成なら null）
+  const connect = await repo.findStaffConnect(authUserId);
+  if (!connect) return null;
+
+  const { returnUrl, refreshUrl } = buildUrls();
+  // オンボーディングリンクを発行（Connected Account が無ければ infrastructure 側で作成される）
+  const result = await createLink({
+    connectedAccountId: connect.stripeAccountId,
+    staffDisplayName: connect.displayName,
+    returnUrl,
+    refreshUrl,
+  });
+
+  // 新規作成した Connected Account は本人の staff に保存する（次回以降は再利用する）
+  if (!connect.stripeAccountId) {
+    await repo.setStripeAccountId(authUserId, result.connectedAccountId);
+  }
+
+  return { onboardingUrl: result.onboardingUrl };
+}
+
+/**
+ * account.updated（Connected Account の状態変化）を反映する（Webhook 経由・本人確認の遷移）。
+ * Connected Account ID で本人を引き、payouts_enabled=true なら identity_status を verified に確定し、
+ * held の tip を payable へ遷移する。二重遷移はしない（Repository のトランザクションで担保）。
+ * webhook feature から直接 import せず、コンポジションルートでこの関数を注入して使う。
+ */
+export async function applyConnectAccountUpdate(
+  repo: StaffRepository,
+  stripeAccountId: string,
+  payoutsEnabled: boolean,
+): Promise<ApplyAccountUpdateResult> {
+  return repo.applyAccountUpdate(stripeAccountId, payoutsEnabled);
 }

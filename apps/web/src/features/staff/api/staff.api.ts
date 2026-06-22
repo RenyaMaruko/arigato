@@ -1,12 +1,19 @@
 import {
   StaffMeSchema,
   InviteInfoSchema,
+  StaffTipsResponseSchema,
+  StaffBalanceSchema,
+  ConnectOnboardResponseSchema,
   type StaffMe,
   type InviteInfo,
+  type StaffTipsResponse,
+  type StaffBalance,
+  type ConnectOnboardResponse,
   type CreateStaffProfileInput,
   type UpdateStaffProfileInput,
 } from "@arigato/shared";
 import { apiClient } from "../../../lib/api-client.js";
+import { getAccessToken } from "../../../lib/auth.js";
 
 /**
  * staff feature の API 通信（Hono RPC `hc` 経由）。
@@ -80,4 +87,76 @@ export async function fetchInviteInfo(code: string): Promise<InviteInfo | null> 
     throw new Error(`invite request failed: ${res.status}`);
   }
   return InviteInfoSchema.parse(await res.json());
+}
+
+/**
+ * GET /staff/me/tips — 自分の受取履歴（金額・メッセージ・受取日時）を取得する（本人のみ）。
+ * 未作成（404）の場合は null。
+ */
+export async function fetchStaffTips(): Promise<StaffTipsResponse | null> {
+  const res = await apiClient.staff.me.tips.$get();
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`staff tips request failed: ${res.status}`);
+  }
+  return StaffTipsResponseSchema.parse(await res.json());
+}
+
+/**
+ * GET /staff/me/balance — 自分の保留残高・着金可能額を取得する（本人のみ）。
+ * 未作成（404）の場合は null。
+ */
+export async function fetchStaffBalance(): Promise<StaffBalance | null> {
+  const res = await apiClient.staff.me.balance.$get();
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`staff balance request failed: ${res.status}`);
+  }
+  return StaffBalanceSchema.parse(await res.json());
+}
+
+/**
+ * POST /staff/me/connect/onboard — Stripe Connect オンボーディングリンクを発行する。
+ * 返ってきた URL に店員さんを遷移させ、本人確認・口座登録を行う。
+ */
+export async function startConnectOnboard(): Promise<ConnectOnboardResponse> {
+  const res = await apiClient.staff.me.connect.onboard.$post();
+  if (!res.ok) {
+    throw new Error(`connect onboard failed: ${res.status}`);
+  }
+  return ConnectOnboardResponseSchema.parse(await res.json());
+}
+
+/**
+ * GET /staff/me/tax-report — 申告データ CSV を取得し、ブラウザでダウンロードさせる（本人のみ）。
+ * Blob として受け取り、一時 URL を作ってダウンロードをトリガーする。
+ * hc は Blob ダウンロードに向かないため fetch を直接使い、認証トークンを手で付与する。
+ */
+export async function downloadTaxReport(year: number): Promise<void> {
+  const apiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
+  const token = await getAccessToken();
+  const headers = new Headers();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  // CSV を取得（本人スコープのため認証必須）
+  const res = await fetch(`${apiUrl}/staff/me/tax-report?year=${year}`, { headers });
+  if (!res.ok) {
+    throw new Error(`tax report download failed: ${res.status}`);
+  }
+  const blob = await res.blob();
+
+  // 一時 URL を作り、隠しリンクのクリックでダウンロードを起こす
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `arigato-tax-report-${year}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
 }

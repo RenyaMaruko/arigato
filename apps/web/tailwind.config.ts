@@ -74,12 +74,20 @@ const config: Config = {
           from: { opacity: "0" },
           to: { opacity: "1" },
         },
+        // 完了画面の紙吹雪が上から落ちて少し回転する（モック07）
+        fall: {
+          "0%": { transform: "translateY(-14px) rotate(0)", opacity: "0" },
+          "30%": { opacity: "1" },
+          "100%": { transform: "translateY(10px) rotate(40deg)", opacity: "1" },
+        },
       },
       animation: {
         "sheet-up": "sheetUp .32s cubic-bezier(.22,1,.36,1)",
         pop: "pop .5s cubic-bezier(.22,1,.36,1)",
         spark: "spark .5s both",
         "scrim-in": "scrimIn .2s ease-out",
+        // 紙吹雪の落下（個々の片に遅延を付けて散らす）
+        fall: "fall .6s both",
       },
       borderRadius: {
         // design-tokens の Radius System

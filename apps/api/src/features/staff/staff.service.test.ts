@@ -1,9 +1,14 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   getInviteInfo,
   getStaffMe,
   createStaffProfile,
   updateStaffProfile,
+  getStaffTips,
+  getStaffBalance,
+  getStaffTaxReport,
+  startConnectOnboarding,
+  applyConnectAccountUpdate,
   InviteNotUsableError,
   StaffAlreadyExistsError,
 } from "./staff.service.js";
@@ -12,6 +17,8 @@ import type {
   StaffRepository,
   InviteRow,
   StaffProfileRow,
+  StaffTipRow,
+  SettlementRow,
 } from "./staff.repository.js";
 
 /**
@@ -24,6 +31,10 @@ import type {
 function createMockRepo() {
   const invites = new Map<string, InviteRow>();
   const staffByAuth = new Map<string, StaffProfileRow>();
+  // authUserId → 受取履歴（本人スコープを検証するため auth ごとに分けて保持）
+  const tipsByAuth = new Map<string, StaffTipRow[]>();
+  // authUserId → Connected Account ID
+  const accountByAuth = new Map<string, string | null>();
 
   const repo: StaffRepository = {
     async findInviteByCode(code) {
@@ -49,6 +60,7 @@ function createMockRepo() {
       };
       invites.set(code, { ...invite, inviteStatus: "accepted" });
       staffByAuth.set(params.authUserId, row);
+      accountByAuth.set(params.authUserId, null);
       return row;
     },
     async updateStaffProfile(authUserId, params) {
@@ -58,9 +70,73 @@ function createMockRepo() {
       staffByAuth.set(authUserId, updated);
       return updated;
     },
+    async findStaffConnect(authUserId) {
+      const profile = staffByAuth.get(authUserId);
+      if (!profile) return null;
+      return {
+        id: profile.id,
+        displayName: profile.displayName,
+        stripeAccountId: accountByAuth.get(authUserId) ?? null,
+        identityStatus: profile.identityStatus,
+      };
+    },
+    async setStripeAccountId(authUserId, stripeAccountId) {
+      accountByAuth.set(authUserId, stripeAccountId);
+    },
+    // 本人スコープ: その authUserId の履歴のみ返す
+    async listTipsByAuthUserId(authUserId) {
+      return tipsByAuth.get(authUserId) ?? [];
+    },
+    // 本人スコープ: その authUserId の settlement のみ返す
+    async listSettlementsByAuthUserId(authUserId) {
+      const tips = tipsByAuth.get(authUserId) ?? [];
+      return tips.map<SettlementRow>((t) => ({
+        amount: t.amount,
+        settlementStatus: t.settlementStatus,
+      }));
+    },
+    async listTaxRecordsByAuthUserId(authUserId) {
+      const tips = tipsByAuth.get(authUserId) ?? [];
+      return tips.map((t) => ({
+        receivedDate: t.receivedAt.slice(0, 10),
+        amount: t.amount,
+        storeName: t.storeName,
+      }));
+    },
+    async applyAccountUpdate(stripeAccountId, payoutsEnabled) {
+      // Stripe Account ID で本人を逆引きする
+      let foundAuth: string | null = null;
+      for (const [authUserId, acct] of accountByAuth) {
+        if (acct === stripeAccountId) {
+          foundAuth = authUserId;
+          break;
+        }
+      }
+      if (!foundAuth) return { found: false, verified: false, promotedTips: 0 };
+      const profile = staffByAuth.get(foundAuth)!;
+      if (!payoutsEnabled) {
+        return { found: true, verified: profile.identityStatus === "verified", promotedTips: 0 };
+      }
+      if (profile.identityStatus === "verified") {
+        return { found: true, verified: true, promotedTips: 0 };
+      }
+      // verified へ確定し、held を payable へ昇格する
+      staffByAuth.set(foundAuth, { ...profile, identityStatus: "verified" });
+      const tips = tipsByAuth.get(foundAuth) ?? [];
+      let promoted = 0;
+      const next = tips.map((t) => {
+        if (t.settlementStatus === "held") {
+          promoted += 1;
+          return { ...t, settlementStatus: "payable" as const };
+        }
+        return t;
+      });
+      tipsByAuth.set(foundAuth, next);
+      return { found: true, verified: true, promotedTips: promoted };
+    },
   };
 
-  return { repo, invites, staffByAuth };
+  return { repo, invites, staffByAuth, tipsByAuth, accountByAuth };
 }
 
 // QR用URL の組み立て（ローカルのベース URL を使う）
@@ -197,5 +273,210 @@ describe("staff.service", () => {
       displayName: "x",
     });
     expect(res).toBeNull();
+  });
+
+  // --- 受取履歴・保留残高（金額は本人のみ） ---
+
+  // 2人の店員さんに別々の受取履歴を仕込むヘルパ
+  async function seedTwoStaffWithTips() {
+    await createStaffProfile(mock.repo, buildUrl, "auth-A", {
+      inviteCode: "INV-OK",
+      displayName: "Aさん",
+    });
+    mock.invites.set("INV-OK-B", {
+      code: "INV-OK-B",
+      storeId: "store-1",
+      storeName: "カフェ Arigato",
+      inviteStatus: "pending",
+      storeStatus: "approved",
+    });
+    await createStaffProfile(mock.repo, buildUrl, "auth-B", {
+      inviteCode: "INV-OK-B",
+      displayName: "Bさん",
+    });
+    // A の履歴: held 300 + held 500、B の履歴: held 100
+    mock.tipsByAuth.set("auth-A", [
+      {
+        id: "11111111-1111-1111-1111-111111111111",
+        amount: 300,
+        message: "ありがとう",
+        receivedAt: "2025-05-15T10:32:00Z",
+        storeName: "カフェ Arigato",
+        settlementStatus: "held",
+      },
+      {
+        id: "22222222-2222-2222-2222-222222222222",
+        amount: 500,
+        message: null,
+        receivedAt: "2025-05-14T03:10:00Z",
+        storeName: "カフェ Arigato",
+        settlementStatus: "held",
+      },
+    ]);
+    mock.tipsByAuth.set("auth-B", [
+      {
+        id: "33333333-3333-3333-3333-333333333333",
+        amount: 100,
+        message: "助かりました",
+        receivedAt: "2025-05-13T08:00:00Z",
+        storeName: "カフェ Arigato",
+        settlementStatus: "held",
+      },
+    ]);
+  }
+
+  it("getStaffTips: 本人の受取履歴を金額・メッセージ・受取日時つきで返し、合計も返す", async () => {
+    await seedTwoStaffWithTips();
+    const tips = await getStaffTips(mock.repo, "auth-A");
+    expect(tips).not.toBeNull();
+    expect(tips!.items).toHaveLength(2);
+    expect(tips!.totalAmount).toBe(800);
+    // 金額・メッセージ・受取日時を含む
+    expect(tips!.items[0]!.amount).toBe(300);
+    expect(tips!.items[0]!.message).toBe("ありがとう");
+    expect(tips!.items[0]!.receivedAt).toBe("2025-05-15T10:32:00Z");
+  });
+
+  it("getStaffTips: 本人スコープ — 他人の履歴・金額は混ざらない", async () => {
+    await seedTwoStaffWithTips();
+    const a = await getStaffTips(mock.repo, "auth-A");
+    const b = await getStaffTips(mock.repo, "auth-B");
+    // A は自分の2件・合計800のみ。B の100は混ざらない
+    expect(a!.totalAmount).toBe(800);
+    expect(a!.items.map((i) => i.id)).not.toContain("33333333-3333-3333-3333-333333333333");
+    // B は自分の1件・合計100のみ
+    expect(b!.totalAmount).toBe(100);
+    expect(b!.items).toHaveLength(1);
+  });
+
+  it("getStaffTips: プロフィール未作成なら null（金額を漏らさない）", async () => {
+    expect(await getStaffTips(mock.repo, "no-staff")).toBeNull();
+  });
+
+  it("getStaffBalance: held 合計（保留残高）と着金可能額を本人に返す", async () => {
+    await seedTwoStaffWithTips();
+    const balance = await getStaffBalance(mock.repo, "auth-A");
+    expect(balance).not.toBeNull();
+    // 本人確認前のため held=800 / payable=0、canPayout=false
+    expect(balance!.heldAmount).toBe(800);
+    expect(balance!.payableAmount).toBe(0);
+    expect(balance!.canPayout).toBe(false);
+    expect(balance!.identityStatus).toBe("none");
+  });
+
+  it("getStaffBalance: 本人スコープ — 他人の残高は見えない", async () => {
+    await seedTwoStaffWithTips();
+    const b = await getStaffBalance(mock.repo, "auth-B");
+    // B の保留残高は自分の100のみ（A の800は混ざらない）
+    expect(b!.heldAmount).toBe(100);
+  });
+
+  it("getStaffTaxReport: 受取日 / 金額 / 店名 を含む CSV を返す", async () => {
+    await seedTwoStaffWithTips();
+    const csv = await getStaffTaxReport(mock.repo, "auth-A", 2025);
+    expect(csv).not.toBeNull();
+    expect(csv!).toContain("受取日,金額,店名");
+    expect(csv!).toContain("2025-05-15,300,カフェ Arigato");
+  });
+
+  // --- Connect オンボーディング ---
+
+  it("startConnectOnboarding: リンクを発行し、新規 Connected Account を本人に保存する", async () => {
+    await createStaffProfile(mock.repo, buildUrl, "auth-A", {
+      inviteCode: "INV-OK",
+      displayName: "Aさん",
+    });
+    // Connected Account を新規作成してリンクを返す infrastructure をモック
+    const createLink = vi.fn(async () => ({
+      onboardingUrl: "https://connect.stripe.com/setup/acct_new",
+      connectedAccountId: "acct_new",
+    }));
+    const buildUrls = () => ({
+      returnUrl: "http://localhost:5173/staff/identity/complete",
+      refreshUrl: "http://localhost:5173/staff/balance",
+    });
+
+    const result = await startConnectOnboarding(mock.repo, createLink, buildUrls, "auth-A");
+    expect(result).not.toBeNull();
+    expect(result!.onboardingUrl).toBe("https://connect.stripe.com/setup/acct_new");
+    // 未連携だったので新規作成され、保存される
+    expect(createLink).toHaveBeenCalledWith(
+      expect.objectContaining({ connectedAccountId: null, staffDisplayName: "Aさん" }),
+    );
+    const connect = await mock.repo.findStaffConnect("auth-A");
+    expect(connect!.stripeAccountId).toBe("acct_new");
+  });
+
+  it("startConnectOnboarding: プロフィール未作成なら null", async () => {
+    const createLink = vi.fn(async () => ({
+      onboardingUrl: "https://connect.stripe.com/x",
+      connectedAccountId: "acct_x",
+    }));
+    const res = await startConnectOnboarding(
+      mock.repo,
+      createLink,
+      () => ({ returnUrl: "r", refreshUrl: "f" }),
+      "no-staff",
+    );
+    expect(res).toBeNull();
+    expect(createLink).not.toHaveBeenCalled();
+  });
+
+  // --- account.updated 反映（本人確認→着金の遷移・冪等性） ---
+
+  it("applyConnectAccountUpdate: payouts_enabled=true で verified にし held→payable へ遷移する", async () => {
+    await seedTwoStaffWithTips();
+    // A の Connected Account をオンボーディング開始で紐づける
+    await startConnectOnboarding(
+      mock.repo,
+      async () => ({
+        onboardingUrl: "https://connect.stripe.com/x",
+        connectedAccountId: "acct_A",
+      }),
+      () => ({ returnUrl: "r", refreshUrl: "f" }),
+      "auth-A",
+    );
+
+    const result = await applyConnectAccountUpdate(mock.repo, "acct_A", true);
+    expect(result.found).toBe(true);
+    expect(result.verified).toBe(true);
+    // A の held 2件が payable へ昇格する
+    expect(result.promotedTips).toBe(2);
+
+    // 残高は held=0 / payable=800、本人確認は verified になる
+    const balance = await getStaffBalance(mock.repo, "auth-A");
+    expect(balance!.heldAmount).toBe(0);
+    expect(balance!.payableAmount).toBe(800);
+    expect(balance!.canPayout).toBe(true);
+    expect(balance!.identityStatus).toBe("verified");
+  });
+
+  it("applyConnectAccountUpdate: 冪等 — 2回目は二重遷移しない（promotedTips=0）", async () => {
+    await seedTwoStaffWithTips();
+    await startConnectOnboarding(
+      mock.repo,
+      async () => ({
+        onboardingUrl: "https://connect.stripe.com/x",
+        connectedAccountId: "acct_A",
+      }),
+      () => ({ returnUrl: "r", refreshUrl: "f" }),
+      "auth-A",
+    );
+
+    const first = await applyConnectAccountUpdate(mock.repo, "acct_A", true);
+    const second = await applyConnectAccountUpdate(mock.repo, "acct_A", true);
+    expect(first.promotedTips).toBe(2);
+    // 既に verified のため二重遷移しない
+    expect(second.verified).toBe(true);
+    expect(second.promotedTips).toBe(0);
+    // payable は800のまま（二重加算されない）
+    const balance = await getStaffBalance(mock.repo, "auth-A");
+    expect(balance!.payableAmount).toBe(800);
+  });
+
+  it("applyConnectAccountUpdate: 該当口座が無ければ found=false", async () => {
+    const res = await applyConnectAccountUpdate(mock.repo, "acct_unknown", true);
+    expect(res.found).toBe(false);
+    expect(res.promotedTips).toBe(0);
   });
 });

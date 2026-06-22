@@ -7,6 +7,9 @@ import {
   type InviteInfo,
   type CreateStaffProfileInput,
   type UpdateStaffProfileInput,
+  type StaffTipsResponse,
+  type StaffBalance,
+  type ConnectOnboardResponse,
 } from "@arigato/shared";
 import type { MiddlewareHandler } from "hono";
 import type { AuthVariables } from "../../middleware/auth.js";
@@ -36,6 +39,14 @@ type StaffDeps = {
     authUserId: string,
     input: UpdateStaffProfileInput,
   ) => Promise<StaffMe | null>;
+  // 受取履歴（金額・メッセージ含む・本人のみ）。未作成なら null
+  getStaffTips: (authUserId: string) => Promise<StaffTipsResponse | null>;
+  // 保留残高サマリ（held 合計・着金可能額・本人のみ）。未作成なら null
+  getStaffBalance: (authUserId: string) => Promise<StaffBalance | null>;
+  // 申告データ CSV（受取記録）。未作成なら null
+  getStaffTaxReport: (authUserId: string, year: number) => Promise<string | null>;
+  // Connect オンボーディングリンク発行。未作成なら null
+  startConnectOnboarding: (authUserId: string) => Promise<ConnectOnboardResponse | null>;
 };
 
 /**
@@ -82,6 +93,53 @@ export function createStaffRoute(deps: StaffDeps) {
         return c.json({ error: "staff_not_found" }, 404);
       }
       return c.json(me);
+    })
+    // 受取履歴（金額・メッセージ・受取日時。本人のみ）
+    .get("/me/tips", async (c) => {
+      const authUser = c.get("authUser");
+      const tips = await deps.getStaffTips(authUser.id);
+      if (!tips) {
+        return c.json({ error: "staff_not_found" }, 404);
+      }
+      return c.json(tips);
+    })
+    // 保留残高サマリ（held 合計・着金可能額。本人のみ）
+    .get("/me/balance", async (c) => {
+      const authUser = c.get("authUser");
+      const balance = await deps.getStaffBalance(authUser.id);
+      if (!balance) {
+        return c.json({ error: "staff_not_found" }, 404);
+      }
+      return c.json(balance);
+    })
+    // Stripe Connect オンボーディングリンクの発行（本人確認・口座登録へ遷移）
+    .post("/me/connect/onboard", async (c) => {
+      const authUser = c.get("authUser");
+      const result = await deps.startConnectOnboarding(authUser.id);
+      if (!result) {
+        return c.json({ error: "staff_not_found" }, 404);
+      }
+      return c.json(result);
+    })
+    // 申告データ CSV の出力（受取記録。本人のみ）。?year= で対象年を絞る（既定は今年）
+    .get("/me/tax-report", async (c) => {
+      const authUser = c.get("authUser");
+      // 対象年（クエリ ?year=2025）。不正・未指定なら今年（JST）にフォールバックする
+      const yearParam = c.req.query("year");
+      const parsedYear = yearParam ? Number.parseInt(yearParam, 10) : NaN;
+      const year =
+        Number.isInteger(parsedYear) && parsedYear >= 2000 && parsedYear <= 2100
+          ? parsedYear
+          : new Date().getFullYear();
+
+      const csv = await deps.getStaffTaxReport(authUser.id, year);
+      if (csv == null) {
+        return c.json({ error: "staff_not_found" }, 404);
+      }
+      // ブラウザがダウンロードとして扱えるよう Content-Type / Content-Disposition を付ける
+      c.header("Content-Type", "text/csv; charset=utf-8");
+      c.header("Content-Disposition", `attachment; filename="arigato-tax-report-${year}.csv"`);
+      return c.body(csv);
     });
 
   return route;

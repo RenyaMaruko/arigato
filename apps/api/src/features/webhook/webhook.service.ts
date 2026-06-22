@@ -17,6 +17,10 @@ export type VerifiedEvent = {
   type: string;
   paymentIntentId: string | null;
   tipId: string | null;
+  // account.updated 系の Connected Account ID（該当しないイベントは null）
+  accountId: string | null;
+  // Connected Account の payouts_enabled（着金可否の起点。account.updated 以外は null）
+  payoutsEnabled: boolean | null;
 };
 
 /**
@@ -44,7 +48,21 @@ export type HandleWebhookResult = {
   duplicate: boolean;
   // tip を更新できたか（対象なし・該当 tip 無しなら false）
   tipUpdated: boolean;
+  // account.updated で本人確認が verified に確定したか
+  identityVerified: boolean;
+  // account.updated で held → payable へ遷移した tip の件数
+  promotedTips: number;
 };
+
+/**
+ * account.updated（Connected Account の状態変化）を本人確認・着金へ反映する関数（コンポジションルートで配線）。
+ * webhook feature は staff feature を直接 import せず、この注入関数を通して遷移を行う。
+ * payouts_enabled=true で identity_status を verified に確定し、held の tip を payable へ遷移する。
+ */
+export type ApplyAccountUpdate = (
+  stripeAccountId: string,
+  payoutsEnabled: boolean,
+) => Promise<{ found: boolean; verified: boolean; promotedTips: number }>;
 
 // Stripe のイベント種別 → tip のステータスへの対応表
 const EVENT_TO_TIP_STATUS: Record<string, TipStatus | undefined> = {
@@ -54,23 +72,61 @@ const EVENT_TO_TIP_STATUS: Record<string, TipStatus | undefined> = {
 
 /**
  * 署名検証済みの Webhook イベントを処理する。
- * 冪等性を最初に判定し、新規のときだけ tip のステータス更新を行う。
+ * 冪等性を最初に判定し、新規のときだけ状態更新を行う:
+ *  - payment_intent.* → tip.status を更新
+ *  - account.updated   → 注入された applyAccountUpdate で identity_status / settlement_status を遷移
+ * 同一イベント ID の再送は冪等にスキップし、二重遷移しない。
  */
 export async function handleStripeWebhook(
   repo: WebhookRepository,
   updateTip: UpdateTipStatusDeps,
+  applyAccountUpdate: ApplyAccountUpdate,
   event: VerifiedEvent,
 ): Promise<HandleWebhookResult> {
   // 冪等性: 同一イベント ID を2回受けても2回目は記録できず false → 何もせずスキップ
   const isNew = await repo.recordEventIfNew(event.id, event.type);
   if (!isNew) {
-    return { received: true, duplicate: true, tipUpdated: false };
+    return {
+      received: true,
+      duplicate: true,
+      tipUpdated: false,
+      identityVerified: false,
+      promotedTips: 0,
+    };
+  }
+
+  // account.updated: 本人確認の遷移（verified）と held→payable の遷移を行う
+  if (event.type === "account.updated") {
+    // Connected Account ID が無ければ対象なし（冪等記録だけ残す）
+    if (!event.accountId) {
+      return {
+        received: true,
+        duplicate: false,
+        tipUpdated: false,
+        identityVerified: false,
+        promotedTips: 0,
+      };
+    }
+    const result = await applyAccountUpdate(event.accountId, event.payoutsEnabled === true);
+    return {
+      received: true,
+      duplicate: false,
+      tipUpdated: false,
+      identityVerified: result.verified,
+      promotedTips: result.promotedTips,
+    };
   }
 
   // 種別を tip ステータスへ写像（対象外イベントはここで終了。冪等記録だけ残す）
   const nextStatus = EVENT_TO_TIP_STATUS[event.type];
   if (!nextStatus) {
-    return { received: true, duplicate: false, tipUpdated: false };
+    return {
+      received: true,
+      duplicate: false,
+      tipUpdated: false,
+      identityVerified: false,
+      promotedTips: 0,
+    };
   }
 
   // tip の確定: metadata.tipId があれば tipId で確定（主経路。判明した PaymentIntent ID も記録する）。
@@ -83,5 +139,11 @@ export async function handleStripeWebhook(
   }
 
   // 該当 tip が無い（例: CLI trigger の無関係なテストイベント）場合は 0 件で tipUpdated=false
-  return { received: true, duplicate: false, tipUpdated: updated > 0 };
+  return {
+    received: true,
+    duplicate: false,
+    tipUpdated: updated > 0,
+    identityVerified: false,
+    promotedTips: 0,
+  };
 }
