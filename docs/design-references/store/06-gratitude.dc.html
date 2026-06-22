@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  a { text-decoration: none; color: inherit; }
+</style>
+</helmet>
+
+<div style="min-height:100%; background:#e9e9ec; display:flex; justify-content:center; font-family:'Noto Sans JP', sans-serif;">
+  <div style="width:100%; max-width:430px; min-height:100vh; background:#fff; display:flex; flex-direction:column; box-shadow:0 0 50px rgba(20,20,40,.1);">
+
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:15px 24px 6px;">
+      <span style="font-size:15px; font-weight:600; color:#111;">9:41</span>
+      <div style="display:flex; align-items:center; gap:6px; color:#111;"><span style="font-size:12px;">●●●●</span><span style="font-size:14px;">📶</span><span style="display:inline-block; width:24px; height:12px; border:1px solid #111; border-radius:3px; position:relative;"><span style="position:absolute; inset:1.5px; right:5px; background:#111; border-radius:1px;"></span></span></div>
+    </div>
+
+    <div style="text-align:center; padding:8px 22px 14px;">
+      <span style="font-size:17px; font-weight:700; color:#1f2024;">感謝の記録</span>
+    </div>
+
+    <div style="display:flex; gap:0; padding:0 26px;">
+      <div style="flex:1; text-align:center; padding-bottom:10px; border-bottom:2.5px solid #ec3a6d;"><span style="font-size:14px; font-weight:700; color:#ec3a6d;">お店全体</span></div>
+      <div style="flex:1; text-align:center; padding-bottom:10px; border-bottom:2.5px solid #f0f0f2;"><span style="font-size:14px; font-weight:600; color:#9a9da4;">スタッフ別</span></div>
+    </div>
+
+    <div style="flex:1; overflow-y:auto; padding:20px 22px 24px;">
+      <div style="font-size:14px; color:#3a3c42; line-height:1.5;">お店全体に届いた<br>「ありがとう」</div>
+      <div style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+        <span style="font-size:40px; font-weight:700; color:#1f2024;">128</span><span style="font-size:18px; font-weight:600; color:#1f2024;">件</span><span style="font-size:24px; margin-left:2px;">❤️</span>
+      </div>
+      <div style="margin-top:6px;"><span style="display:inline-block; background:#fde0e9; color:#ec3a6d; font-size:12px; font-weight:700; padding:3px 10px; border-radius:20px;">今週 +18 件</span></div>
+
+      <!-- bar chart -->
+      <div style="margin-top:22px; display:flex; align-items:flex-end; gap:14px; height:120px; padding:0 6px;">
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:6px;"><span style="width:18px; height:34px; background:#f7a8c4; border-radius:5px 5px 0 0;"></span></div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:6px;"><span style="width:18px; height:52px; background:#f48bb0; border-radius:5px 5px 0 0;"></span></div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:6px;"><span style="width:18px; height:46px; background:#f48bb0; border-radius:5px 5px 0 0;"></span></div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:6px;"><span style="width:18px; height:70px; background:#ef6699; border-radius:5px 5px 0 0;"></span></div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:6px;"><span style="width:18px; height:60px; background:#ef6699; border-radius:5px 5px 0 0;"></span></div>
+        <div style="flex:1; display:flex; flex-direction:column; align-items:center; gap:6px;"><span style="width:18px; height:100px; background:#ec3a6d; border-radius:5px 5px 0 0;"></span></div>
+      </div>
+      <div style="display:flex; gap:14px; padding:0 6px; margin-top:6px;">
+        <span style="flex:1; text-align:center; font-size:10px; color:#a9acb3;">5/10</span>
+        <span style="flex:1; text-align:center; font-size:10px; color:#a9acb3;">5/11</span>
+        <span style="flex:1; text-align:center; font-size:10px; color:#a9acb3;">5/12</span>
+        <span style="flex:1; text-align:center; font-size:10px; color:#a9acb3;">5/13</span>
+        <span style="flex:1; text-align:center; font-size:10px; color:#a9acb3;">5/14</span>
+        <span style="flex:1; text-align:center; font-size:10px; color:#a9acb3;">5/16</span>
+      </div>
+
+      <div style="font-size:14px; font-weight:700; color:#1f2024; margin-top:26px;">お客さまの声 <span style="font-weight:400; font-size:12px; color:#9a9da4;">（最新の一部）</span></div>
+      <div style="display:flex; flex-direction:column; gap:12px; margin-top:14px;">
+        <div style="display:flex; align-items:center; gap:13px; border:1px solid #f0f0f2; border-radius:14px; padding:13px 15px;">
+          <span style="width:34px; height:34px; flex:none; border-radius:50%; background:#fde8ee; display:flex; align-items:center; justify-content:center; font-size:15px;">🙂</span>
+          <div style="flex:1; font-size:13px; color:#1f2024;">笑顔が素敵で癒されました！</div>
+          <span style="font-size:11px; color:#a9acb3;">2時間前</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:13px; border:1px solid #f0f0f2; border-radius:14px; padding:13px 15px;">
+          <span style="width:34px; height:34px; flex:none; border-radius:50%; background:#fff4d9; display:flex; align-items:center; justify-content:center; font-size:15px;">⭐</span>
+          <div style="flex:1; font-size:13px; color:#1f2024;">丁寧に対応してくださり<br>ありがとうございました！</div>
+          <span style="font-size:11px; color:#a9acb3;">5時間前</span>
+        </div>
+        <div style="display:flex; align-items:center; gap:13px; border:1px solid #f0f0f2; border-radius:14px; padding:13px 15px;">
+          <span style="width:34px; height:34px; flex:none; border-radius:50%; background:#e8f0fe; display:flex; align-items:center; justify-content:center; font-size:15px;">💙</span>
+          <div style="flex:1; font-size:13px; color:#1f2024;">居心地の良い時間を<br>過ごせました ☕</div>
+          <span style="font-size:11px; color:#a9acb3;">1日前</span>
+        </div>
+      </div>
+
+      <div style="text-align:center; margin-top:18px; font-size:13px; font-weight:700; color:#ec3a6d;">すべての記録を見る ›</div>
+    </div>
+
+    <div style="display:flex; justify-content:space-around; align-items:center; padding:10px 6px 16px; border-top:1px solid #f0f0f2;">
+      <a href="店舗管理-01-ホーム.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#b3b6bd;"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.7V20h5v-6h4v6h5V9.7"/></svg><span style="font-size:10px;">ホーム</span></a>
+      <a href="店舗管理-03-スタッフ一覧.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#b3b6bd;"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 20c0-4 3.5-6 7.5-6s7.5 2 7.5 6"/></svg><span style="font-size:10px;">スタッフ</span></a>
+      <a href="店舗管理-06-感謝の可視化.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#ec3a6d;"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 20 16H9l-4 3v-3.2A1.5 1.5 0 0 1 3.5 14.3V6.5A1.5 1.5 0 0 1 5 5z"/><circle cx="9" cy="10.5" r="0.9" fill="currentColor" stroke="none"/><circle cx="13" cy="10.5" r="0.9" fill="currentColor" stroke="none"/></svg><span style="font-size:10px;">感謝の可視化</span></a>
+      <a href="店舗管理-07-設定.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#b3b6bd;"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1M18.7 18.7l-2.1-2.1M7.4 7.4 5.3 5.3"/></svg><span style="font-size:10px;">設定</span></a>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>

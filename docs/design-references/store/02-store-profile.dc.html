@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+<link href="https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  a { text-decoration: none; color: inherit; }
+  input, textarea, select { font-family:'Noto Sans JP', sans-serif; }
+  input:focus, textarea:focus { outline:none; border-color:#ec3a6d !important; }
+</style>
+</helmet>
+
+<div style="position:absolute; width:0; height:0; overflow:hidden; pointer-events:none;"><x-import component-from-global-scope="image-slot" from="./image-slot.js" hint-size="0,0"></x-import></div>
+
+<div style="min-height:100%; background:#e9e9ec; display:flex; justify-content:center; font-family:'Noto Sans JP', sans-serif;">
+  <div style="width:100%; max-width:430px; min-height:100vh; background:#fff; display:flex; flex-direction:column; box-shadow:0 0 50px rgba(20,20,40,.1);">
+
+    <div style="display:flex; justify-content:space-between; align-items:center; padding:15px 24px 6px;">
+      <span style="font-size:15px; font-weight:600; color:#111;">9:41</span>
+      <div style="display:flex; align-items:center; gap:6px; color:#111;"><span style="font-size:12px;">●●●●</span><span style="font-size:14px;">📶</span><span style="display:inline-block; width:24px; height:12px; border:1px solid #111; border-radius:3px; position:relative;"><span style="position:absolute; inset:1.5px; right:5px; background:#111; border-radius:1px;"></span></span></div>
+    </div>
+
+    <div style="display:flex; align-items:center; gap:14px; padding:8px 22px 14px;">
+      <a href="店舗管理-07-設定.dc.html" style="color:#1f2024;"><svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7"/></svg></a>
+      <span style="font-size:17px; font-weight:700; color:#1f2024;">店舗プロフィール</span>
+    </div>
+
+    <div style="flex:1; overflow-y:auto; padding:14px 26px 24px;">
+      <div style="display:flex; justify-content:center;">
+        <div style="position:relative;">
+          <image-slot id="storeLogo" shape="circle" style="width:104px; height:104px;" placeholder="店舗ロゴ"></image-slot>
+          <span style="position:absolute; bottom:2px; right:2px; width:32px; height:32px; border-radius:50%; background:#ec3a6d; border:2.5px solid #fff; display:flex; align-items:center; justify-content:center; color:#fff;"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"><path d="M3 8.5a2 2 0 0 1 2-2h2l1.2-1.8h7.6L19 6.5h2a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z"/><circle cx="12" cy="13" r="3.4"/></svg></span>
+        </div>
+      </div>
+
+      <div style="margin-top:24px; font-size:13px; color:#3a3c42;">店名 <span style="color:#ec3a6d;">（必須）</span></div>
+      <input type="text" value="カフェ Arigato" style="display:block; width:100%; margin-top:8px; border:1.5px solid #e6e7ea; border-radius:12px; padding:14px; font-size:15px; color:#1f2024;" />
+
+      <div style="margin-top:18px; font-size:13px; color:#3a3c42;">店舗紹介</div>
+      <textarea style="display:block; width:100%; margin-top:8px; height:96px; resize:none; border:1.5px solid #e6e7ea; border-radius:12px; padding:14px; font-size:15px; color:#1f2024; line-height:1.6;">心地よい時間と、感謝がめぐるお店を目指しています。</textarea>
+
+      <div style="margin-top:18px; font-size:13px; color:#3a3c42;">店舗の業種</div>
+      <div style="margin-top:8px; border:1.5px solid #e6e7ea; border-radius:12px; padding:14px; font-size:15px; color:#1f2024; display:flex; align-items:center; justify-content:space-between;">
+        <span>カフェ・喫茶</span>
+        <span style="color:#9a9da4;"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M6 9l6 6 6-6"/></svg></span>
+      </div>
+
+      <div style="text-align:center; padding:16px 0; margin-top:26px; background:#ec3a6d; border-radius:14px; font-size:15px; font-weight:700; color:#fff;">保存する</div>
+    </div>
+
+    <div style="display:flex; justify-content:space-around; align-items:center; padding:10px 6px 16px; border-top:1px solid #f0f0f2;">
+      <a href="店舗管理-01-ホーム.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#b3b6bd;"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M3 10.5 12 3l9 7.5"/><path d="M5 9.7V20h5v-6h4v6h5V9.7"/></svg><span style="font-size:10px;">ホーム</span></a>
+      <a href="店舗管理-03-スタッフ一覧.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#b3b6bd;"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="8" r="4"/><path d="M4.5 20c0-4 3.5-6 7.5-6s7.5 2 7.5 6"/></svg><span style="font-size:10px;">スタッフ</span></a>
+      <a href="店舗管理-06-感謝の可視化.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#b3b6bd;"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 5h16a1.5 1.5 0 0 1 1.5 1.5v8A1.5 1.5 0 0 1 20 16H9l-4 3v-3.2A1.5 1.5 0 0 1 3.5 14.3V6.5A1.5 1.5 0 0 1 5 5z"/><circle cx="9" cy="10.5" r="0.9" fill="currentColor" stroke="none"/><circle cx="13" cy="10.5" r="0.9" fill="currentColor" stroke="none"/></svg><span style="font-size:10px;">感謝の可視化</span></a>
+      <a href="店舗管理-07-設定.dc.html" style="display:flex; flex-direction:column; align-items:center; gap:3px; color:#b3b6bd;"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3.2"/><path d="M12 2.5v3M12 18.5v3M21.5 12h-3M5.5 12h-3M18.7 5.3l-2.1 2.1M7.4 16.6l-2.1 2.1M18.7 18.7l-2.1-2.1M7.4 7.4 5.3 5.3"/></svg><span style="font-size:10px;">設定</span></a>
+    </div>
+  </div>
+</div>
+</x-dc>
+</body>
+</html>
