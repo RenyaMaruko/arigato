@@ -1,0 +1,137 @@
+import { useEffect } from "react";
+import { useTranslation } from "react-i18next";
+import { useNavigate } from "@tanstack/react-router";
+import { QRCodeSVG } from "qrcode.react";
+import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { useAuthSession } from "../hooks/useAuthSession.js";
+import { useStaffMe } from "../hooks/useStaff.js";
+
+/**
+ * 個人QR の発行画面（/staff/qr）。
+ * 自分の固定 URL（/tip/:staffId）を指す QR を表示し、印刷できる形にする。
+ * QR は固定（再発行・失効なし）。読み取ると Sprint 2 の投げ銭画面が開く。
+ * 印刷ボタンは window.print() を呼び、印刷時に QR と名前が出るようにする。
+ */
+export function StaffQrPage() {
+  const { t } = useTranslation();
+  const navigate = useNavigate();
+  // ログイン状態と自分のプロフィール（QR用URL を含む）を取得
+  const { isAuthenticated, loading: authLoading } = useAuthSession();
+  const meQuery = useStaffMe(isAuthenticated);
+
+  // 未ログイン・未作成なら入口（認証ゲート）へ戻す。リダイレクトは副作用で行う（描画中の setState を避ける）
+  const me = meQuery.data;
+  const shouldRedirect = !authLoading && !meQuery.isLoading && (!isAuthenticated || !me);
+  useEffect(() => {
+    if (shouldRedirect) {
+      navigate({ to: "/staff" });
+    }
+  }, [shouldRedirect, navigate]);
+
+  // 認証情報の取得中・リダイレクト待ちはローディング表示
+  if (authLoading || (isAuthenticated && meQuery.isLoading) || !me) {
+    return (
+      <PhoneFrame>
+        <div className="flex flex-1 items-center justify-center text-token-md text-ink-sub">
+          {t("staff.loading")}
+        </div>
+      </PhoneFrame>
+    );
+  }
+
+  // 印刷を実行する（QR と名前のみが出るようにレイアウトしている）
+  const handlePrint = () => {
+    window.print();
+  };
+
+  return (
+    <PhoneFrame>
+      {/* ヘッダー（戻る・タイトル） */}
+      <div className="flex flex-none items-center justify-between px-[22px] pb-1.5 pt-2 print:hidden">
+        <button
+          type="button"
+          onClick={() => navigate({ to: "/staff" })}
+          aria-label={t("staff.back")}
+          className="flex h-6 w-6 items-center justify-center text-ink"
+        >
+          <svg
+            width="24"
+            height="24"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M15 5 8 12l7 7" />
+          </svg>
+        </button>
+        <span className="text-token-2xl font-bold text-ink">{t("staff.qrTitle")}</span>
+        {/* レイアウト対称のためのスペーサー */}
+        <span className="h-6 w-6" />
+      </div>
+
+      <div className="flex flex-1 flex-col overflow-y-auto px-[26px] pb-7 pt-5">
+        {/* 見出し */}
+        <div className="mt-3.5 text-center text-token-lg font-bold text-ink">
+          {t("staff.qrHeading")}
+        </div>
+
+        {/* QR 本体（印刷対象）。コーナーブラケットで装飾する */}
+        <div className="mt-7 flex justify-center">
+          <div className="relative p-[22px]" data-testid="staff-qr">
+            {/* 四隅のローズ色ブラケット */}
+            <span className="absolute left-0 top-0 h-[34px] w-[34px] rounded-tl-lg border-l-4 border-t-4 border-rose print:hidden" />
+            <span className="absolute right-0 top-0 h-[34px] w-[34px] rounded-tr-lg border-r-4 border-t-4 border-rose print:hidden" />
+            <span className="absolute bottom-0 left-0 h-[34px] w-[34px] rounded-bl-lg border-b-4 border-l-4 border-rose print:hidden" />
+            <span className="absolute bottom-0 right-0 h-[34px] w-[34px] rounded-br-lg border-b-4 border-r-4 border-rose print:hidden" />
+            {/* QR コード（印刷を想定して十分な解像度で描画する SVG）。中央にハートの目印を重ねる */}
+            <div className="relative">
+              <QRCodeSVG
+                value={me.tipUrl}
+                size={220}
+                level="H"
+                marginSize={0}
+                title={me.displayName}
+              />
+              {/* 中央のハート（読み取りに影響しないよう誤り訂正レベルを H にしている） */}
+              <span className="absolute left-1/2 top-1/2 flex h-12 w-12 -translate-x-1/2 -translate-y-1/2 items-center justify-center rounded-full bg-page text-token-2xl">
+                ❤️
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* 名前（印刷時の案内・最小限） */}
+        <div className="mt-5 text-center">
+          <span className="text-token-xl font-bold text-ink">{me.displayName}</span>
+          <span className="text-token-md text-ink"> {t("staff.san")}</span>
+        </div>
+        <div className="mt-1 text-center text-token-sm text-ink-sub">{me.storeName}</div>
+
+        {/* 案内（画面のみ・印刷では隠す） */}
+        <div className="mt-5 text-center text-token-sm text-muted print:hidden">
+          {t("staff.qrNote")}
+        </div>
+
+        {/* QR が指す URL（確認用・画面のみ） */}
+        <div className="mt-4 break-all rounded-xl border-[1.5px] border-line bg-surface-subtle px-4 py-3 text-center print:hidden">
+          <div className="text-token-xs text-ink-sub">{t("staff.qrUrlLabel")}</div>
+          <div className="mt-1 text-token-sm text-ink">{me.tipUrl}</div>
+        </div>
+
+        {/* 印刷ボタン（画面のみ） */}
+        <div className="mt-auto flex flex-col gap-3 pt-8 print:hidden">
+          <button
+            type="button"
+            onClick={handlePrint}
+            className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
+          >
+            {t("staff.qrPrint")}
+          </button>
+        </div>
+      </div>
+    </PhoneFrame>
+  );
+}

@@ -5,5 +5,6 @@
  */
 export { store } from "./store.js";
 export { staff } from "./staff.js";
+export { staffInvite } from "./staff-invite.js";
 export { tip } from "./tip.js";
 export { webhookEvent } from "./webhook-event.js";

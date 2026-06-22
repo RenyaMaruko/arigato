@@ -4,7 +4,10 @@ import { cors } from "hono/cors";
 // 各 feature の Route ファクトリ（feature 同士は直接 import せず、ここでだけ集約する）
 import { createHealthRoute } from "./features/health/health.route.js";
 import { createTipRoute } from "./features/tip/tip.route.js";
-import { createStaffRoute } from "./features/staff/staff.route.js";
+import {
+  createStaffRoute,
+  createInviteRoute,
+} from "./features/staff/staff.route.js";
 import { createStoreRoute } from "./features/store/store.route.js";
 import { createWebhookRoute } from "./features/webhook/webhook.route.js";
 
@@ -20,13 +23,26 @@ import { createInMemoryTipRepository } from "./features/tip/tip.repository.memor
 import { handleStripeWebhook } from "./features/webhook/webhook.service.js";
 import { createWebhookRepository } from "./features/webhook/webhook.repository.js";
 import { createInMemoryWebhookRepository } from "./features/webhook/webhook.repository.memory.js";
-import { resolvePayoutAvailability } from "./features/staff/staff.service.js";
+import {
+  getInviteInfo,
+  getStaffMe,
+  createStaffProfile,
+  updateStaffProfile,
+} from "./features/staff/staff.service.js";
+import { createStaffRepository } from "./features/staff/staff.repository.js";
+import { createInMemoryStaffRepository } from "./features/staff/staff.repository.memory.js";
+import { buildTipUrl } from "./features/staff/staff.model.js";
 import { resolveApproval } from "./features/store/store.service.js";
+
+// 認証ミドルウェア（JWKS 検証は infrastructure に隔離。配線はここで行う）
+import { createAuthMiddleware } from "./middleware/auth.js";
 
 // 外部 API（Stripe）は infrastructure に隔離。feature ではなく、ここ（コンポジションルート）で
 // 配線して feature の Service へコールバック注入する。feature から infrastructure を直接 import しない。
 import { createDirectChargeSession } from "./infrastructure/stripe/stripe-connect.js";
 import { verifyWebhookEvent } from "./infrastructure/stripe/stripe-webhook.js";
+// Supabase JWT の検証（JWKS / 非対称鍵）は infrastructure/auth に隔離する
+import { verifySupabaseJwt } from "./infrastructure/auth/supabase-jwt.js";
 
 /**
  * コンポジションルート。
@@ -47,14 +63,25 @@ export function createApp() {
   const webhookRepo = useDb
     ? createWebhookRepository()
     : createInMemoryWebhookRepository();
+  const staffRepo = useDb
+    ? createStaffRepository()
+    : createInMemoryStaffRepository();
 
-  // 決済後にお客さまを戻すフロントの URL を組み立てる（環境変数 WEB_BASE_URL、未設定はローカル）。
-  // 完了画面は succeeded を Webhook 確定後に表示するため、tipId をクエリで渡す。
+  // フロントのベース URL（WEB_BASE_URL、未設定はローカル）。決済戻り先と QR用URL の組み立てに使う。
   const webBaseUrl = process.env.WEB_BASE_URL ?? "http://localhost:5173";
+
+  // 決済後にお客さまを戻すフロントの URL を組み立てる。
+  // 完了画面は succeeded を Webhook 確定後に表示するため、tipId をクエリで渡す。
   const buildReturnUrls = (staffId: string, tipId: string) => ({
     successUrl: `${webBaseUrl}/tip/${staffId}/complete?tipId=${tipId}`,
     cancelUrl: `${webBaseUrl}/tip/${staffId}`,
   });
+
+  // QR用URL（/tip/:staffId）の組み立てに使うフロントのベース URL（QR が指す固定 URL）
+  const buildStaffTipUrl = (staffId: string) => buildTipUrl(webBaseUrl, staffId);
+
+  // Supabase JWT 検証ミドルウェア（JWKS）。infrastructure の verifier を注入して配線する
+  const authMiddleware = createAuthMiddleware((token) => verifySupabaseJwt(token));
 
   // 各 feature の Service を注入してルーターを構築
   const healthRoute = createHealthRoute({ checkHealth });
@@ -70,7 +97,19 @@ export function createApp() {
       ),
     getTipComplete: (staffId, tipId) => getTipComplete(tipRepo, staffId, tipId),
   });
-  const staffRoute = createStaffRoute({ resolvePayoutAvailability });
+  // staff（認証必須・本人スコープ）。認証ミドルウェアと本人スコープのユースケースを注入する。
+  const staffRoute = createStaffRoute({
+    authMiddleware,
+    getStaffMe: (authUserId) => getStaffMe(staffRepo, buildStaffTipUrl, authUserId),
+    createStaffProfile: (authUserId, input) =>
+      createStaffProfile(staffRepo, buildStaffTipUrl, authUserId, input),
+    updateStaffProfile: (authUserId, input) =>
+      updateStaffProfile(staffRepo, buildStaffTipUrl, authUserId, input),
+  });
+  // 招待検証（認証不要）。店員さんのアカウント作成画面で所属先を表示するために使う。
+  const inviteRoute = createInviteRoute({
+    getInviteInfo: (code) => getInviteInfo(staffRepo, code),
+  });
   const storeRoute = createStoreRoute({ resolveApproval });
 
   // Webhook ルートを配線（署名検証＝infrastructure、処理＝webhook Service + tip 更新）。
@@ -96,6 +135,7 @@ export function createApp() {
     .route("/health", healthRoute)
     .route("/tip", tipRoute)
     .route("/staff", staffRoute)
+    .route("/invites", inviteRoute)
     .route("/store", storeRoute)
     .route("/webhooks", webhookRoute);
 

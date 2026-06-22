@@ -10,3 +10,4 @@ export * from "./constants/money.js";
 // Zod スキーマと推論型
 export * from "./schemas/tip.schema.js";
 export * from "./schemas/health.schema.js";
+export * from "./schemas/staff.schema.js";

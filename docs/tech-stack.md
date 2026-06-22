@@ -43,6 +43,8 @@
 | API クライアント | Hono RPC（`hc`） | hono ^4 | バックの型を import して型安全に呼ぶ |
 | 国際化（i18n） | react-i18next | ^14 | 日英対応。お客さま決済ページは必須、管理画面は当面日本語のみ可 |
 | 決済UI | Stripe（Checkout または Elements） | - | カード情報を自前サーバーに通さない。Apple Pay / Google Pay を最優先表示 |
+| 認証クライアント | @supabase/supabase-js | ^2 | フロントの Supabase Auth（Email / Google ログイン、セッション管理） |
+| QRコード生成 | qrcode.react | ^4 | 店員さんの個人QR（`/tip/:staffId` の固定URL）を SVG で描画・印刷 |
 
 > 状態管理は「性質で分ける」：サーバー状態 = TanStack Query、UI 状態 = Zustand。1つのライブラリで全部やらない。
 > i18n は文言をキー管理し、利用者の言語で出し分ける。決済ファネル（QR→金額選択→完了）に GA4 イベントを仕込む。
