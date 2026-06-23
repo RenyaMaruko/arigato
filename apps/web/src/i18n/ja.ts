@@ -20,19 +20,22 @@ export const ja = {
       addMessage: "メッセージを添える",
       optional: "（任意）",
       messagePlaceholder: "例）ありがとう！",
-      payWithApplePay: " Pay で送る",
-      payWithGooglePay: "Pay で送る",
+      // 投げ銭画面の送るボタン（押下で支払いシートを開く）
+      send: "ありがとうを送る",
       secureNote: "🔒 安全な決済で、満額が届きます",
       loading: "読み込み中…",
       notFound: "店員さんが見つかりませんでした",
-      // 支払い方法ボトムシート
+      // 支払い方法ボトムシート（アプリ内埋め込み決済）
       sheetTitle: "支払い方法を選ぶ",
       sheetClose: "閉じる",
-      applePay: " Pay",
-      googlePay: "Pay",
-      cardPay: "💳 カードで支払う",
       or: "または",
       processing: "決済中…",
+      // PaymentIntent 作成中（決済 UI の準備中）
+      preparingPay: "決済を準備しています…",
+      // カード等（Payment Element）の送る（確定）ボタン
+      cardPaySubmit: "この内容で支払う",
+      // 決済確定（confirmPayment）に失敗したとき
+      payConfirmError: "決済に失敗しました。内容をご確認のうえ、もう一度お試しください。",
       // 完了画面
       completeTitle: "ありがとうを\n届けました！",
       completeTo: "さん に",

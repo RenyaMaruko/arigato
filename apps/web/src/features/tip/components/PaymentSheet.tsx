@@ -1,26 +1,76 @@
+import { useMemo } from "react";
 import { useTranslation } from "react-i18next";
+import { Elements } from "@stripe/react-stripe-js";
+import type { StripeElementsOptions } from "@stripe/stripe-js";
+import { getConnectedStripe } from "../lib/stripe.js";
+import { PaymentForm } from "./PaymentForm.js";
 
 /**
- * 支払い方法ボトムシート（モック決済）。
- * 決済ボタン押下で下からせり上がり（sheetUp）、背面にスクリムを敷く。
+ * 支払い方法ボトムシート（アプリ内埋め込み決済）。
+ * 「送る」押下で投げ銭の PaymentIntent を作成し、その client_secret が得られたら下からせり上がる。
+ * シート内に Stripe Elements（Express Checkout Element ＋ Payment Element）を埋め込み、
+ * Apple Pay / Google Pay はワンタップのネイティブ決済シート、カードは埋め込み入力で
+ * アプリ内のまま決済を確定する（別ページにリダイレクトしない・カード情報は自前 API に通さない）。
  * ✕ またはスクリムをタップすると onClose で閉じる（入力は親のストアが保持するため失われない）。
- * Apple Pay / Google Pay / カードのいずれかを押すと onPay が呼ばれ、モック決済が成立する。
  */
 type Props = {
   // シートの開閉状態
   open: boolean;
-  // 決済処理中（連打防止・ボタン無効化に使う）
-  processing: boolean;
-  // 決済開始（Checkout 作成）に失敗したか（エラー表示の出し分けに使う）
+  // PaymentIntent の client_secret（取得できるまでは決済 UI を出さずローディング表示）
+  clientSecret: string | null;
+  // Direct charge の課金先 Connected Account（Stripe.js を stripeAccount 指定で初期化するため）
+  connectedAccountId: string | null;
+  // 決済確定後の戻り先 URL（PayPay 等リダイレクト必須手段でのみ使われる）
+  returnUrl: string;
+  // PaymentIntent 作成中（client_secret 取得待ち）か
+  preparing: boolean;
+  // PaymentIntent 作成（決済開始）に失敗したか（エラー表示の出し分けに使う）
   hasError?: boolean;
   // ✕・スクリムで閉じる
   onClose: () => void;
-  // 支払い方法を選んだ（Stripe Checkout を作成して遷移する）
-  onPay: () => void;
+  // 決済が（アプリ内で）成立したときに呼ぶ（完了画面への遷移を親が行う）
+  onPaid: () => void;
+  // 決済処理中フラグの変化を親へ通知する
+  onProcessingChange: (processing: boolean) => void;
 };
 
-export function PaymentSheet({ open, processing, hasError, onClose, onPay }: Props) {
+export function PaymentSheet({
+  open,
+  clientSecret,
+  connectedAccountId,
+  returnUrl,
+  preparing,
+  hasError,
+  onClose,
+  onPaid,
+  onProcessingChange,
+}: Props) {
   const { t } = useTranslation();
+
+  // Connected Account コンテキストで Stripe.js を初期化する（口座別キャッシュ）。
+  // 口座が未確定のときは初期化しない（決済 UI を出さない）。
+  const stripePromise = useMemo(
+    () => (connectedAccountId ? getConnectedStripe(connectedAccountId) : null),
+    [connectedAccountId],
+  );
+
+  // Elements に渡すオプション（client_secret と外観）。client_secret が無い間は Elements を組み立てない。
+  const elementsOptions: StripeElementsOptions | null = useMemo(() => {
+    if (!clientSecret) return null;
+    return {
+      clientSecret,
+      // デザイントークン（rose / ink）に寄せた最小限の外観。詳細は Designer が磨く。
+      appearance: {
+        theme: "stripe",
+        variables: {
+          colorPrimary: "#ec3a6d",
+          colorText: "#1f2024",
+          fontFamily: "system-ui, sans-serif",
+          borderRadius: "12px",
+        },
+      },
+    };
+  }, [clientSecret]);
 
   // 閉じているときは何も描画しない（背面操作を妨げない）
   if (!open) return null;
@@ -37,7 +87,7 @@ export function PaymentSheet({ open, processing, hasError, onClose, onPay }: Pro
       />
 
       {/* ボトムシート本体（下からせり上がる） */}
-      <div className="absolute inset-x-0 bottom-0 animate-sheet-up rounded-t-2xl bg-page px-6 pb-[34px] pt-[14px] shadow-sheet">
+      <div className="absolute inset-x-0 bottom-0 max-h-[88%] animate-sheet-up overflow-y-auto rounded-t-2xl bg-page px-6 pb-[34px] pt-[14px] shadow-sheet">
         {/* ドラッグハンドル */}
         <div className="mb-[14px] flex justify-center">
           <span className="h-1 w-[38px] rounded-pill bg-handle" />
@@ -56,53 +106,29 @@ export function PaymentSheet({ open, processing, hasError, onClose, onPay }: Pro
           </button>
         </div>
 
-        {/* Apple Pay（最優先・黒） */}
-        <button
-          type="button"
-          disabled={processing}
-          onClick={onPay}
-          className="block w-full rounded-xl bg-apple-pay py-[17px] text-center text-token-xl font-semibold text-page disabled:opacity-60"
-        >
-          {processing ? t("tip.processing") : t("tip.applePay")}
-        </button>
-
-        {/* Google Pay */}
-        <button
-          type="button"
-          disabled={processing}
-          onClick={onPay}
-          className="mt-3 flex w-full items-center justify-center gap-2 rounded-xl border-[1.5px] border-line bg-page py-[17px] text-center text-token-xl font-semibold text-ink disabled:opacity-60"
-        >
-          <span className="text-token-2xl font-bold text-google-blue">G</span>
-          {t("tip.googlePay")}
-        </button>
-
-        {/* 区切り（または） */}
-        <div className="my-[22px] flex items-center gap-3">
-          <div className="h-px flex-1 bg-line-soft" />
-          <span className="text-token-sm text-muted">{t("tip.or")}</span>
-          <div className="h-px flex-1 bg-line-soft" />
-        </div>
-
-        {/* カードで支払う */}
-        <button
-          type="button"
-          disabled={processing}
-          onClick={onPay}
-          className="flex w-full items-center justify-center gap-[9px] rounded-xl border-[1.5px] border-line bg-page py-[17px] text-center text-token-lg font-semibold text-ink disabled:opacity-60"
-        >
-          {t("tip.cardPay")}
-        </button>
-
-        {/* 決済開始に失敗したときのエラー（Checkout 作成失敗・着金口未準備など） */}
-        {hasError && (
-          <div className="mt-[18px] text-center text-token-sm text-rose">
-            {t("tip.payStartError")}
+        {/* PaymentIntent 作成中（client_secret 取得待ち）はローディング表示 */}
+        {preparing && !clientSecret && !hasError && (
+          <div className="flex flex-col items-center py-10">
+            <div className="h-10 w-10 animate-spin rounded-full border-4 border-line-soft border-t-rose" />
+            <p className="mt-4 text-center text-token-md text-ink-sub">{t("tip.preparingPay")}</p>
           </div>
         )}
 
-        {/* 安心メッセージ */}
-        <div className="mt-[22px] text-center text-token-xs text-muted">{t("tip.secureNote")}</div>
+        {/* PaymentIntent 作成（決済開始）に失敗したとき */}
+        {hasError && (
+          <div className="py-8 text-center text-token-sm text-rose">{t("tip.payStartError")}</div>
+        )}
+
+        {/* client_secret が得られたらアプリ内に Stripe Elements を埋め込む */}
+        {clientSecret && elementsOptions && stripePromise && (
+          <Elements stripe={stripePromise} options={elementsOptions}>
+            <PaymentForm
+              returnUrl={returnUrl}
+              onPaid={onPaid}
+              onProcessingChange={onProcessingChange}
+            />
+          </Elements>
+        )}
       </div>
     </div>
   );

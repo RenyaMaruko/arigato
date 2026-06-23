@@ -4,37 +4,32 @@
  * （外部 API の隔離。SDK 差し替え時の影響範囲を infrastructure 内に閉じる）。
  */
 
-// Direct charge の決済セッションを作るときに infrastructure が受け取るパラメータ
+// Direct charge の PaymentIntent を作るときに infrastructure が受け取るパラメータ
 export type CreateDirectChargeParams = {
   // 課金先となる店員さんの Connected Account（Direct charge の課金先）
   connectedAccountId: string;
-  // 店員さんに届く満額（円）。決済の商品金額そのもの＝お客さま支払額に含む
+  // 店員さんに届く満額（円）。お客さま支払額に含まれる
   amount: number;
   // 運営の取り分（application_fee・円）。運営はこの手数料だけを受領する
   applicationFeeAmount: number;
-  // お客さま支払額（満額 + 上乗せ手数料・円）。Checkout に提示する請求総額
+  // お客さま支払額（満額 + 上乗せ手数料・円）。PaymentIntent の請求総額（amount）
   customerTotal: number;
   // 通貨コード（jpy）
   currency: string;
-  // 表示用の店員さん名（Checkout の品目名に使う）
+  // 表示用の店員さん名（PaymentIntent の説明に使う）
   staffDisplayName: string;
-  // 決済完了後にお客さまを戻すフロントの完了 URL
-  successUrl: string;
-  // 決済を中断したときにお客さまを戻すフロントの URL
-  cancelUrl: string;
   // 紐づける自前 tip の ID（Webhook で tip を特定するための metadata）
   tipId: string;
 };
 
-// Direct charge セッション作成の結果（feature 側はこれを受け取って tip を記録・返却する）
+// Direct charge の PaymentIntent 作成結果（feature 側はこれを受け取って tip を記録・返却する）
 export type DirectChargeResult = {
-  // お客さまをリダイレクトする Stripe Checkout の URL（カード情報は自前 API に通さない）
-  checkoutUrl: string;
-  // 生成された PaymentIntent の ID。ホスト型 Checkout では支払い時に作られるため作成直後は null のことがある。
-  // その場合は Webhook の PaymentIntent metadata.tipId で tip を突合する。
-  paymentIntentId: string | null;
-  // 生成された Checkout Session の ID（tip に保存し、突合ジョブ・Webhook で参照する）
-  checkoutSessionId: string;
+  // フロントの Stripe Elements（Express Checkout / Payment Element）に渡す client_secret。
+  // これでアプリ内に決済 UI を埋め込み、カード情報を自前サーバーに通さずに決済を確定する。
+  clientSecret: string;
+  // 生成された PaymentIntent の ID（tip に保存し、突合ジョブ・Webhook で参照する）。
+  // PaymentIntent 方式では作成時点で必ず ID が確定する。
+  paymentIntentId: string;
 };
 
 // Webhook 署名検証を通過したイベントのうち、Service が必要とする最小情報

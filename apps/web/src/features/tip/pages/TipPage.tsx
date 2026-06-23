@@ -1,4 +1,5 @@
-import { useParams } from "@tanstack/react-router";
+import { useState } from "react";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { useStaffDisplayInfo, useCreateTipIntent } from "../hooks/useTip.js";
@@ -6,24 +7,33 @@ import { useTipFormStore } from "../stores/tipFormStore.js";
 import { AmountSelector } from "../components/AmountSelector.js";
 import { MessageInput } from "../components/MessageInput.js";
 import { PaymentSheet } from "../components/PaymentSheet.js";
-import { redirectToStripeCheckout } from "../lib/stripe.js";
 
 /**
  * 投げ銭画面（/tip/:staffId、モック 01/02）。
  * 店員さんの表示情報（顔写真枠・名前・店名・一言）を出し、
- * 金額3択・メッセージを選んで「Pay で送る / G Pay で送る」から支払いシートを開く。
- * シート内のいずれかの支払い方法でモック決済が成立し、完了画面へ遷移する。
+ * 金額3択・メッセージを選んで「送る」から支払いシートを開く。
+ *
+ * 「送る」押下で投げ銭の PaymentIntent を作成し（Direct charge）、得られた client_secret を使って
+ * シート内にアプリ内決済 UI（Express Checkout Element ＋ Payment Element）を埋め込む。
+ * Apple Pay / Google Pay はワンタップのネイティブ決済シート、カードは埋め込み入力で
+ * アプリ内のまま決済を確定する（別ページにリダイレクトしない）。
+ * 決済成立の確定は Webhook を正とし、完了画面は succeeded を待ってから表示する。
  * お客さま向けのため認証は不要（ログイン/登録なしで完結）。
  */
 export function TipPage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   // URL パラメータ（/tip/$staffId）
   const { staffId } = useParams({ from: "/tip/$staffId" });
 
   // サーバー状態: 店員さんの表示情報
   const { data: staff, isLoading, isError } = useStaffDisplayInfo(staffId);
-  // 投げ銭作成（モック決済成立）ミューテーション
+  // 投げ銭作成（PaymentIntent 作成・client_secret 取得）ミューテーション
   const createIntent = useCreateTipIntent(staffId);
+
+  // 決済中フラグの setter（埋め込みフォームの confirm 中・完了遷移時に状態を同期する）。
+  // 値自体はシート内のフォームが管理するため、ここでは setter だけ使う。
+  const [, setPaying] = useState(false);
 
   // UI 状態（選択中金額・メッセージ・シート開閉）は Zustand に集約
   const amount = useTipFormStore((s) => s.amount);
@@ -34,28 +44,45 @@ export function TipPage() {
   const openSheet = useTipFormStore((s) => s.openSheet);
   const closeSheet = useTipFormStore((s) => s.closeSheet);
 
-  // 支払い方法を選んだとき: Stripe Direct charge の Checkout を作り、その URL へ遷移する。
-  // カード情報は自前 API に通さず、Stripe Checkout（ホスト型）で入力させる。
-  // 決済成立の確定は Webhook を正とし、完了画面は succeeded を待ってから表示する。
-  const handlePay = () => {
+  // 「送る」押下: シートを開き、投げ銭の PaymentIntent を作成して client_secret を得る。
+  // 得られた client_secret はシート内の Stripe Elements に渡してアプリ内決済 UI を埋め込む。
+  const handleStartPay = () => {
     // 金額未選択時は送らない（UI 上は常にデフォルト選択済みだが安全のため）
     if (amount == null) return;
-    createIntent.mutate(
-      {
-        amount,
-        // 空文字メッセージは送らず undefined にする（任意入力のため）
-        message: message.trim() === "" ? undefined : message.trim(),
-      },
-      {
-        onSuccess: async (result) => {
-          // シートを閉じてから Stripe Checkout へリダイレクト（カード情報は Stripe 側で入力）。
-          // Stripe.js を初期化してからホスト型 Checkout の URL へ遷移する。
-          closeSheet();
-          await redirectToStripeCheckout(result.checkoutUrl);
-        },
-      },
-    );
+    // 先にシートを開く（ローディング → 決済 UI の順で表示する）
+    openSheet();
+    createIntent.mutate({
+      amount,
+      // 空文字メッセージは送らず undefined にする（任意入力のため）
+      message: message.trim() === "" ? undefined : message.trim(),
+    });
   };
+
+  // 決済が（アプリ内で）成立したとき: 完了画面へ遷移する（succeeded の確定は Webhook を正とし、
+  // 完了画面側で status をポーリングして待つ）。tipId は intent 作成結果から取得する。
+  const handlePaid = () => {
+    const tipId = createIntent.data?.tipId;
+    if (!tipId) return;
+    closeSheet();
+    setPaying(false);
+    navigate({
+      to: "/tip/$staffId/complete",
+      params: { staffId },
+      search: { tipId },
+    });
+  };
+
+  // シートを閉じるときは決済中フラグも戻す
+  const handleCloseSheet = () => {
+    closeSheet();
+    setPaying(false);
+  };
+
+  // 決済確定後の戻り先 URL（PayPay 等リダイレクト必須手段でのみ使われる。完了画面で succeeded を待つ）
+  const tipId = createIntent.data?.tipId;
+  const returnUrl = tipId
+    ? `${window.location.origin}/tip/${staffId}/complete?tipId=${tipId}`
+    : `${window.location.origin}/tip/${staffId}`;
 
   return (
     <PhoneFrame>
@@ -119,22 +146,15 @@ export function TipPage() {
               placeholder={t("tip.messagePlaceholder")}
             />
 
-            {/* 送るボタン群（押下で支払いシートを開く） */}
+            {/* 送るボタン（押下で支払いシートを開き PaymentIntent を作成。
+                ウォレット/カードはシート内のアプリ内決済 UI で選んで確定する） */}
             <div className="mt-7 flex flex-col gap-[11px]">
               <button
                 type="button"
-                onClick={openSheet}
+                onClick={handleStartPay}
                 className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
               >
-                {t("tip.payWithApplePay")}
-              </button>
-              <button
-                type="button"
-                onClick={openSheet}
-                className="flex items-center justify-center gap-[7px] rounded-xl border-[1.5px] border-line bg-page py-4 text-center text-token-lg font-semibold text-ink"
-              >
-                <span className="text-token-xl font-bold text-google-blue">G</span>
-                {t("tip.payWithGooglePay")}
+                {t("tip.send")}
               </button>
             </div>
             <div className="mt-4 text-center text-token-xs text-muted">{t("tip.secureNote")}</div>
@@ -142,13 +162,17 @@ export function TipPage() {
         )}
       </div>
 
-      {/* 支払い方法ボトムシート（モック決済） */}
+      {/* 支払い方法ボトムシート（アプリ内埋め込み決済 UI） */}
       <PaymentSheet
         open={sheetOpen}
-        processing={createIntent.isPending}
+        clientSecret={createIntent.data?.clientSecret ?? null}
+        connectedAccountId={createIntent.data?.connectedAccountId ?? null}
+        returnUrl={returnUrl}
+        preparing={createIntent.isPending}
         hasError={createIntent.isError}
-        onClose={closeSheet}
-        onPay={handlePay}
+        onClose={handleCloseSheet}
+        onPaid={handlePaid}
+        onProcessingChange={setPaying}
       />
     </PhoneFrame>
   );

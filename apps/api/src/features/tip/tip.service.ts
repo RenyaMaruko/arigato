@@ -16,11 +16,12 @@ import type { TipRepository } from "./tip.repository.js";
  *
  * Stripe 本接続: Direct charge（店員さんの Connected Account へ直課金）。
  * 決済の確定はブラウザの戻り値ではなく Webhook を正とするため、ここでは tip を pending で記録し、
- * Stripe Checkout の URL を返す（succeeded への遷移は Webhook 経由で行う）。
+ * PaymentIntent の client_secret を返す（succeeded への遷移は Webhook 経由で行う）。
+ * フロントはこの client_secret でアプリ内に決済 UI（Express Checkout Element ＋ Payment Element）を埋め込む。
  */
 
 /**
- * Direct charge の決済セッション作成を Service に注入する関数の型。
+ * Direct charge の PaymentIntent 作成を Service に注入する関数の型。
  * 実体は infrastructure/stripe/stripe-connect。Service は Stripe SDK を直接知らない。
  */
 export type CreateDirectCharge = (params: {
@@ -30,22 +31,13 @@ export type CreateDirectCharge = (params: {
   customerTotal: number;
   currency: string;
   staffDisplayName: string;
-  successUrl: string;
-  cancelUrl: string;
   tipId: string;
 }) => Promise<{
-  checkoutUrl: string;
-  // ホスト型 Checkout では PaymentIntent はお客さまが支払った時点で作られるため、
-  // セッション作成直後は null のことがある（その場合は Webhook の metadata.tipId で tip を突合する）。
-  paymentIntentId: string | null;
-  checkoutSessionId: string;
+  // フロントの Stripe Elements に渡す client_secret（アプリ内決済 UI の初期化に使う）
+  clientSecret: string;
+  // 作成された PaymentIntent の ID（PaymentIntent 方式では作成時点で必ず確定する）
+  paymentIntentId: string;
 }>;
-
-// 決済後にお客さまを戻すフロントの URL を組み立てる関数の型（コンポジションルートで配線）
-export type BuildReturnUrls = (
-  staffId: string,
-  tipId: string,
-) => { successUrl: string; cancelUrl: string };
 
 /**
  * 投げ銭額からそのまま見積もりを返す純粋ユースケース。
@@ -79,10 +71,8 @@ export async function getStaffDisplayInfo(
 
 // createTipIntent が必要とする依存（コンポジションルートで注入する）
 export type CreateTipIntentDeps = {
-  // Direct charge の Checkout セッションを作る（infrastructure/stripe を配線）
+  // Direct charge の PaymentIntent を作る（infrastructure/stripe を配線）
   createDirectCharge: CreateDirectCharge;
-  // 決済後にお客さまを戻すフロントの URL を組み立てる
-  buildReturnUrls: BuildReturnUrls;
 };
 
 // 店員さんが Connected Account 未連携で Direct charge を作れないことを示すエラー
@@ -96,7 +86,10 @@ export class StaffNotChargeableError extends Error {
 /**
  * 投げ銭の作成（Stripe Direct charge）。
  * 金額を Model で計算 → tip を pending で記録 → 店員さんの Connected Account へ Direct charge の
- * Checkout セッションを作成 → tip に PaymentIntent ID を紐付け、Checkout の URL を返す。
+ * PaymentIntent を作成 → tip に PaymentIntent ID を紐付け、client_secret を返す。
+ *
+ * フロントは返した client_secret と connectedAccountId で、アプリ内に決済 UI
+ * （Express Checkout Element ＋ Payment Element）を埋め込んで決済を確定する（リダイレクトしない）。
  *
  * 決済の確定はブラウザの戻り値ではなく Webhook を正とするため、ここでは succeeded にしない
  * （tip は pending のまま。payment_intent.succeeded の Webhook で succeeded へ遷移させる）。
@@ -133,13 +126,12 @@ export async function createTipIntent(
     status: "pending",
     // 本人確認前に受けた分は保留残高（held）から開始
     settlementStatus: "held",
-    // この時点では Checkout Session も PaymentIntent も未作成（Direct charge 作成後に後付けする）
+    // この時点では PaymentIntent は未作成（Direct charge 作成後に後付けする）
     stripePaymentIntentId: null,
     stripeCheckoutSessionId: null,
   });
 
-  // 戻り先 URL を組み立て、Direct charge の Checkout セッションを作成する
-  const { successUrl, cancelUrl } = deps.buildReturnUrls(staffId, saved.id);
+  // 店員さんの Connected Account へ Direct charge の PaymentIntent を作成する
   const charge = await deps.createDirectCharge({
     connectedAccountId: staffRow.stripeAccountId,
     amount: amounts.amount,
@@ -147,16 +139,14 @@ export async function createTipIntent(
     customerTotal: amounts.customerTotal,
     currency: CURRENCY,
     staffDisplayName: staffRow.displayName,
-    successUrl,
-    cancelUrl,
     tipId: saved.id,
   });
 
-  // 作成した Checkout Session ID（と分かれば PaymentIntent ID）を tip に紐付ける。
-  // ホスト型 Checkout では PaymentIntent は支払い時に作られるため作成直後は null のことがある。
-  // その場合でも Webhook は PaymentIntent の metadata.tipId で当該 tip を特定できる（突合の二重化）。
+  // 作成した PaymentIntent ID を tip に紐付ける（突合・Webhook の二重化に使う）。
+  // PaymentIntent 方式では作成時点で ID が確定するため、ここで必ず保存できる。
+  // Webhook は PaymentIntent の metadata.tipId でも当該 tip を特定できる（突合の二重化）。
   await repo.setTipStripeRefs(saved.id, {
-    checkoutSessionId: charge.checkoutSessionId,
+    checkoutSessionId: null,
     paymentIntentId: charge.paymentIntentId,
   });
 
@@ -166,7 +156,9 @@ export async function createTipIntent(
     amount: saved.amount,
     platformFee: saved.platformFee,
     customerTotal: saved.customerTotal,
-    checkoutUrl: charge.checkoutUrl,
+    // フロントはこの client_secret と connectedAccountId でアプリ内に決済 UI を埋め込む
+    clientSecret: charge.clientSecret,
+    connectedAccountId: staffRow.stripeAccountId,
   };
 }
 

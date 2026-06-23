@@ -60,8 +60,11 @@ export type StaffDisplayInfo = z.infer<typeof StaffDisplayInfoSchema>;
 
 /**
  * 投げ銭作成（POST /tip/:staffId/intent）の結果。
- * Stripe Direct charge の Checkout Session を作り、tip を pending で記録した時点の情報を返す。
- * フロントは checkoutUrl にリダイレクトして Stripe で決済する（カード情報は自前 API に通さない）。
+ * Stripe Direct charge の PaymentIntent を作り、tip を pending で記録した時点の情報を返す。
+ * フロントは clientSecret を Stripe Elements（Express Checkout Element ＋ Payment Element）に渡し、
+ * アプリ内に埋め込んだ決済 UI で確定する（カード情報は自前 API に通さない・リダイレクトしない）。
+ * Direct charge の PaymentIntent は店員さんの Connected Account 上にあるため、フロントの Stripe.js は
+ * connectedAccountId（stripeAccount）を指定して初期化する必要がある。
  * 決済の確定はブラウザの戻り値ではなく Webhook を正とするため、ここでは status=pending。
  * 完了画面はこの tipId を使って GET /tip/:staffId/complete を引き、succeeded を待つ。
  */
@@ -72,8 +75,10 @@ export const TipIntentResultSchema = z.object({
   amount: z.number().int(),
   platformFee: z.number().int(),
   customerTotal: z.number().int(),
-  // お客さまをリダイレクトする Stripe Checkout の URL
-  checkoutUrl: z.string().url(),
+  // フロントの Stripe Elements に渡す PaymentIntent の client_secret（アプリ内決済 UI の初期化に使う）
+  clientSecret: z.string().min(1),
+  // Direct charge の課金先 Connected Account（フロントの Stripe.js を stripeAccount 指定で初期化するため）
+  connectedAccountId: z.string().min(1),
 });
 export type TipIntentResult = z.infer<typeof TipIntentResultSchema>;
 

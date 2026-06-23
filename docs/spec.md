@@ -237,7 +237,8 @@ verified（着金可能）
 ### 課金タイプ
 - **Direct charge を基本**（◎）: 店員の Connected Account に直接課金し、運営は `application_fee_amount` のみ受領。運営の残高を一度も経由させない。
 - Destination charge は可（○）。**Separate charges and transfers は使わない**（資金移動の論点に踏み込むため）。
-- カード情報は自前サーバーに通さない（Checkout / Elements）。Apple Pay / Google Pay を最優先表示。PayPay は審査後の後追い有効化。
+- 決済UIは **Express Checkout Element（Apple Pay / Google Pay をアプリ内のネイティブ決済シートでワンタップ）＋ Payment Element（カードは埋め込み入力、PayPay 等はタップで遷移）**。リダイレクト型の Stripe Checkout は使わない。バックは PaymentIntent を作成し client_secret をフロントへ返す（Direct charge・application_fee）。カード情報は自前サーバーに通さない。Apple Pay / Google Pay を最優先表示。
+- Apple Pay は HTTPS＋Apple ドメイン登録（Stripe 経由）が必要なため、ローカルでは Google Pay/カードで確認し、Apple Pay は本番ドメイン登録後に有効。PayPay は Stripe 審査後の後追い有効化。
 
 ### 金額計算（Model 層・純粋関数・Vitest 対象）
 - `calculateCustomerTotal()`: 投げ銭額 + 上乗せ手数料 = お客さま支払額（上乗せはお客さま側に乗せ、店員さんからは引かない＝満額が届く）。

@@ -6,7 +6,7 @@ Sprint 2 のモック決済を、実際の Stripe 決済に置き換える。資
 ### 実装する機能
 - Stripe SDK の `infrastructure/stripe/` 隔離（client / connect / webhook / types）
 - `POST /tip/:staffId/intent` を本実装: 店員さんの Connected Account への Direct charge（`application_fee_amount` で運営手数料のみ受領）
-- 決済UI を Stripe（Checkout または Elements）に接続し、カード情報を自前サーバーに通さない
+- 決済UI を Stripe Express Checkout Element（Apple Pay/Google Pay をワンタップ・ネイティブシート）＋ Payment Element（カード埋め込み）に接続し、カード情報を自前サーバーに通さない（リダイレクト型 Checkout は使わない）
 - `POST /webhooks/stripe`: raw body 受信・署名検証・冪等性記録（webhook_event）・tip.status 更新
 - 夜間 Cron 用の Stripe 突合ジョブ（`stripe-reconcile.job.ts`）の雛形
 
@@ -16,7 +16,7 @@ Sprint 2 のモック決済を、実際の Stripe 決済に置き換える。資
 - [ ] Stripe 関連コードが `apps/api/src/infrastructure/stripe/` に隔離され、feature 層から直接 Stripe SDK を呼んでいない
 - [ ] `POST /tip/:staffId/intent` が Stripe の PaymentIntent（Direct charge）を作成し、`application_fee_amount` に運営手数料が設定され、課金先が店員さんの Connected Account になっている
 - [ ] Separate charges and transfers（運営が一旦受けて transfer する方式）が実装されていない（コード上に transfer 経由の着金処理が存在しない）
-- [ ] フロントの決済UIが Stripe Checkout または Elements を使い、カード番号が自前 API に送信されない（ネットワークログでカード情報が自サーバーに飛ばないことを確認）
+- [ ] フロントの決済UIが Stripe Express Checkout Element（ウォレット）＋ Payment Element（カード）をアプリ内に埋め込み、カード番号が自前 API に送信されない（ネットワークログでカード情報が自サーバーに飛ばないことを確認）。リダイレクト型 Checkout ページを経由しない
 - [ ] `/webhooks/stripe` ルートが raw body のまま署名検証している（Hono の自動 JSON パースを通していない）
 - [ ] 不正な署名の Webhook リクエストは 400 系で拒否される
 - [ ] 正しい署名の `payment_intent.succeeded` を受けると、対応する tip の status が succeeded に更新される

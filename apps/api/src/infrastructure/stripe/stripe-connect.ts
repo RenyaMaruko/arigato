@@ -15,77 +15,57 @@ import type {
  *    運営は application_fee_amount（手数料）だけを受領する。お金は運営の残高を一度も経由しない。
  *  - Separate charges and transfers（運営が一旦受けて transfer する方式）は使わない。
  *    このファイルに transfer 経由の着金処理は一切書かない。
- *  - カード情報は自前サーバーに通さない。Stripe Checkout（ホスト型）へリダイレクトして
- *    決済 UI を Stripe に任せる（PCI 負担を最小化。Apple Pay / Google Pay も Stripe が提示）。
+ *  - カード情報は自前サーバーに通さない。PaymentIntent の client_secret をフロントへ返し、
+ *    アプリ内に埋め込んだ Express Checkout Element（ウォレット）／ Payment Element（カード）で
+ *    決済を確定する（PCI 負担を最小化。リダイレクト型 Checkout は使わない）。
  *
  * Direct charge の作り方:
- *  - Checkout Session を「Connected Account のコンテキスト」で作成する
+ *  - PaymentIntent を「Connected Account のコンテキスト」で作成する
  *    （リクエストオプションに stripeAccount を渡す）。これにより charge / PaymentIntent は
  *    Connected Account 上に作られる＝直課金になる。
- *  - payment_intent_data.application_fee_amount に運営手数料を載せる。
+ *  - application_fee_amount に運営手数料を載せる。
+ *  - payment_method_types は指定しない（動的決済手段。決済手段はダッシュボード側で制御）。
  */
 
 /**
- * 店員さんの Connected Account に対する Direct charge の決済セッションを作成する。
- * 返り値の checkoutUrl にお客さまをリダイレクトして決済してもらう。
- * 決済の確定はブラウザの戻り値ではなく Webhook を正とする（ここでは pending のセッションを作るだけ）。
+ * 店員さんの Connected Account に対する Direct charge の PaymentIntent を作成する。
+ * 返り値の clientSecret をフロントの Stripe Elements に渡し、アプリ内で決済を確定してもらう。
+ * 決済の確定はブラウザの戻り値ではなく Webhook を正とする（ここでは pending の PaymentIntent を作るだけ）。
  */
-export async function createDirectChargeSession(
+export async function createDirectChargePaymentIntent(
   params: CreateDirectChargeParams,
 ): Promise<DirectChargeResult> {
   const stripe = getStripe();
 
-  // Checkout Session を Connected Account のコンテキストで作成する（= Direct charge）。
+  // PaymentIntent を Connected Account のコンテキストで作成する（= Direct charge）。
   // payment_method_types は指定しない（動的決済手段を有効化し、Apple Pay / Google Pay / カードを自動提示）。
-  const session = await stripe.checkout.sessions.create(
+  // automatic_payment_methods で動的決済手段を明示的に有効化する（API 2023-08-16+ の既定だが明示する）。
+  const intent = await stripe.paymentIntents.create(
     {
-      mode: "payment",
-      // お客さま支払額（満額 + 上乗せ手数料）を1品目として提示する
-      line_items: [
-        {
-          quantity: 1,
-          price_data: {
-            currency: params.currency,
-            // JPY は最小単位＝1円のため、そのままの整数を渡す
-            unit_amount: params.customerTotal,
-            product_data: {
-              name: `${params.staffDisplayName} さんへのありがとう`,
-            },
-          },
-        },
-      ],
-      payment_intent_data: {
-        // 運営の取り分（application_fee）。これだけが運営に入り、満額は店員さんへ届く
-        application_fee_amount: params.applicationFeeAmount,
-        // Webhook で自前 tip を特定するための metadata（PaymentIntent 側に載せる）
-        metadata: { tipId: params.tipId },
-      },
-      // Webhook 取りこぼし対策・突合のため Session 側にも tip ID を残す
+      // お客さま支払額（満額 + 上乗せ手数料）。JPY は最小単位＝1円のため整数をそのまま渡す
+      amount: params.customerTotal,
+      currency: params.currency,
+      // 運営の取り分（application_fee）。これだけが運営に入り、満額は店員さんへ届く
+      application_fee_amount: params.applicationFeeAmount,
+      // 動的決済手段を有効化（payment_method_types は渡さない）
+      automatic_payment_methods: { enabled: true },
+      // 明細・サポート用の説明
+      description: `${params.staffDisplayName} さんへのありがとう`,
+      // Webhook で自前 tip を特定するための metadata（PaymentIntent 側に載せる）
       metadata: { tipId: params.tipId },
-      success_url: params.successUrl,
-      cancel_url: params.cancelUrl,
     },
     // ★ Connected Account のコンテキストで実行 ＝ Direct charge（課金先が店員さんの口座）
     { stripeAccount: params.connectedAccountId },
   );
 
-  // Checkout URL が無い場合は決済 UI に進めないためエラーにする
-  if (!session.url) {
-    throw new Error("Checkout Session の URL が取得できませんでした。");
+  // client_secret が無い場合はフロントで決済 UI を初期化できないためエラーにする
+  if (!intent.client_secret) {
+    throw new Error("PaymentIntent の client_secret が取得できませんでした。");
   }
 
-  // ホスト型 Checkout では PaymentIntent はお客さまが支払った時点で作られるため、
-  // セッション作成直後は null のことがある。文字列 or 展開オブジェクトの両対応で取り出す。
-  // Webhook 側は PaymentIntent の metadata.tipId で tip を特定できるよう、tipId を載せてある。
-  const paymentIntentId =
-    typeof session.payment_intent === "string"
-      ? session.payment_intent
-      : (session.payment_intent?.id ?? null);
-
   return {
-    checkoutUrl: session.url,
-    paymentIntentId,
-    checkoutSessionId: session.id,
+    clientSecret: intent.client_secret,
+    paymentIntentId: intent.id,
   };
 }
 
@@ -105,42 +85,6 @@ export async function fetchPaymentIntentStatus(
     { stripeAccount: connectedAccountId },
   );
   return { paymentIntentId: pi.id, status: pi.status };
-}
-
-/**
- * 突合ジョブ用: Checkout Session から PaymentIntent の現在ステータスを取得する。
- * ホスト型 Checkout では PaymentIntent はお客さまの支払い時に作られるため、tip 作成直後は
- * PaymentIntent ID が分からないことがある。その場合に Session ID から PaymentIntent を引き当て、
- * status を読む（Direct charge の Session は Connected Account 上にあるため stripeAccount 指定）。
- * 未支払い等で PaymentIntent がまだ無い場合は paymentIntentId=null・status=null を返す。
- */
-export async function fetchCheckoutSessionPaymentStatus(
-  checkoutSessionId: string,
-  connectedAccountId: string,
-): Promise<{ paymentIntentId: string | null; status: string | null }> {
-  const stripe = getStripe();
-  const session = await stripe.checkout.sessions.retrieve(
-    checkoutSessionId,
-    {},
-    { stripeAccount: connectedAccountId },
-  );
-  // PaymentIntent はまだ作られていない（未支払い等）こともある
-  if (!session.payment_intent) {
-    return { paymentIntentId: null, status: null };
-  }
-  // 文字列 ID なら retrieve して status を読む。展開済みオブジェクトならそのまま使う。
-  if (typeof session.payment_intent === "string") {
-    const pi = await stripe.paymentIntents.retrieve(
-      session.payment_intent,
-      {},
-      { stripeAccount: connectedAccountId },
-    );
-    return { paymentIntentId: pi.id, status: pi.status };
-  }
-  return {
-    paymentIntentId: session.payment_intent.id,
-    status: session.payment_intent.status,
-  };
 }
 
 /**

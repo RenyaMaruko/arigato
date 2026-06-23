@@ -42,7 +42,7 @@
 | スタイリング | Tailwind CSS（+ PostCSS / autoprefixer） | ^3.4 | デザイントークンを config に登録して使用。インラインスタイル禁止 |
 | API クライアント | Hono RPC（`hc`） | hono ^4 | バックの型を import して型安全に呼ぶ |
 | 国際化（i18n） | react-i18next | ^14 | 日英対応。お客さま決済ページは必須、管理画面は当面日本語のみ可 |
-| 決済UI | Stripe（Checkout または Elements） | - | カード情報を自前サーバーに通さない。Apple Pay / Google Pay を最優先表示 |
+| 決済UI | Stripe Express Checkout Element ＋ Payment Element | - | アプリ内埋め込み。Apple Pay / Google Pay はワンタップでネイティブ決済シート、カードは埋め込み入力、PayPay 等はタップで遷移。リダイレクト型 Checkout は使わない。カード情報を自前サーバーに通さない |
 | 認証クライアント | @supabase/supabase-js | ^2 | フロントの Supabase Auth（Email / Google ログイン、セッション管理） |
 | QRコード生成 | qrcode.react | ^4 | 店員さんの個人QR（`/tip/:staffId` の固定URL）を SVG で描画・印刷 |
 
@@ -81,7 +81,7 @@
 - **Webhook は raw body で受ける**：署名検証は生のリクエストボディが必要。Hono の自動 JSON パースを通さないルートを用意する。
 - **冪等性を持たせる**：Webhook は同じイベントが再送されうる。処理済みイベントIDを記録し、重複は無視（二重記録の防止）。
 - **金額計算は Model 層（純粋関数）**：上乗せ・手数料・店員さんへの支払額を純粋関数化し、Vitest でテスト対象にする。
-- **カード情報を自前サーバーに通さない**：Checkout / Elements を使い PCI 負担を最小化。
+- **カード情報を自前サーバーに通さない**：Express Checkout Element / Payment Element を使い PCI 負担を最小化（PaymentIntent の client_secret 方式）。
 - **PayPay は後追いで有効化**：Stripe での PayPay 有効化は審査に数週間かかる。ローンチは Apple Pay / Google Pay / カードで先行。
 
 ## 共有パッケージ（packages/shared）

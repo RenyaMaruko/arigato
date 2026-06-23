@@ -76,11 +76,11 @@ export type TipRepository = {
   insertTip: (params: InsertTipParams) => Promise<TipRow>;
   // tip を ID で取得（完了画面の再掲に使う）
   findTipById: (tipId: string) => Promise<TipRow | null>;
-  // tip に Checkout Session ID / PaymentIntent ID を後付けで記録する（Direct charge 作成後の紐付け）。
-  // ホスト型 Checkout では PaymentIntent が作成直後 null のことがあるため null を許容する。
+  // tip に PaymentIntent ID（と任意の Checkout Session ID）を後付けで記録する（Direct charge 作成後の紐付け）。
+  // PaymentIntent 方式では作成時点で PaymentIntent ID が確定する。Checkout Session は使わないため null。
   setTipStripeRefs: (
     tipId: string,
-    refs: { checkoutSessionId: string; paymentIntentId: string | null },
+    refs: { checkoutSessionId: string | null; paymentIntentId: string | null },
   ) => Promise<void>;
   // PaymentIntent ID で tip を取得（Webhook で対象 tip を特定する）
   findTipByPaymentIntentId: (paymentIntentId: string) => Promise<TipRow | null>;
@@ -168,13 +168,13 @@ export function createTipRepository(): TipRepository {
       return rows[0] ?? null;
     },
 
-    // Direct charge 作成後に Checkout Session ID（と分かれば PaymentIntent ID）を tip へ後付けする。
-    // PaymentIntent が未確定（null）のときは既存値を維持する（COALESCE）。
+    // Direct charge 作成後に PaymentIntent ID（と任意の Checkout Session ID）を tip へ後付けする。
+    // null の項目は既存値を維持する（COALESCE）。PaymentIntent 方式では Checkout Session は使わず null。
     async setTipStripeRefs(tipId, refs) {
       const db = getDb();
       await db.execute(sql`
         UPDATE tip
-        SET stripe_checkout_session_id = ${refs.checkoutSessionId},
+        SET stripe_checkout_session_id = COALESCE(${refs.checkoutSessionId}, stripe_checkout_session_id),
             stripe_payment_intent_id = COALESCE(${refs.paymentIntentId}, stripe_payment_intent_id)
         WHERE id = ${tipId}
       `);

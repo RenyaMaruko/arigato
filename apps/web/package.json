@@ -12,6 +12,7 @@
   "dependencies": {
     "@arigato/api": "workspace:*",
     "@arigato/shared": "workspace:*",
+    "@stripe/react-stripe-js": "^6.6.0",
     "@stripe/stripe-js": "^9.8.0",
     "@supabase/supabase-js": "^2.45.0",
     "@tanstack/react-query": "^5.40.0",

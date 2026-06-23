@@ -1,8 +1,5 @@
 import { createTipRepository } from "../features/tip/tip.repository.js";
-import {
-  fetchPaymentIntentStatus,
-  fetchCheckoutSessionPaymentStatus,
-} from "../infrastructure/stripe/stripe-connect.js";
+import { fetchPaymentIntentStatus } from "../infrastructure/stripe/stripe-connect.js";
 
 /**
  * 夜間 Cron 用の Stripe 突合ジョブ。
@@ -49,35 +46,27 @@ export async function runStripeReconcile(): Promise<ReconcileSummary> {
   for (const tip of pendings) {
     summary.checked += 1;
     try {
-      // Stripe 側の PaymentIntent ステータスと、判明した PaymentIntent ID を求める。
-      // PaymentIntent ID が分かっていればそれを直接読む。未確定（ホスト型 Checkout で未支払い等）の
-      // 場合は Checkout Session 経由で PaymentIntent を引き当てて読む。
-      let stripeStatus: string | null = null;
-      let paymentIntentId: string | null = tip.paymentIntentId;
-
-      if (tip.paymentIntentId) {
-        const snapshot = await fetchPaymentIntentStatus(
-          tip.paymentIntentId,
-          tip.connectedAccountId,
-        );
-        stripeStatus = snapshot.status;
-      } else if (tip.checkoutSessionId) {
-        const snapshot = await fetchCheckoutSessionPaymentStatus(
-          tip.checkoutSessionId,
-          tip.connectedAccountId,
-        );
-        stripeStatus = snapshot.status;
-        paymentIntentId = snapshot.paymentIntentId;
+      // PaymentIntent 方式では tip 作成時点で PaymentIntent ID が確定している。
+      // PaymentIntent が無い行（理論上の取りこぼし）はスキップする。
+      if (!tip.paymentIntentId) {
+        summary.skipped += 1;
+        continue;
       }
 
-      const nextStatus = stripeStatus ? mapPaymentIntentStatusToTip(stripeStatus) : null;
+      // Stripe 側の PaymentIntent ステータスを読む（Connected Account 上にあるため口座 ID 指定）
+      const snapshot = await fetchPaymentIntentStatus(
+        tip.paymentIntentId,
+        tip.connectedAccountId,
+      );
+
+      const nextStatus = mapPaymentIntentStatusToTip(snapshot.status);
       if (!nextStatus) {
         // まだ確定していない → スキップ（次回の突合に回す）
         summary.skipped += 1;
         continue;
       }
-      // 確定状態へ更新（tipId で確定し、判明した PaymentIntent ID も記録する）
-      await repo.updateTipStatusByTipId(tip.tipId, nextStatus, paymentIntentId);
+      // 確定状態へ更新（tipId で確定し、PaymentIntent ID も記録する）
+      await repo.updateTipStatusByTipId(tip.tipId, nextStatus, tip.paymentIntentId);
       if (nextStatus === "succeeded") summary.succeeded += 1;
       else summary.failed += 1;
     } catch (err) {

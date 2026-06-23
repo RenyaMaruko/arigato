@@ -58,7 +58,7 @@ import { createAuthMiddleware } from "./middleware/auth.js";
 // 外部 API（Stripe）は infrastructure に隔離。feature ではなく、ここ（コンポジションルート）で
 // 配線して feature の Service へコールバック注入する。feature から infrastructure を直接 import しない。
 import {
-  createDirectChargeSession,
+  createDirectChargePaymentIntent,
   createConnectOnboardingLink,
 } from "./infrastructure/stripe/stripe-connect.js";
 import { verifyWebhookEvent } from "./infrastructure/stripe/stripe-webhook.js";
@@ -91,15 +91,8 @@ export function createApp() {
     ? createStoreRepository()
     : createInMemoryStoreRepository();
 
-  // フロントのベース URL（WEB_BASE_URL、未設定はローカル）。決済戻り先と QR用URL の組み立てに使う。
+  // フロントのベース URL（WEB_BASE_URL、未設定はローカル）。QR用URL・Connect 戻り先の組み立てに使う。
   const webBaseUrl = process.env.WEB_BASE_URL ?? "http://localhost:5173";
-
-  // 決済後にお客さまを戻すフロントの URL を組み立てる。
-  // 完了画面は succeeded を Webhook 確定後に表示するため、tipId をクエリで渡す。
-  const buildReturnUrls = (staffId: string, tipId: string) => ({
-    successUrl: `${webBaseUrl}/tip/${staffId}/complete?tipId=${tipId}`,
-    cancelUrl: `${webBaseUrl}/tip/${staffId}`,
-  });
 
   // QR用URL（/tip/:staffId）の組み立てに使うフロントのベース URL（QR が指す固定 URL）
   const buildStaffTipUrl = (staffId: string) => buildTipUrl(webBaseUrl, staffId);
@@ -121,11 +114,12 @@ export function createApp() {
   const healthRoute = createHealthRoute({ checkHealth });
   const tipRoute = createTipRoute({
     getStaffDisplayInfo: (staffId) => getStaffDisplayInfo(tipRepo, staffId),
-    // Stripe Direct charge（infrastructure）を Service へ注入。feature は Stripe SDK を直接知らない。
+    // Stripe Direct charge の PaymentIntent 作成（infrastructure）を Service へ注入。
+    // feature は Stripe SDK を直接知らない。フロントは返る client_secret でアプリ内に決済 UI を埋め込む。
     createTipIntent: (staffId, input) =>
       createTipIntent(
         tipRepo,
-        { createDirectCharge: createDirectChargeSession, buildReturnUrls },
+        { createDirectCharge: createDirectChargePaymentIntent },
         staffId,
         input,
       ),
