@@ -9,13 +9,21 @@ import {
 import type { StripeError } from "@stripe/stripe-js";
 
 /**
- * アプリ内に埋め込む決済フォーム（Express Checkout Element ＋ Payment Element）。
+ * アプリ内に埋め込む決済フォーム（2段構成）。
  *
- * - 上部の Express Checkout Element は Apple Pay / Google Pay / Link 等のウォレットを表示し、
- *   タップするとネイティブ決済シートが即起動して決済を確定する（別ページに飛ばない・ワンタップ）。
- *   ウォレットが1つも使えない環境（localhost の Apple Pay 等）では何も表示されない。
- * - 区切り（または）の下の Payment Element はカード等の入力をアプリ内に埋め込む。
- *   送るボタン押下でアプリ内のまま確定する（カード情報は自前サーバーに通さない）。
+ * モック03「支払い方法を選ぶ」に倣い、まず支払い手段を選ぶステップを出し、
+ * 「カードで支払う」を押したときだけカード入力ステップへ展開する（全部を一度に出さない）。
+ *
+ * - 選択ステップ:
+ *   - 上部に Express Checkout Element（Apple Pay / Google Pay / Link 等のウォレット）。
+ *     タップで即ネイティブ決済シートが起動し、その場で確定する（別ページに飛ばない・ワンタップ）。
+ *     使えるウォレットが無い環境（localhost の Apple Pay 等）では自動的に何も表示されない。
+ *   - 「── または ──」区切り
+ *   - 「クレジットカードで支払う」ボタン → カード入力ステップへ遷移
+ *   - 「PayPay で支払う」ボタン → Stripe 審査前で未有効のため「準備中」で無効化（押してもクラッシュさせない）
+ * - カード入力ステップ:
+ *   - Payment Element をシート内に展開。「送る」で confirmPayment（redirect: "if_required"）。
+ *   - 「支払い方法に戻る」で選択ステップへ戻れる。
  *
  * 確定は stripe.confirmPayment（redirect: "if_required"）で行い、ウォレット・カードは極力
  * アプリ内で完結させ、PayPay 等リダイレクト必須の手段のときだけ return_url へ遷移させる。
@@ -33,12 +41,17 @@ type Props = {
   onProcessingChange: (processing: boolean) => void;
 };
 
+// シート内のステップ（最初は支払い方法の選択、カードを選んだら入力ステップ）
+type Step = "select" | "card";
+
 export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
   const { t } = useTranslation();
   // Stripe.js / Elements のインスタンス（<Elements> から取得）
   const stripe = useStripe();
   const elements = useElements();
 
+  // 表示中のステップ（select=支払い方法を選ぶ / card=カード入力）
+  const [step, setStep] = useState<Step>("select");
   // 決済中（連打防止・ボタン無効化）
   const [processing, setProcessing] = useState(false);
   // 決済エラーメッセージ（カード拒否・通信失敗など）
@@ -101,6 +114,64 @@ export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
     handleConfirmResult(error ?? undefined);
   };
 
+  // 「カードで支払う」→ カード入力ステップへ。エラー表示はリセットする。
+  const goToCardStep = () => {
+    setErrorMessage(null);
+    setStep("card");
+  };
+
+  // 「支払い方法に戻る」→ 選択ステップへ。エラー表示はリセットする。
+  const backToSelect = () => {
+    setErrorMessage(null);
+    setStep("select");
+  };
+
+
+  // カード入力ステップ: Payment Element を展開して入力させる
+  if (step === "card") {
+    return (
+      <div>
+        {/* 戻る導線 + ステップ見出し */}
+        <button
+          type="button"
+          onClick={backToSelect}
+          disabled={processing}
+          className="mb-4 text-token-sm font-medium text-ink-sub disabled:opacity-50"
+        >
+          {t("tip.backToMethods")}
+        </button>
+
+        {/* カード等の埋め込み入力（アプリ内・別ページ遷移なし）。
+            ウォレットは選択ステップの Express Checkout Element 側で出すため、ここでは重複表示しない。 */}
+        <PaymentElement
+          options={{
+            layout: "tabs",
+            wallets: { applePay: "never", googlePay: "never" },
+          }}
+        />
+
+        {/* カードで支払う（送る）ボタン */}
+        <button
+          type="button"
+          disabled={processing || !stripe}
+          onClick={handleCardSubmit}
+          className="mt-5 block w-full rounded-xl bg-rose py-[17px] text-center text-token-lg font-bold text-page disabled:opacity-60"
+        >
+          {processing ? t("tip.processing") : t("tip.cardPaySubmit")}
+        </button>
+
+        {/* 決済エラー（カード拒否・通信失敗など） */}
+        {errorMessage && (
+          <div className="mt-[18px] text-center text-token-sm text-rose">{errorMessage}</div>
+        )}
+
+        {/* 安心メッセージ */}
+        <div className="mt-[22px] text-center text-token-xs text-muted">{t("tip.secureNote")}</div>
+      </div>
+    );
+  }
+
+  // 選択ステップ: 支払い方法を並べる（ウォレット → または → カード → PayPay）
   return (
     <div>
       {/* ウォレット（Apple Pay / Google Pay / Link）。タップで即ネイティブ決済シートが起動して確定する。
@@ -114,33 +185,38 @@ export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
         }}
       />
 
-      {/* 区切り（または）。ウォレットとカード入力の間に置く */}
+      {/* 区切り（または）。ウォレットとカード/PayPay の間に置く */}
       <div className="my-[22px] flex items-center gap-3">
         <div className="h-px flex-1 bg-line-soft" />
         <span className="text-token-sm text-muted">{t("tip.or")}</span>
         <div className="h-px flex-1 bg-line-soft" />
       </div>
 
-      {/* カード等の埋め込み入力（アプリ内・別ページ遷移なし） */}
-      <PaymentElement
-        options={{
-          layout: "tabs",
-          // ウォレットは上部の Express Checkout Element 側で出すため、こちらでは重複表示しない
-          wallets: { applePay: "never", googlePay: "never" },
-        }}
-      />
-
-      {/* カードで支払う（送る）ボタン */}
+      {/* クレジットカードで支払う（押すとカード入力ステップを展開する） */}
       <button
         type="button"
-        disabled={processing || !stripe}
-        onClick={handleCardSubmit}
-        className="mt-5 block w-full rounded-xl bg-rose py-[17px] text-center text-token-lg font-bold text-page disabled:opacity-60"
+        onClick={goToCardStep}
+        className="flex w-full items-center justify-center gap-2 rounded-xl border-[1.5px] border-line bg-page py-[17px] text-center text-token-md font-bold text-ink"
       >
-        {processing ? t("tip.processing") : t("tip.cardPaySubmit")}
+        {t("tip.payWithCard")}
       </button>
 
-      {/* 決済エラー（カード拒否・通信失敗など） */}
+      {/* PayPay で支払う（Stripe 審査前で未有効のため「準備中」で無効化）。
+          Stripe で PayPay が有効化されたら disabled を外し、PayPay の payment method で
+          confirmPayment（return_url 必須・リダイレクト）に差し替える想定。今は押せない。 */}
+      <button
+        type="button"
+        disabled
+        title={t("tip.paypayNotReady")}
+        className="mt-3 flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl border-[1.5px] border-line bg-page py-[17px] text-center text-token-md font-bold text-muted opacity-60"
+      >
+        <span>{t("tip.payWithPaypay")}</span>
+        <span className="rounded-pill bg-stamp-bg px-2 py-0.5 text-token-xs font-medium text-muted">
+          {t("tip.paypayComingSoon")}
+        </span>
+      </button>
+
+      {/* 案内・エラー（PayPay 未有効など） */}
       {errorMessage && (
         <div className="mt-[18px] text-center text-token-sm text-rose">{errorMessage}</div>
       )}

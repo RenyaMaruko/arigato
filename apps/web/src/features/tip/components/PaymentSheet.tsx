@@ -6,9 +6,11 @@ import { getConnectedStripe } from "../lib/stripe.js";
 import { PaymentForm } from "./PaymentForm.js";
 
 /**
- * 支払い方法ボトムシート（アプリ内埋め込み決済）。
+ * 支払い方法ボトムシート（アプリ内埋め込み決済・2段構成）。
  * 「送る」押下で投げ銭の PaymentIntent を作成し、その client_secret が得られたら下からせり上がる。
- * シート内に Stripe Elements（Express Checkout Element ＋ Payment Element）を埋め込み、
+ * シート内に Stripe Elements を埋め込み、PaymentForm が「支払い方法を選ぶ → 選んだ手段のUI」を出す:
+ *   1. 選択ステップ: ウォレット（Express Checkout Element）／カードで支払う／PayPay で支払う
+ *   2. カード入力ステップ: 「カードで支払う」押下時にだけ Payment Element を展開
  * Apple Pay / Google Pay はワンタップのネイティブ決済シート、カードは埋め込み入力で
  * アプリ内のまま決済を確定する（別ページにリダイレクトしない・カード情報は自前 API に通さない）。
  * ✕ またはスクリムをタップすると onClose で閉じる（入力は親のストアが保持するため失われない）。
