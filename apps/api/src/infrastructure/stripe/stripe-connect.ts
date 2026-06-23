@@ -49,6 +49,13 @@ export async function createDirectChargePaymentIntent(
       application_fee_amount: params.applicationFeeAmount,
       // 動的決済手段を有効化（payment_method_types は渡さない）
       automatic_payment_methods: { enabled: true },
+      // Link / Apple Pay / Google Pay は wallets ハッシュ側でしか除外できない（ここで excluded に
+      // 入れると Stripe がエラーを返す）。そのため Link の抑制はフロントの PaymentElement の
+      // wallets オプションで行う。ここでは link を含めない。
+      // カード入力フォームをカードのみの最小構成に保つため、ウォレット以外の動的決済手段
+      // （コンビニ・銀行振込等。日本アカウントで有効化され得る）はサーバー側で明示的に除外する。
+      // 注: apple_pay / google_pay / link はここに入れてはならない（wallets ハッシュで制御）。
+      excluded_payment_method_types: ["konbini", "customer_balance"],
       // 明細・サポート用の説明
       description: `${params.staffDisplayName} さんへのありがとう`,
       // Webhook で自前 tip を特定するための metadata（PaymentIntent 側に載せる）

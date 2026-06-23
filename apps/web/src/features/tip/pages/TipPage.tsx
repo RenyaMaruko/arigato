@@ -157,7 +157,6 @@ export function TipPage() {
                 {t("tip.send")}
               </button>
             </div>
-            <div className="mt-4 text-center text-token-xs text-muted">{t("tip.secureNote")}</div>
           </>
         )}
       </div>

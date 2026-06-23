@@ -21,8 +21,7 @@ export const ja = {
       optional: "（任意）",
       messagePlaceholder: "例）ありがとう！",
       // 投げ銭画面の送るボタン（押下で支払いシートを開く）
-      send: "ありがとうを送る",
-      secureNote: "🔒 安全な決済で、満額が届きます",
+      send: "送る",
       loading: "読み込み中…",
       notFound: "店員さんが見つかりませんでした",
       // 支払い方法ボトムシート（アプリ内埋め込み決済）

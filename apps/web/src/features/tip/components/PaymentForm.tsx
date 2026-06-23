@@ -106,9 +106,29 @@ export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
       return;
     }
     // アプリ内で確定。PayPay 等リダイレクト必須手段のときだけ return_url へ遷移する。
+    // カードフォームでは name / email / phone と国以外の住所欄を fields:"never" で非表示にしているため、
+    // Stripe の仕様上、その分の billing_details を confirm 時に明示して渡す必要がある（渡さないと
+    // IntegrationError になる）。投げ銭では請求先の本人情報は不要なので空（null）で渡す。
+    // 国だけは Payment Element 側で収集しているので、ここでは渡さない（二重指定の競合を避ける）。
     const { error } = await stripe.confirmPayment({
       elements,
-      confirmParams: { return_url: returnUrl },
+      confirmParams: {
+        return_url: returnUrl,
+        payment_method_data: {
+          billing_details: {
+            name: null,
+            email: null,
+            phone: null,
+            address: {
+              line1: null,
+              line2: null,
+              city: null,
+              state: null,
+              postal_code: null,
+            },
+          },
+        },
+      },
       redirect: "if_required",
     });
     handleConfirmResult(error ?? undefined);
@@ -141,12 +161,39 @@ export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
           {t("tip.backToMethods")}
         </button>
 
-        {/* カード等の埋め込み入力（アプリ内・別ページ遷移なし）。
-            ウォレットは選択ステップの Express Checkout Element 側で出すため、ここでは重複表示しない。 */}
+        {/* カードの埋め込み入力（アプリ内・別ページ遷移なし）。
+            お客さまに見せるのは「カード番号 / 有効期限 / セキュリティコード / 国」の最小構成だけにする。
+            ・ウォレット（Apple Pay / Google Pay）は選択ステップの Express Checkout 側で出すため never。
+            ・Link も never（never にしないと「情報を保存」チェックやメール欄が出てしまう）。
+              ※ Link・Apple Pay・Google Pay はこの wallets ハッシュでしか抑制できない（PaymentIntent の
+                excluded_payment_method_types に入れると Stripe がエラーになる）。
+            ・コンビニ・銀行振込等のタブはサーバー側の excluded_payment_method_types で除外済みのため、
+              ここではカードのみが残る。
+            ・請求先は国だけ残し（auto）、郵便番号・名前・住所などの余計な欄は出さない。
+            ・カードの法的文言（terms）も最小化のため非表示にする。 */}
         <PaymentElement
           options={{
             layout: "tabs",
-            wallets: { applePay: "never", googlePay: "never" },
+            // Link を含むウォレットはカードフォームに出さない（Link の保存チェック/メール欄を消す）
+            wallets: { applePay: "never", googlePay: "never", link: "never" },
+            // 表示する請求先フィールドを最小化：国のみ残し、郵便番号・氏名・電話・メールは出さない
+            fields: {
+              billingDetails: {
+                name: "never",
+                email: "never",
+                phone: "never",
+                address: {
+                  country: "auto",
+                  postalCode: "never",
+                  state: "never",
+                  city: "never",
+                  line1: "never",
+                  line2: "never",
+                },
+              },
+            },
+            // カードの利用規約テキストは出さない（最小構成を保つ）
+            terms: { card: "never" },
           }}
         />
 
@@ -164,9 +211,6 @@ export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
         {errorMessage && (
           <div className="mt-[18px] text-center text-token-sm text-rose">{errorMessage}</div>
         )}
-
-        {/* 安心メッセージ */}
-        <div className="mt-[22px] text-center text-token-xs text-muted">{t("tip.secureNote")}</div>
       </div>
     );
   }
@@ -174,23 +218,21 @@ export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
   // 選択ステップ: 支払い方法を並べる（ウォレット → または → カード → PayPay）
   return (
     <div>
-      {/* ウォレット（Apple Pay / Google Pay / Link）。タップで即ネイティブ決済シートが起動して確定する。
-          使えるウォレットが無い環境（localhost の Apple Pay 等）では自動的に何も表示されない。 */}
+      {/* ウォレット（Apple Pay / Google Pay）。タップで即ネイティブ決済シートが起動して確定する。
+          Link は使わないため無効化。使えるウォレットが無い環境（localhost の Apple Pay 等）では何も表示されない。 */}
       <ExpressCheckoutElement
         onConfirm={handleExpressConfirm}
         options={{
+          // Link は無効化し、Apple Pay / Google Pay のみ表示する
+          paymentMethods: { link: "never" },
           // ウォレットのボタンは黒系で統一（Apple Pay は黒が原則）
           buttonTheme: { applePay: "black", googlePay: "black" },
           buttonHeight: 48,
         }}
       />
 
-      {/* 区切り（または）。ウォレットとカード/PayPay の間に置く */}
-      <div className="my-[22px] flex items-center gap-3">
-        <div className="h-px flex-1 bg-line-soft" />
-        <span className="text-token-sm text-muted">{t("tip.or")}</span>
-        <div className="h-px flex-1 bg-line-soft" />
-      </div>
+      {/* ウォレットとカード/PayPay の間の余白 */}
+      <div className="mt-[22px]" />
 
       {/* クレジットカードで支払う（押すとカード入力ステップを展開する） */}
       <button
@@ -220,9 +262,6 @@ export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
       {errorMessage && (
         <div className="mt-[18px] text-center text-token-sm text-rose">{errorMessage}</div>
       )}
-
-      {/* 安心メッセージ */}
-      <div className="mt-[22px] text-center text-token-xs text-muted">{t("tip.secureNote")}</div>
     </div>
   );
 }
