@@ -15,8 +15,8 @@ type TipFormState = {
   // 支払い方法ボトムシートの開閉
   sheetOpen: boolean;
 
-  // 金額を選択する（同じ値は維持）
-  setAmount: (amount: number) => void;
+  // 金額を選択する（任意金額の入力が無効なときは null＝送信不可）
+  setAmount: (amount: number | null) => void;
   // メッセージを更新する
   setMessage: (message: string) => void;
   // シートを開く

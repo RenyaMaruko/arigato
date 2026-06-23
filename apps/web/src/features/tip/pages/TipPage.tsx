@@ -152,7 +152,8 @@ export function TipPage() {
               <button
                 type="button"
                 onClick={handleStartPay}
-                className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
+                disabled={amount == null}
+                className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page disabled:opacity-40"
               >
                 {t("tip.send")}
               </button>

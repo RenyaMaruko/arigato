@@ -4,10 +4,10 @@
  * 通貨は日本円（最小単位＝1円）で扱う。
  */
 
-// 定額投げ銭ボタンの金額候補（店員さんに届く満額・円）
-export const TIP_AMOUNTS = [100, 300, 500] as const;
+// 定額投げ銭ボタンの金額候補（店員さんに届く満額・円）。3列×2行のグリッドで表示する。
+export const TIP_AMOUNTS = [100, 300, 500, 1000, 3000, 5000] as const;
 
-// 定額金額のユニオン型（¥100 / ¥300 / ¥500）
+// 定額金額のユニオン型
 export type TipAmount = (typeof TIP_AMOUNTS)[number];
 
 // 運営手数料率（application_fee の算出に使う）。お客さま側に上乗せする想定。
