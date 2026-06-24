@@ -269,18 +269,21 @@ export function createStoreRepository(): StoreRepository {
       return rows.length;
     },
 
-    // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（中立な並び・金額や件数では並べない）
+    // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（中立な並び・金額や件数では並べない）。
+    // 多対多モデル: 所属は staff_store（membership）で表すため、staff_store 経由でこの店のメンバーを引く。
+    // 並びは在籍（staff_store.created_at）が古い順にして、件数・金額では並べ替えない（中立）。
     async listStaff(storeId) {
       const db = getDb();
       const rows = await db.execute<StoreStaffRow>(sql`
         SELECT
-          id            AS "id",
-          display_name  AS "displayName",
-          headline      AS "headline",
-          avatar_url    AS "avatarUrl"
-        FROM staff
-        WHERE store_id = ${storeId}
-        ORDER BY created_at ASC
+          s.id            AS "id",
+          s.display_name  AS "displayName",
+          s.headline      AS "headline",
+          s.avatar_url    AS "avatarUrl"
+        FROM staff_store ss
+        JOIN staff s ON s.id = ss.staff_id
+        WHERE ss.store_id = ${storeId}
+        ORDER BY ss.created_at ASC
       `);
       return rows;
     },
@@ -322,7 +325,9 @@ export function createStoreRepository(): StoreRepository {
     },
 
     // 自店のスタッフ別「ありがとう件数」を名簿順（在籍が古い順）で取得する。
-    // COUNT のみで金額は扱わず、ORDER BY も created_at（名簿順）にして件数では並べ替えない（中立）。
+    // COUNT のみで金額は扱わず、ORDER BY も在籍（名簿順）にして件数では並べ替えない（中立）。
+    // 多対多モデル: この店のメンバー（staff_store）を引き、その店での成立済み tip だけを数える
+    // （t.store_id でこの店分に限定するため、掛け持ちの他店分は混ざらない）。
     async listGratitudePerStaff(storeId) {
       const db = getDb();
       const rows = await db.execute<GratitudePerStaffRow>(sql`
@@ -330,13 +335,15 @@ export function createStoreRepository(): StoreRepository {
           s.id            AS "staffId",
           s.display_name  AS "staffName",
           COUNT(t.id)::int AS "count"
-        FROM staff s
+        FROM staff_store ss
+        JOIN staff s ON s.id = ss.staff_id
         LEFT JOIN tip t
           ON t.staff_id = s.id
+          AND t.store_id = ${storeId}
           AND t.status = 'succeeded'
-        WHERE s.store_id = ${storeId}
-        GROUP BY s.id, s.display_name, s.created_at
-        ORDER BY s.created_at ASC
+        WHERE ss.store_id = ${storeId}
+        GROUP BY s.id, s.display_name, ss.created_at
+        ORDER BY ss.created_at ASC
       `);
       return rows;
     },

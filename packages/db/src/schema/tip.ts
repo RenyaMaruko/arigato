@@ -1,11 +1,13 @@
 import { pgTable, uuid, text, integer, timestamp } from "drizzle-orm/pg-core";
 import { staff } from "./staff";
 import { store } from "./store";
+import { staffStore } from "./staff-store";
 
 /**
  * tip（投げ銭）テーブル。構造化された感謝データの中核。
  * 「いつ・どの店で・誰が・どんな文脈で」を保存する。
- * 送信時点の所属（store_id）を固定保存し、後で異動しても文脈が残るようにする。
+ * QR=membership（人×店）から解決した staff_id ＋ store_id を送信時点で固定保存し、
+ * 後で異動・退店しても文脈が残るようにする。membership_id は追跡用に保持する。
  * 金額は本人のみ閲覧可だが、閲覧制御は Service 層で行う（テーブルには素直に保持）。
  */
 export const tip = pgTable("tip", {
@@ -13,10 +15,12 @@ export const tip = pgTable("tip", {
   staffId: uuid("staff_id")
     .notNull()
     .references(() => staff.id),
-  // 送信時点の所属店（固定保存）
+  // 送信時点の所属店（QR=membership の店を固定保存）
   storeId: uuid("store_id")
     .notNull()
     .references(() => store.id),
+  // 送信元の所属（membership＝人×店）。追跡用（退店で所属が外れても tip は残るため任意）。
+  membershipId: uuid("membership_id").references(() => staffStore.id),
   // 店員さんに届く満額（円）
   amount: integer("amount").notNull(),
   // 運営手数料（application_fee・円）

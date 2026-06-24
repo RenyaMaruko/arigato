@@ -9,6 +9,9 @@ import type {
  * staff feature の Repository 層（DB アクセス専用・生 SQL）。
  * 生 SQL はこの層にだけ書く。Service / Model からは呼び出さない。
  *
+ * 多対多モデル: staff（人）は store_id を持たず、所属は staff_store（membership）で表す。
+ * QR は membership 単位。プロフィールは人ごとに1つ。
+ *
  * Repository を「インターフェース（StaffRepository）」として束ねて公開し、Service へ注入できる形にする。
  * これにより実 DB が無い環境でも Service をモック Repository でテストでき、契約を確認可能にする。
  */
@@ -23,24 +26,40 @@ export type InviteRow = {
   storeAdopted: boolean;
 };
 
-// プロフィール取得（GET /staff/me）で返す行（staff＋所属店）
+// プロフィール本体（人ごと1つ。所属は別途 membership で持つ）
 export type StaffProfileRow = {
   id: string;
   displayName: string;
   headline: string | null;
   avatarUrl: string | null;
-  storeId: string;
-  storeName: string;
   identityStatus: IdentityStatus;
 };
 
-// プロフィール作成時に Repository が受け取る値
+// 所属（membership＝人×店）1件分（GET /staff/me の所属一覧・店ごとQR用）
+export type StaffMembershipRow = {
+  membershipId: string;
+  storeId: string;
+  storeName: string;
+};
+
+// プロフィール作成時に Repository が受け取る値（所属は含めない。人ごと1つ）
 export type InsertStaffParams = {
   authUserId: string;
-  storeId: string;
   displayName: string;
   headline: string | null;
   avatarUrl: string | null;
+};
+
+// 招待消費（所属追加）の結果区分
+// joined: 新たに所属が追加された / already_member: 既に同店所属（多重参加不可）
+export type JoinOutcome = "joined" | "already_member";
+
+// 招待で所属を追加した結果（membership と店情報を返す）
+export type JoinResultRow = {
+  outcome: JoinOutcome;
+  membershipId: string;
+  storeId: string;
+  storeName: string;
 };
 
 // Connect オンボーディング時に必要な、本人の Stripe 連携状態
@@ -94,11 +113,16 @@ export type ApplyAccountUpdateResult = {
 export type StaffRepository = {
   // 招待コードから招待＋発行元の店情報を取得（招待検証・所属確定の起点）
   findInviteByCode: (code: string) => Promise<InviteRow | null>;
-  // auth ユーザーIDから自分の staff プロフィールを取得（GET /staff/me / 重複作成防止）
+  // auth ユーザーIDから自分の staff プロフィール（人ごと1つ）を取得（GET /staff/me / 重複作成防止）
   findStaffByAuthUserId: (authUserId: string) => Promise<StaffProfileRow | null>;
-  // 招待を消費して staff を作成する（招待 accepted 化と staff INSERT をまとめて行う）。
-  // 作成された staff のプロフィール行を返す。
-  createStaffWithInvite: (code: string, params: InsertStaffParams) => Promise<StaffProfileRow>;
+  // 本人の所属（membership）一覧を在籍が古い順で取得する（店ごとQR用・GET /staff/me）
+  listMembershipsByAuthUserId: (authUserId: string) => Promise<StaffMembershipRow[]>;
+  // プロフィール（人ごと1つ）を作成する。所属は含めない。作成したプロフィール行を返す。
+  createStaffProfile: (params: InsertStaffParams) => Promise<StaffProfileRow>;
+  // 招待コードで所属（staff_store）を追加する（参加の確定点）。
+  // 招待を accepted 化し、当該店への membership を1件作る（既に同店所属なら already_member）。
+  // 招待二重消費の防止と membership 一意制約を1トランザクションで担保する。
+  joinStoreByInvite: (authUserId: string, code: string) => Promise<JoinResultRow>;
   // 自分のプロフィール（display_name・headline・avatar）を更新する。更新後の行を返す
   updateStaffProfile: (
     authUserId: string,
@@ -147,7 +171,7 @@ export function createStaffRepository(): StaffRepository {
       return rows[0] ?? null;
     },
 
-    // auth ユーザーIDで自分の staff プロフィールを取得（所属店名も結合）
+    // auth ユーザーIDで自分の staff プロフィール（人ごと1つ）を取得（所属は含めない）
     async findStaffByAuthUserId(authUserId) {
       const db = getDb();
       const rows = await db.execute<StaffProfileRow>(sql`
@@ -156,86 +180,153 @@ export function createStaffRepository(): StaffRepository {
           s.display_name    AS "displayName",
           s.headline        AS "headline",
           s.avatar_url      AS "avatarUrl",
-          s.store_id        AS "storeId",
-          st.name           AS "storeName",
           s.identity_status AS "identityStatus"
         FROM staff s
-        JOIN store st ON st.id = s.store_id
         WHERE s.auth_user_id = ${authUserId}
         LIMIT 1
       `);
       return rows[0] ?? null;
     },
 
-    // 招待を消費して staff を作成する。
-    // 招待の二重消費を防ぐため、招待を pending→accepted に確定できた場合のみ staff を作る
-    // （楽観ロック相当。WHERE status='pending' で更新できた件数が 0 なら使用済み）。
-    // staff 作成と招待消費は1トランザクションで原子的に行う。
-    async createStaffWithInvite(code, params) {
+    // 本人の所属（membership）一覧を在籍が古い順で取得する（店ごとQR用・中立な並び）
+    async listMembershipsByAuthUserId(authUserId) {
+      const db = getDb();
+      const rows = await db.execute<StaffMembershipRow>(sql`
+        SELECT
+          ss.id      AS "membershipId",
+          ss.store_id AS "storeId",
+          st.name    AS "storeName"
+        FROM staff_store ss
+        JOIN staff s ON s.id = ss.staff_id
+        JOIN store st ON st.id = ss.store_id
+        WHERE s.auth_user_id = ${authUserId}
+        ORDER BY ss.created_at ASC
+      `);
+      return rows;
+    },
+
+    // プロフィール（人ごと1つ）を作成する。所属は別途 join で追加する。
+    async createStaffProfile(params) {
+      const db = getDb();
+      const rows = await db.execute<StaffProfileRow>(sql`
+        INSERT INTO staff (auth_user_id, display_name, headline, avatar_url)
+        VALUES (${params.authUserId}, ${params.displayName}, ${params.headline}, ${params.avatarUrl})
+        RETURNING
+          id              AS "id",
+          display_name    AS "displayName",
+          headline        AS "headline",
+          avatar_url      AS "avatarUrl",
+          identity_status AS "identityStatus"
+      `);
+      return rows[0]!;
+    },
+
+    // 招待コードで所属（staff_store）を追加する（参加の確定点）。
+    // 1トランザクションで:
+    //  1. auth ユーザーの staff（人）を引く（無ければ呼び出し側で先にプロフィール作成済みのはず）
+    //  2. 招待が pending かつ店が導入承認済みであることを確認
+    //  3. 既に同店所属なら already_member（招待は消費しない・多重参加不可）
+    //  4. 新規なら membership を1件作り、招待を accepted 化する
+    async joinStoreByInvite(authUserId, code) {
       const db = getDb();
       return await db.transaction(async (tx) => {
-        // staff を作成（store_id は招待で確定済みの値を渡す）
-        const inserted = await tx.execute<{ id: string }>(sql`
-          INSERT INTO staff (auth_user_id, store_id, display_name, headline, avatar_url)
-          VALUES (${params.authUserId}, ${params.storeId}, ${params.displayName},
-                  ${params.headline}, ${params.avatarUrl})
-          RETURNING id
+        // 招待を取得（pending かつ店承認済みのときだけ使える）
+        const inviteRows = await tx.execute<{
+          storeId: string;
+          storeName: string;
+          status: InviteStatus;
+          storeAdopted: boolean;
+        }>(sql`
+          SELECT
+            i.store_id AS "storeId",
+            st.name    AS "storeName",
+            i.status   AS "status",
+            (st.adoption_agreed_at IS NOT NULL) AS "storeAdopted"
+          FROM staff_invite i
+          JOIN store st ON st.id = i.store_id
+          WHERE i.code = ${code}
+          LIMIT 1
+          FOR UPDATE OF i
         `);
-        const staffId = inserted[0]!.id;
-
-        // 招待を消費（pending のときのみ accepted へ。二重消費はここで弾く）
-        const accepted = await tx.execute<{ id: string }>(sql`
-          UPDATE staff_invite
-          SET status = 'accepted',
-              accepted_staff_id = ${staffId},
-              accepted_at = now()
-          WHERE code = ${code}
-            AND status = 'pending'
-          RETURNING id
-        `);
-        if (accepted.length === 0) {
-          // 既に消費済み/失効 → トランザクションを巻き戻して staff 作成も取り消す
+        const invite = inviteRows[0];
+        if (!invite || invite.status !== "pending" || !invite.storeAdopted) {
           throw new Error("invite_not_usable");
         }
 
-        // 作成した staff のプロフィール行を返す
-        const rows = await tx.execute<StaffProfileRow>(sql`
-          SELECT
-            s.id              AS "id",
-            s.display_name    AS "displayName",
-            s.headline        AS "headline",
-            s.avatar_url      AS "avatarUrl",
-            s.store_id        AS "storeId",
-            st.name           AS "storeName",
-            s.identity_status AS "identityStatus"
-          FROM staff s
-          JOIN store st ON st.id = s.store_id
-          WHERE s.id = ${staffId}
+        // 本人の staff（人）を引く
+        const staffRows = await tx.execute<{ id: string }>(sql`
+          SELECT id AS "id" FROM staff WHERE auth_user_id = ${authUserId} LIMIT 1
+        `);
+        const staffRow = staffRows[0];
+        if (!staffRow) {
+          // プロフィール未作成（先に POST /staff/me が必要）
+          throw new Error("staff_not_found");
+        }
+
+        // 既に同じ店に所属していないか（多重参加不可）
+        const existing = await tx.execute<{ id: string }>(sql`
+          SELECT id AS "id"
+          FROM staff_store
+          WHERE staff_id = ${staffRow.id} AND store_id = ${invite.storeId}
           LIMIT 1
         `);
-        return rows[0]!;
+        if (existing[0]) {
+          // 既に所属している → 招待は消費せず already_member を返す
+          return {
+            outcome: "already_member" as const,
+            membershipId: existing[0].id,
+            storeId: invite.storeId,
+            storeName: invite.storeName,
+          };
+        }
+
+        // 新規所属（membership）を作成する
+        const inserted = await tx.execute<{ id: string }>(sql`
+          INSERT INTO staff_store (staff_id, store_id)
+          VALUES (${staffRow.id}, ${invite.storeId})
+          RETURNING id AS "id"
+        `);
+        const membershipId = inserted[0]!.id;
+
+        // 招待を消費する（pending のときのみ。二重消費はここで弾く）
+        const accepted = await tx.execute<{ id: string }>(sql`
+          UPDATE staff_invite
+          SET status = 'accepted',
+              accepted_staff_id = ${staffRow.id},
+              accepted_at = now()
+          WHERE code = ${code}
+            AND status = 'pending'
+          RETURNING id AS "id"
+        `);
+        if (accepted.length === 0) {
+          // 検証後に他リクエストが先に消費していた → 巻き戻す
+          throw new Error("invite_not_usable");
+        }
+
+        return {
+          outcome: "joined" as const,
+          membershipId,
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
       });
     },
 
-    // 自分のプロフィールを更新（所属・招待は変更しない）。本人の auth_user_id で限定する
+    // 自分のプロフィールを更新（所属は変更しない）。本人の auth_user_id で限定する
     async updateStaffProfile(authUserId, params) {
       const db = getDb();
       const rows = await db.execute<StaffProfileRow>(sql`
-        UPDATE staff s
+        UPDATE staff
         SET display_name = ${params.displayName},
             headline = ${params.headline},
             avatar_url = ${params.avatarUrl}
-        FROM store st
-        WHERE s.auth_user_id = ${authUserId}
-          AND st.id = s.store_id
+        WHERE auth_user_id = ${authUserId}
         RETURNING
-          s.id              AS "id",
-          s.display_name    AS "displayName",
-          s.headline        AS "headline",
-          s.avatar_url      AS "avatarUrl",
-          s.store_id        AS "storeId",
-          st.name           AS "storeName",
-          s.identity_status AS "identityStatus"
+          id              AS "id",
+          display_name    AS "displayName",
+          headline        AS "headline",
+          avatar_url      AS "avatarUrl",
+          identity_status AS "identityStatus"
       `);
       return rows[0] ?? null;
     },
@@ -268,6 +359,7 @@ export function createStaffRepository(): StaffRepository {
 
     // 本人の受取履歴（成立済み）を新しい順に取得する（金額・メッセージ含む・本人のみ）。
     // 自分の auth_user_id をキーに staff を結合し、他人の行は決して返さない。
+    // 店ラベルは tip に固定保存した store_id から引く（退店後も文脈が残る）。
     async listTipsByAuthUserId(authUserId) {
       const db = getDb();
       const rows = await db.execute<StaffTipRow>(sql`
@@ -289,7 +381,7 @@ export function createStaffRepository(): StaffRepository {
       return rows;
     },
 
-    // 本人の保留残高集計に使う、成立済み tip の settlement 状態と金額を取得する（本人のみ）
+    // 本人の保留残高集計に使う、成立済み tip の settlement 状態と金額を取得する（本人のみ・人ごと集約）
     async listSettlementsByAuthUserId(authUserId) {
       const db = getDb();
       const rows = await db.execute<SettlementRow>(sql`
@@ -344,7 +436,6 @@ export function createStaffRepository(): StaffRepository {
         }
 
         // まだ着金可能でなければ verified への遷移はしない（pending へは寄せず据え置く）。
-        // ここでは「verified になったか」だけを着金遷移の起点にする。
         if (!payoutsEnabled) {
           return { found: true, verified: staffRow.identityStatus === "verified", promotedTips: 0 };
         }
@@ -361,7 +452,7 @@ export function createStaffRepository(): StaffRepository {
           WHERE id = ${staffRow.id}
         `);
 
-        // この店員さんの held の tip を payable（着金可能）へ遷移する
+        // この店員さんの held の tip を payable（着金可能）へ遷移する（人ごと・全所属店分まとめて）
         const promoted = await tx.execute<{ id: string }>(sql`
           UPDATE tip
           SET settlement_status = 'payable'

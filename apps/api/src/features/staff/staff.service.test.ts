@@ -3,6 +3,7 @@ import {
   getInviteInfo,
   getStaffMe,
   createStaffProfile,
+  joinStore,
   updateStaffProfile,
   getStaffTips,
   getStaffBalance,
@@ -11,30 +12,44 @@ import {
   applyConnectAccountUpdate,
   InviteNotUsableError,
   StaffAlreadyExistsError,
+  StaffNotFoundError,
 } from "./staff.service.js";
 import { buildTipUrl } from "./staff.model.js";
 import type {
   StaffRepository,
   InviteRow,
   StaffProfileRow,
+  StaffMembershipRow,
   StaffTipRow,
   SettlementRow,
+  JoinResultRow,
 } from "./staff.repository.js";
 
 /**
- * staff Service のテスト。
- * 招待検証・招待による所属確定（store_id 確定）・本人スコープ・本人確認なし成立・
- * 多重作成防止・招待無効の各ユースケースをモック Repository で検証する。
+ * staff Service のテスト（多対多モデル）。
+ * staff（人）はプロフィールを1つ持ち、所属（membership）を複数持てる（掛け持ち）。
+ * 参加の確定点は join（招待コードで staff_store を追加）に集約する。
+ *
+ * 検証する契約:
+ * - プロフィール作成は display_name / headline のみ（本人確認なしで成立・多重作成不可）
+ * - 参加（join）: 新規 staff_store を作る（joined）/ 同店所属済みは already_member / 招待無効は弾く
+ * - getStaffMe は memberships（店ごとQR用URL 付き）を返す・本人スコープ
+ * - 受取履歴・残高は人ごと集約・本人スコープ・店ラベル付き
+ * - Connect オンボーディング・account.updated（held→payable 遷移・冪等）
  */
 
-// テスト用のモック Repository（実 DB を使わず Service のロジックを検証する）
+// テスト用のモック Repository（実 DB を使わず Service のロジックを検証する・多対多）
 function createMockRepo() {
   const invites = new Map<string, InviteRow>();
   const staffByAuth = new Map<string, StaffProfileRow>();
+  // authUserId → 所属（membership）一覧
+  const membershipsByAuth = new Map<string, StaffMembershipRow[]>();
   // authUserId → 受取履歴（本人スコープを検証するため auth ごとに分けて保持）
   const tipsByAuth = new Map<string, StaffTipRow[]>();
   // authUserId → Connected Account ID
   const accountByAuth = new Map<string, string | null>();
+  // membership ID の採番カウンタ
+  let membershipSeq = 0;
 
   const repo: StaffRepository = {
     async findInviteByCode(code) {
@@ -43,25 +58,62 @@ function createMockRepo() {
     async findStaffByAuthUserId(authUserId) {
       return staffByAuth.get(authUserId) ?? null;
     },
-    async createStaffWithInvite(code, params) {
-      const invite = invites.get(code);
-      if (!invite || invite.inviteStatus !== "pending") {
-        throw new Error("invite_not_usable");
-      }
+    async listMembershipsByAuthUserId(authUserId) {
+      return membershipsByAuth.get(authUserId) ?? [];
+    },
+    // プロフィール（人ごと1つ）を作成する。所属は含めない
+    async createStaffProfile(params) {
       const row: StaffProfileRow = {
         id: `staff-${params.authUserId}`,
         displayName: params.displayName,
         headline: params.headline,
         avatarUrl: params.avatarUrl,
-        storeId: params.storeId,
-        storeName: invite.storeName,
         // 本人確認なしで成立するため none のまま
         identityStatus: "none",
       };
-      invites.set(code, { ...invite, inviteStatus: "accepted" });
       staffByAuth.set(params.authUserId, row);
       accountByAuth.set(params.authUserId, null);
+      membershipsByAuth.set(params.authUserId, []);
       return row;
+    },
+    // 招待コードで所属（staff_store）を追加する（参加の確定点）。
+    // 招待検証・同店重複・新規作成・招待消費を1まとまりで担保する。
+    async joinStoreByInvite(authUserId, code) {
+      const invite = invites.get(code);
+      if (!invite || invite.inviteStatus !== "pending" || !invite.storeAdopted) {
+        throw new Error("invite_not_usable");
+      }
+      const staff = staffByAuth.get(authUserId);
+      if (!staff) {
+        throw new Error("staff_not_found");
+      }
+      const current = membershipsByAuth.get(authUserId) ?? [];
+      // 既に同じ店に所属していれば already_member（招待は消費しない）
+      const existing = current.find((m) => m.storeId === invite.storeId);
+      if (existing) {
+        return {
+          outcome: "already_member",
+          membershipId: existing.membershipId,
+          storeId: existing.storeId,
+          storeName: existing.storeName,
+        } satisfies JoinResultRow;
+      }
+      // 新規所属を作成する
+      membershipSeq += 1;
+      const membershipId = `membership-${membershipSeq}`;
+      const next = [
+        ...current,
+        { membershipId, storeId: invite.storeId, storeName: invite.storeName },
+      ];
+      membershipsByAuth.set(authUserId, next);
+      // 招待を消費する
+      invites.set(code, { ...invite, inviteStatus: "accepted" });
+      return {
+        outcome: "joined",
+        membershipId,
+        storeId: invite.storeId,
+        storeName: invite.storeName,
+      } satisfies JoinResultRow;
     },
     async updateStaffProfile(authUserId, params) {
       const existing = staffByAuth.get(authUserId);
@@ -120,7 +172,7 @@ function createMockRepo() {
       if (profile.identityStatus === "verified") {
         return { found: true, verified: true, promotedTips: 0 };
       }
-      // verified へ確定し、held を payable へ昇格する
+      // verified へ確定し、held を payable へ昇格する（人ごと・全所属店分まとめて）
       staffByAuth.set(foundAuth, { ...profile, identityStatus: "verified" });
       const tips = tipsByAuth.get(foundAuth) ?? [];
       let promoted = 0;
@@ -136,11 +188,22 @@ function createMockRepo() {
     },
   };
 
-  return { repo, invites, staffByAuth, tipsByAuth, accountByAuth };
+  return { repo, invites, staffByAuth, membershipsByAuth, tipsByAuth, accountByAuth };
 }
 
-// QR用URL の組み立て（ローカルのベース URL を使う）
-const buildUrl = (staffId: string) => buildTipUrl("http://localhost:5173", staffId);
+// QR用URL の組み立て（ローカルのベース URL を使う・membership 単位）
+const buildUrl = (membershipId: string) => buildTipUrl("http://localhost:5173", membershipId);
+
+// プロフィール作成＋参加までを一気に行うヘルパ（新規ユーザーの典型フロー）
+async function setupAndJoin(
+  mock: ReturnType<typeof createMockRepo>,
+  authUserId: string,
+  displayName: string,
+  code: string,
+) {
+  await createStaffProfile(mock.repo, buildUrl, authUserId, { displayName });
+  return joinStore(mock.repo, buildUrl, authUserId, code);
+}
 
 describe("staff.service", () => {
   let mock: ReturnType<typeof createMockRepo>;
@@ -155,6 +218,14 @@ describe("staff.service", () => {
       inviteStatus: "pending",
       storeAdopted: true,
     });
+    // 別の承認済み店の pending 招待（掛け持ち検証用）
+    mock.invites.set("INV-BAR", {
+      code: "INV-BAR",
+      storeId: "store-bar",
+      storeName: "バー Arigato",
+      inviteStatus: "pending",
+      storeAdopted: true,
+    });
     // 店が未承認の招待（使えないはず）
     mock.invites.set("INV-STORE-PENDING", {
       code: "INV-STORE-PENDING",
@@ -164,6 +235,8 @@ describe("staff.service", () => {
       storeAdopted: false,
     });
   });
+
+  // --- 招待検証 ---
 
   it("getInviteInfo: 承認済み店の pending 招待は valid=true で店名を返す", async () => {
     const info = await getInviteInfo(mock.repo, "INV-OK");
@@ -182,48 +255,65 @@ describe("staff.service", () => {
     expect(await getInviteInfo(mock.repo, "NOPE")).toBeNull();
   });
 
-  it("createStaffProfile: 招待コードで store_id が確定し、本人確認なし（identity_status=none）で成立する", async () => {
+  // --- プロフィール作成（display_name / headline のみ・本人確認なし・多重不可） ---
+
+  it("createStaffProfile: display_name / headline のみで本人確認なし（identity_status=none）で成立し、所属はまだ無い", async () => {
     const me = await createStaffProfile(mock.repo, buildUrl, "auth-user-1", {
-      inviteCode: "INV-OK",
       displayName: "山田 さくら",
       headline: "カフェで働いています",
     });
-    // 招待の店に所属が確定する
-    expect(me.storeId).toBe("store-1");
-    expect(me.storeName).toBe("カフェ Arigato");
     expect(me.displayName).toBe("山田 さくら");
+    expect(me.headline).toBe("カフェで働いています");
     // 本人確認・口座登録なしで成立 → none のまま
     expect(me.identityStatus).toBe("none");
-    // QR用URL が /tip/:staffId を指す
-    expect(me.tipUrl).toBe(`http://localhost:5173/tip/${me.id}`);
-    // 招待は消費される（accepted）
-    expect(mock.invites.get("INV-OK")!.inviteStatus).toBe("accepted");
-  });
-
-  it("createStaffProfile: 店未承認の招待では作成できない（InviteNotUsableError）", async () => {
-    await expect(
-      createStaffProfile(mock.repo, buildUrl, "auth-user-2", {
-        inviteCode: "INV-STORE-PENDING",
-        displayName: "誰か",
-      }),
-    ).rejects.toBeInstanceOf(InviteNotUsableError);
-  });
-
-  it("createStaffProfile: 存在しない招待では作成できない", async () => {
-    await expect(
-      createStaffProfile(mock.repo, buildUrl, "auth-user-3", {
-        inviteCode: "NOPE",
-        displayName: "誰か",
-      }),
-    ).rejects.toBeInstanceOf(InviteNotUsableError);
+    // 作成直後は所属が無い（参加は join で行う）
+    expect(me.memberships).toHaveLength(0);
   });
 
   it("createStaffProfile: 既にプロフィールがあると多重作成できない（StaffAlreadyExistsError）", async () => {
-    await createStaffProfile(mock.repo, buildUrl, "auth-user-1", {
-      inviteCode: "INV-OK",
-      displayName: "山田 さくら",
-    });
+    await createStaffProfile(mock.repo, buildUrl, "auth-user-1", { displayName: "山田 さくら" });
     // 同じ auth ユーザーが再度作成しようとすると弾かれる
+    await expect(
+      createStaffProfile(mock.repo, buildUrl, "auth-user-1", { displayName: "別名" }),
+    ).rejects.toBeInstanceOf(StaffAlreadyExistsError);
+  });
+
+  // --- 参加（join）: 新規 / 同店重複 / 招待無効 / プロフィール未作成 ---
+
+  it("joinStore: 招待コードで所属（membership）を1件作り joined を返す。QR用URLは /tip/:membershipId", async () => {
+    await createStaffProfile(mock.repo, buildUrl, "auth-user-1", { displayName: "山田 さくら" });
+    const result = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-OK");
+    expect(result.status).toBe("joined");
+    expect(result.storeId).toBe("store-1");
+    expect(result.storeName).toBe("カフェ Arigato");
+    // QR用URL が /tip/:membershipId を指す
+    expect(result.tipUrl).toBe(`http://localhost:5173/tip/${result.membershipId}`);
+    // 招待は消費される（accepted）
+    expect(mock.invites.get("INV-OK")!.inviteStatus).toBe("accepted");
+    // 所属一覧に1件入る
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.memberships).toHaveLength(1);
+    expect(me!.memberships[0]!.storeName).toBe("カフェ Arigato");
+  });
+
+  it("joinStore: 掛け持ち — 別の店の招待でもう1件所属が増える（複数 membership）", async () => {
+    await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    const second = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-BAR");
+    expect(second.status).toBe("joined");
+    expect(second.storeName).toBe("バー Arigato");
+    // 2店に所属する（掛け持ち）
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.memberships).toHaveLength(2);
+    const names = me!.memberships.map((m) => m.storeName).sort();
+    expect(names).toEqual(["カフェ Arigato", "バー Arigato"]);
+    // 各 membership で QR用URL が異なる（店ごとQR）
+    const urls = new Set(me!.memberships.map((m) => m.tipUrl));
+    expect(urls.size).toBe(2);
+  });
+
+  it("joinStore: 同じ店の招待に再度参加しようとすると already_member（多重参加不可・招待は消費しない）", async () => {
+    await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    // 同じ店の別招待コードを用意する
     mock.invites.set("INV-OK-2", {
       code: "INV-OK-2",
       storeId: "store-1",
@@ -231,41 +321,66 @@ describe("staff.service", () => {
       inviteStatus: "pending",
       storeAdopted: true,
     });
-    await expect(
-      createStaffProfile(mock.repo, buildUrl, "auth-user-1", {
-        inviteCode: "INV-OK-2",
-        displayName: "別名",
-      }),
-    ).rejects.toBeInstanceOf(StaffAlreadyExistsError);
+    const again = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-OK-2");
+    expect(again.status).toBe("already_member");
+    expect(again.storeId).toBe("store-1");
+    // 招待は消費されない（pending のまま）
+    expect(mock.invites.get("INV-OK-2")!.inviteStatus).toBe("pending");
+    // 所属は増えない（1件のまま）
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.memberships).toHaveLength(1);
   });
 
+  it("joinStore: 店未承認の招待では参加できない（InviteNotUsableError）", async () => {
+    await createStaffProfile(mock.repo, buildUrl, "auth-user-1", { displayName: "誰か" });
+    await expect(
+      joinStore(mock.repo, buildUrl, "auth-user-1", "INV-STORE-PENDING"),
+    ).rejects.toBeInstanceOf(InviteNotUsableError);
+  });
+
+  it("joinStore: 存在しない招待では参加できない（InviteNotUsableError）", async () => {
+    await createStaffProfile(mock.repo, buildUrl, "auth-user-1", { displayName: "誰か" });
+    await expect(
+      joinStore(mock.repo, buildUrl, "auth-user-1", "NOPE"),
+    ).rejects.toBeInstanceOf(InviteNotUsableError);
+  });
+
+  it("joinStore: プロフィール未作成なら参加できない（StaffNotFoundError）", async () => {
+    await expect(
+      joinStore(mock.repo, buildUrl, "no-staff", "INV-OK"),
+    ).rejects.toBeInstanceOf(StaffNotFoundError);
+  });
+
+  // --- getStaffMe（本人スコープ・memberships を返す） ---
+
   it("getStaffMe: 本人スコープ — 自分の行のみ返り、他人の authUserId では取得できない", async () => {
-    await createStaffProfile(mock.repo, buildUrl, "auth-user-1", {
-      inviteCode: "INV-OK",
-      displayName: "山田 さくら",
-    });
+    await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
     // 本人なら取得できる
     const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
     expect(me).not.toBeNull();
     expect(me!.displayName).toBe("山田 さくら");
+    expect(me!.memberships).toHaveLength(1);
     // 他人の authUserId では何も返らない（自分のスコープのみ）
     const other = await getStaffMe(mock.repo, buildUrl, "auth-user-OTHER");
     expect(other).toBeNull();
   });
 
+  it("getStaffMe: プロフィール未作成なら null（フロントは作成へ誘導）", async () => {
+    expect(await getStaffMe(mock.repo, buildUrl, "no-staff")).toBeNull();
+  });
+
+  // --- プロフィール編集（所属は変わらない） ---
+
   it("updateStaffProfile: 本人の display_name / headline を更新でき、所属は変わらない", async () => {
-    await createStaffProfile(mock.repo, buildUrl, "auth-user-1", {
-      inviteCode: "INV-OK",
-      displayName: "山田 さくら",
-      headline: "古い一言",
-    });
+    await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
     const updated = await updateStaffProfile(mock.repo, buildUrl, "auth-user-1", {
       displayName: "山田 さくら",
       headline: "新しい一言☕",
     });
     expect(updated!.headline).toBe("新しい一言☕");
-    // 所属店は招待で確定した値のまま
-    expect(updated!.storeId).toBe("store-1");
+    // 所属は招待で確定した1件のまま
+    expect(updated!.memberships).toHaveLength(1);
+    expect(updated!.memberships[0]!.storeName).toBe("カフェ Arigato");
   });
 
   it("updateStaffProfile: プロフィール未作成なら null", async () => {
@@ -275,25 +390,12 @@ describe("staff.service", () => {
     expect(res).toBeNull();
   });
 
-  // --- 受取履歴・保留残高（金額は本人のみ） ---
+  // --- 受取履歴・保留残高（金額は本人のみ・人ごと集約） ---
 
   // 2人の店員さんに別々の受取履歴を仕込むヘルパ
   async function seedTwoStaffWithTips() {
-    await createStaffProfile(mock.repo, buildUrl, "auth-A", {
-      inviteCode: "INV-OK",
-      displayName: "Aさん",
-    });
-    mock.invites.set("INV-OK-B", {
-      code: "INV-OK-B",
-      storeId: "store-1",
-      storeName: "カフェ Arigato",
-      inviteStatus: "pending",
-      storeAdopted: true,
-    });
-    await createStaffProfile(mock.repo, buildUrl, "auth-B", {
-      inviteCode: "INV-OK-B",
-      displayName: "Bさん",
-    });
+    await setupAndJoin(mock, "auth-A", "Aさん", "INV-OK");
+    await setupAndJoin(mock, "auth-B", "Bさん", "INV-BAR");
     // A の履歴: held 300 + held 500、B の履歴: held 100
     mock.tipsByAuth.set("auth-A", [
       {
@@ -319,22 +421,23 @@ describe("staff.service", () => {
         amount: 100,
         message: "助かりました",
         receivedAt: "2025-05-13T08:00:00Z",
-        storeName: "カフェ Arigato",
+        storeName: "バー Arigato",
         settlementStatus: "held",
       },
     ]);
   }
 
-  it("getStaffTips: 本人の受取履歴を金額・メッセージ・受取日時つきで返し、合計も返す", async () => {
+  it("getStaffTips: 本人の受取履歴を金額・メッセージ・受取日時・店ラベルつきで返し、合計も返す", async () => {
     await seedTwoStaffWithTips();
     const tips = await getStaffTips(mock.repo, "auth-A");
     expect(tips).not.toBeNull();
     expect(tips!.items).toHaveLength(2);
     expect(tips!.totalAmount).toBe(800);
-    // 金額・メッセージ・受取日時を含む
+    // 金額・メッセージ・受取日時・店ラベルを含む
     expect(tips!.items[0]!.amount).toBe(300);
     expect(tips!.items[0]!.message).toBe("ありがとう");
     expect(tips!.items[0]!.receivedAt).toBe("2025-05-15T10:32:00Z");
+    expect(tips!.items[0]!.storeName).toBe("カフェ Arigato");
   });
 
   it("getStaffTips: 本人スコープ — 他人の履歴・金額は混ざらない", async () => {
@@ -353,7 +456,7 @@ describe("staff.service", () => {
     expect(await getStaffTips(mock.repo, "no-staff")).toBeNull();
   });
 
-  it("getStaffBalance: held 合計（保留残高）と着金可能額を本人に返す", async () => {
+  it("getStaffBalance: held 合計（保留残高）と着金可能額を本人に返す（人ごと集約）", async () => {
     await seedTwoStaffWithTips();
     const balance = await getStaffBalance(mock.repo, "auth-A");
     expect(balance).not.toBeNull();
@@ -382,10 +485,7 @@ describe("staff.service", () => {
   // --- Connect オンボーディング ---
 
   it("startConnectOnboarding: リンクを発行し、新規 Connected Account を本人に保存する", async () => {
-    await createStaffProfile(mock.repo, buildUrl, "auth-A", {
-      inviteCode: "INV-OK",
-      displayName: "Aさん",
-    });
+    await setupAndJoin(mock, "auth-A", "Aさん", "INV-OK");
     // Connected Account を新規作成してリンクを返す infrastructure をモック
     const createLink = vi.fn(async () => ({
       onboardingUrl: "https://connect.stripe.com/setup/acct_new",

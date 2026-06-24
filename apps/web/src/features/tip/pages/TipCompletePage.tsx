@@ -5,27 +5,27 @@ import { useTipComplete } from "../hooks/useTip.js";
 import { useTipFormStore } from "../stores/tipFormStore.js";
 
 /**
- * 完了画面（/tip/:staffId/complete?tipId=、モック 04）。
- * 「ありがとうを届けました！」を主役に大きく見せ、誰に・¥◯◯（当該 tip の送金額）・
- * 入力したメッセージを再掲する。メッセージ未入力なら枠は出さない。
+ * 完了画面（/tip/:membershipId/complete?tipId=、モック 04）。
+ * 見出しは置かず、誰に・¥◯◯（当該 tip の送金額）・入力したメッセージを再掲する。
+ * メッセージ未入力なら枠は出さない。
  * 「もう一度送る」で投げ銭画面へ戻り、「閉じる」も同様に投げ銭画面へ戻る。
  */
 export function TipCompletePage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  // URL パラメータ・クエリ
-  const { staffId } = useParams({ from: "/tip/$staffId/complete" });
-  const { tipId } = useSearch({ from: "/tip/$staffId/complete" });
+  // URL パラメータ・クエリ（membership＝人×店）
+  const { membershipId } = useParams({ from: "/tip/$membershipId/complete" });
+  const { tipId } = useSearch({ from: "/tip/$membershipId/complete" });
 
   // サーバー状態: 完了画面の再掲情報（誰に・金額・メッセージ）
-  const { data: complete, isLoading, isError } = useTipComplete(staffId, tipId);
+  const { data: complete, isLoading, isError } = useTipComplete(membershipId, tipId);
   // フォームを初期化する（もう一度送る/閉じる で新規入力に戻すため）
   const reset = useTipFormStore((s) => s.reset);
 
   // 投げ銭画面へ戻る（フォームをリセットしてから遷移）
   const backToTip = () => {
     reset();
-    navigate({ to: "/tip/$staffId", params: { staffId } });
+    navigate({ to: "/tip/$membershipId", params: { membershipId } });
   };
 
   return (

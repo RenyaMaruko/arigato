@@ -6,6 +6,7 @@ import type {
 import {
   fetchStaffMe,
   createStaffProfile,
+  joinStore,
   updateStaffProfile,
   fetchInviteInfo,
   fetchStaffTips,
@@ -59,6 +60,21 @@ export function useCreateStaffProfile() {
     onSuccess: (me) => {
       // 取得済みキャッシュを即時更新しつつ無効化する
       qc.setQueryData(STAFF_ME_KEY, me);
+      qc.invalidateQueries({ queryKey: STAFF_ME_KEY });
+    },
+  });
+}
+
+/**
+ * 招待コードで所属を追加する参加（POST /staff/me/join）。
+ * 参加の確定点（新規/既存問わず）。成功時は staff/me を無効化して所属一覧を取り直す。
+ */
+export function useJoinStore() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (inviteCode: string) => joinStore(inviteCode),
+    onSuccess: () => {
+      // 所属一覧（memberships）が増えるため自分のプロフィールを取り直す
       qc.invalidateQueries({ queryKey: STAFF_ME_KEY });
     },
   });

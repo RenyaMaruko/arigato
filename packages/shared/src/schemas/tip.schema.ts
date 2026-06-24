@@ -45,21 +45,26 @@ export const TipSchema = z.object({
 export type Tip = z.infer<typeof TipSchema>;
 
 /**
- * 投げ銭画面（GET /tip/:staffId）の表示情報。
- * 顔写真・名前・店名・一言のみを返し、金額・履歴は返さない（横断ルール: 金額は本人のみ）。
+ * 投げ銭画面（GET /tip/:membershipId）の表示情報。
+ * QR が指す membership（人×店）から staff(人)＋store(店) を解決し、顔写真・名前・店名・一言のみを返す。
+ * 金額・履歴は返さない（横断ルール: 金額は本人のみ）。
  */
 export const StaffDisplayInfoSchema = z.object({
-  // 投げ銭画面の URL（/tip/:staffId）から来る識別子。QR が指す任意の ID を受けるため UUID 形式に限定しない
+  // 投げ銭画面の URL（/tip/:membershipId）から来る所属（membership）識別子。
+  // QR が指す任意の ID を受けるため UUID 形式に限定しない
+  membershipId: z.string().min(1),
+  // 送り先の店員さん（人）の ID。完了画面の照合等に使う
   staffId: z.string().min(1),
   displayName: z.string(),
   headline: z.string().nullable(),
   avatarUrl: z.string().nullable(),
+  // membership の店名（この所属で表示する店）
   storeName: z.string(),
 });
 export type StaffDisplayInfo = z.infer<typeof StaffDisplayInfoSchema>;
 
 /**
- * 投げ銭作成（POST /tip/:staffId/intent）の結果。
+ * 投げ銭作成（POST /tip/:membershipId/intent）の結果。
  * Stripe Direct charge の PaymentIntent を作り、tip を pending で記録した時点の情報を返す。
  * フロントは clientSecret を Stripe Elements（Express Checkout Element ＋ Payment Element）に渡し、
  * アプリ内に埋め込んだ決済 UI で確定する（カード情報は自前 API に通さない・リダイレクトしない）。

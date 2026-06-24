@@ -12,15 +12,19 @@ import { initialSettlementStatusOnSucceeded } from "./tip.model.js";
  * 確認可能にする。
  */
 
-// 投げ銭画面の表示情報（staff + store を結合した行）
+// 投げ銭画面の表示情報（membership=staff_store から staff(人)＋store(店) を結合した行）
 export type StaffDisplayRow = {
+  // QR が指す所属（membership＝staff_store.id）
+  membershipId: string;
+  // 送り先の店員さん（人）の ID
   staffId: string;
   displayName: string;
   headline: string | null;
   avatarUrl: string | null;
+  // membership の店（送信時に tip へ固定保存する）
   storeId: string;
   storeName: string;
-  // Direct charge の課金先（Connected Account）。未連携は null
+  // Direct charge の課金先（人の Connected Account）。未連携は null
   stripeAccountId: string | null;
 };
 
@@ -28,6 +32,8 @@ export type StaffDisplayRow = {
 export type InsertTipParams = {
   staffId: string;
   storeId: string;
+  // 送信元の所属（membership）。追跡用
+  membershipId: string;
   amount: number;
   platformFee: number;
   customerTotal: number;
@@ -70,8 +76,9 @@ export type TipRow = {
  * 実装は下の createTipRepository（実 DB）。テストではこの型を満たすモックを渡す。
  */
 export type TipRepository = {
-  // 投げ銭画面の表示情報（staff の名前・一言・顔写真＋所属店名 + Connected Account）を取得
-  findStaffDisplay: (staffId: string) => Promise<StaffDisplayRow | null>;
+  // 投げ銭画面の表示情報を membership（staff_store.id）から取得する。
+  // membership → staff(人)＋store(店) を解決し、名前・一言・顔写真・店名・Connected Account を返す
+  findMembershipDisplay: (membershipId: string) => Promise<StaffDisplayRow | null>;
   // tip を1件保存し、保存された行を返す
   insertTip: (params: InsertTipParams) => Promise<TipRow>;
   // tip を ID で取得（完了画面の再掲に使う）
@@ -109,11 +116,12 @@ export type TipRepository = {
  */
 export function createTipRepository(): TipRepository {
   return {
-    // staff と store を結合し、投げ銭画面の表示情報を1件返す
-    async findStaffDisplay(staffId) {
+    // membership（staff_store）から staff(人)＋store(店) を解決し、投げ銭画面の表示情報を1件返す
+    async findMembershipDisplay(membershipId) {
       const db = getDb();
       const rows = await db.execute<StaffDisplayRow>(sql`
         SELECT
+          ss.id               AS "membershipId",
           s.id                AS "staffId",
           s.display_name      AS "displayName",
           s.headline          AS "headline",
@@ -121,9 +129,10 @@ export function createTipRepository(): TipRepository {
           s.stripe_account_id AS "stripeAccountId",
           st.id               AS "storeId",
           st.name             AS "storeName"
-        FROM staff s
-        JOIN store st ON st.id = s.store_id
-        WHERE s.id = ${staffId}
+        FROM staff_store ss
+        JOIN staff s ON s.id = ss.staff_id
+        JOIN store st ON st.id = ss.store_id
+        WHERE ss.id = ${membershipId}
         LIMIT 1
       `);
       return rows[0] ?? null;
@@ -134,11 +143,11 @@ export function createTipRepository(): TipRepository {
       const db = getDb();
       const rows = await db.execute<TipRow>(sql`
         INSERT INTO tip (
-          staff_id, store_id, amount, platform_fee, customer_total,
+          staff_id, store_id, membership_id, amount, platform_fee, customer_total,
           message, status, settlement_status,
           stripe_payment_intent_id, stripe_checkout_session_id, succeeded_at
         ) VALUES (
-          ${params.staffId}, ${params.storeId}, ${params.amount},
+          ${params.staffId}, ${params.storeId}, ${params.membershipId}, ${params.amount},
           ${params.platformFee}, ${params.customerTotal},
           ${params.message}, ${params.status},
           ${params.settlementStatus}, ${params.stripePaymentIntentId},

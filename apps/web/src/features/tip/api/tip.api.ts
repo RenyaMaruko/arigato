@@ -13,13 +13,16 @@ import { apiClient } from "../../../lib/api-client.js";
  * tip feature の API 通信（Hono RPC `hc` 経由）。
  * バックの型を import して型安全に呼び、応答は shared の Zod スキーマで実行時検証する。
  * ここは「通信の関数」だけを置き、キャッシュ管理（useQuery 等）は hooks 側で行う。
+ *
+ * 多対多モデル: QR は所属（membership＝人×店）を指す。各エンドポイントは membershipId を受け、
+ * バックが membership から staff(人)＋store(店) を解決して表示・記録・完了再掲する。
  */
 
 /**
- * GET /tip/:staffId — 投げ銭画面の表示情報を取得する。
+ * GET /tip/:membershipId — 投げ銭画面の表示情報（人＋店）を取得する。
  */
-export async function fetchStaffDisplayInfo(staffId: string): Promise<StaffDisplayInfo> {
-  const res = await apiClient.tip[":staffId"].$get({ param: { staffId } });
+export async function fetchStaffDisplayInfo(membershipId: string): Promise<StaffDisplayInfo> {
+  const res = await apiClient.tip[":membershipId"].$get({ param: { membershipId } });
   if (!res.ok) {
     throw new Error(`staff display request failed: ${res.status}`);
   }
@@ -27,16 +30,16 @@ export async function fetchStaffDisplayInfo(staffId: string): Promise<StaffDispl
 }
 
 /**
- * POST /tip/:staffId/intent — 投げ銭を作成し、Stripe Direct charge の PaymentIntent client_secret を得る。
+ * POST /tip/:membershipId/intent — 投げ銭を作成し、Stripe Direct charge の PaymentIntent client_secret を得る。
  * カード情報は自前 API に通さず、返ってきた client_secret でアプリ内に決済 UI を埋め込む
  * （Express Checkout Element ＋ Payment Element）。リダイレクトしない。
  */
 export async function createTipIntent(
-  staffId: string,
+  membershipId: string,
   input: CreateTipInput,
 ): Promise<TipIntentResult> {
-  const res = await apiClient.tip[":staffId"].intent.$post({
-    param: { staffId },
+  const res = await apiClient.tip[":membershipId"].intent.$post({
+    param: { membershipId },
     json: input,
   });
   if (!res.ok) {
@@ -46,11 +49,14 @@ export async function createTipIntent(
 }
 
 /**
- * GET /tip/:staffId/complete?tipId= — 完了画面の表示情報を取得する。
+ * GET /tip/:membershipId/complete?tipId= — 完了画面の表示情報を取得する。
  */
-export async function fetchTipComplete(staffId: string, tipId: string): Promise<TipComplete> {
-  const res = await apiClient.tip[":staffId"].complete.$get({
-    param: { staffId },
+export async function fetchTipComplete(
+  membershipId: string,
+  tipId: string,
+): Promise<TipComplete> {
+  const res = await apiClient.tip[":membershipId"].complete.$get({
+    param: { membershipId },
     query: { tipId },
   });
   if (!res.ok) {

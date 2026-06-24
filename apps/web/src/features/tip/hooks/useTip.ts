@@ -9,34 +9,36 @@ import {
 /**
  * tip feature のサーバー状態フック群（TanStack Query）。
  * Page → Hook → API → Backend の流れに従い、フェッチ・キャッシュ・送信を一手に扱う。
+ *
+ * 多対多モデル: 識別子は所属（membership＝人×店）。QR が指す membershipId を受ける。
  */
 
-// クエリキーの一元管理（階層構造で無効化しやすくする）
+// クエリキーの一元管理（階層構造で無効化しやすくする）。キーは membership 単位
 export const tipKeys = {
   all: ["tip"] as const,
-  staff: (staffId: string) => [...tipKeys.all, "staff", staffId] as const,
-  complete: (staffId: string, tipId: string) =>
-    [...tipKeys.all, "complete", staffId, tipId] as const,
+  membership: (membershipId: string) => [...tipKeys.all, "membership", membershipId] as const,
+  complete: (membershipId: string, tipId: string) =>
+    [...tipKeys.all, "complete", membershipId, tipId] as const,
 };
 
 /**
- * 投げ銭画面の表示情報（顔写真・名前・店名・一言）を取得するフック。
+ * 投げ銭画面の表示情報（顔写真・名前・店名・一言）を membership から取得するフック。
  */
-export function useStaffDisplayInfo(staffId: string) {
+export function useStaffDisplayInfo(membershipId: string) {
   return useQuery({
-    queryKey: tipKeys.staff(staffId),
-    queryFn: () => fetchStaffDisplayInfo(staffId),
-    enabled: Boolean(staffId),
+    queryKey: tipKeys.membership(membershipId),
+    queryFn: () => fetchStaffDisplayInfo(membershipId),
+    enabled: Boolean(membershipId),
   });
 }
 
 /**
- * 投げ銭を作成（モック決済成立まで）するミューテーション。
+ * 投げ銭を作成（PaymentIntent 作成・client_secret 取得）するミューテーション。
  * 成功すると tipId を含む結果が返り、呼び出し側が完了画面へ遷移する。
  */
-export function useCreateTipIntent(staffId: string) {
+export function useCreateTipIntent(membershipId: string) {
   return useMutation({
-    mutationFn: (input: CreateTipInput) => createTipIntent(staffId, input),
+    mutationFn: (input: CreateTipInput) => createTipIntent(membershipId, input),
   });
 }
 
@@ -45,11 +47,11 @@ export function useCreateTipIntent(staffId: string) {
  * 決済の確定は Webhook を正とするため、status が pending の間はポーリングして
  * succeeded（または failed）に確定するのを待つ（ブラウザの戻り値では確定しない）。
  */
-export function useTipComplete(staffId: string, tipId: string) {
+export function useTipComplete(membershipId: string, tipId: string) {
   return useQuery({
-    queryKey: tipKeys.complete(staffId, tipId),
-    queryFn: () => fetchTipComplete(staffId, tipId),
-    enabled: Boolean(staffId) && Boolean(tipId),
+    queryKey: tipKeys.complete(membershipId, tipId),
+    queryFn: () => fetchTipComplete(membershipId, tipId),
+    enabled: Boolean(membershipId) && Boolean(tipId),
     // pending の間は2秒ごとに再取得（Webhook 確定を待つ）。確定したら止める。
     refetchInterval: (query) =>
       query.state.data?.status === "pending" ? 2000 : false,

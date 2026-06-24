@@ -90,6 +90,17 @@ export const ja = {
       inviteLead: "このお店の店員さんとして登録します",
       inviteStoreLabel: "所属するお店",
       inviteStart: "はじめる",
+      // 参加（join）の処理中・完了・既に所属
+      joining: "参加処理中…",
+      joinErrorInvite: "招待が無効です。コードを確認してください。",
+      joinErrorGeneric: "参加できませんでした。もう一度お試しください。",
+      // 参加完了画面（「〇〇店に参加しました！」）。{{store}} に店名が入る
+      joinedTitle: "{{store}} に参加しました！",
+      joinedLead: "お店のQRを表示して、ありがとうを受け取りましょう",
+      // 既に同じ店に所属していた場合の案内
+      alreadyMemberTitle: "すでに {{store}} に所属しています",
+      alreadyMemberLead: "ホームからこのお店のQRを表示できます",
+      joinedGoHome: "ホームへ",
       displayNameLabel: "表示名",
       displayNamePlaceholder: "例）山田 さくら",
       headlineLabel: "一言（任意）",
@@ -103,6 +114,10 @@ export const ja = {
       homeQr: "QRを表示",
       homeProfile: "プロフィール",
       homeWelcome: "ようこそ",
+      // 所属店一覧（複数可・掛け持ち）。各店ごとにQRへ導く
+      homeStoresLabel: "所属しているお店",
+      homeStoreQr: "QRを表示",
+      homeNoStores: "まだお店に所属していません。招待リンクから参加してください。",
       identityNone: "本人確認はまだです（後でOK）",
       identityPending: "本人確認を確認中です",
       identityVerified: "本人確認済み",
@@ -110,6 +125,8 @@ export const ja = {
       // QR
       qrTitle: "QRコード",
       qrHeading: "あなた専用の投げ銭QR",
+      // 店ごとのQR であることを示すサブ見出し（{{store}} に店名）
+      qrStoreSub: "{{store}} 用のQR",
       qrNote: "このQRをお客さまに見せてください",
       qrPrint: "印刷する",
       qrUrlLabel: "QRが指すURL",

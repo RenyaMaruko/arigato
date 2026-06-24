@@ -16,8 +16,9 @@ import type {
  */
 
 // 評価・デモ用に最初から入っている店員さんのサンプル表示情報
-// （URL の :staffId が未知でも、安心して投げ銭フローを試せるようにする）
+// （URL の :membershipId が未知でも、安心して投げ銭フローを試せるようにする）
 const sampleStaff: StaffDisplayRow = {
+  membershipId: "00000000-0000-0000-0000-000000000100",
   staffId: "00000000-0000-0000-0000-000000000001",
   displayName: "山田 さくら",
   headline: "笑顔で接客します",
@@ -30,8 +31,8 @@ const sampleStaff: StaffDisplayRow = {
 
 /**
  * インメモリの TipRepository を生成する。
- * findStaffDisplay は「どの staffId でもサンプル店員さんを返す」フォールバック挙動にして、
- * 任意の /tip/:staffId（例: /tip/test-staff-id）でも画面が成立するようにする。
+ * findMembershipDisplay は「どの membershipId でもサンプル店員さんを返す」フォールバック挙動にして、
+ * 任意の /tip/:membershipId（例: /tip/test-membership-id）でも画面が成立するようにする。
  */
 export function createInMemoryTipRepository(): TipRepository {
   // tipId → 保存済み tip 行
@@ -40,9 +41,9 @@ export function createInMemoryTipRepository(): TipRepository {
   const piIndex = new Map<string, string>();
 
   return {
-    // どんな staffId でもサンプル店員さんの表示情報を返す（URL の id を採用して整合させる）
-    async findStaffDisplay(staffId) {
-      return { ...sampleStaff, staffId };
+    // どんな membershipId でもサンプル店員さんの表示情報を返す（URL の id を採用して整合させる）
+    async findMembershipDisplay(membershipId) {
+      return { ...sampleStaff, membershipId };
     },
 
     // tip をメモリに1件保存し、保存後の行を返す

@@ -48,19 +48,20 @@ export function quoteTip(amount: number) {
 }
 
 /**
- * 投げ銭画面の表示情報（顔写真・名前・店名・一言）を取得する。
+ * 投げ銭画面の表示情報（顔写真・名前・店名・一言）を membership（人×店）から解決して取得する。
  * 金額・履歴は返さない（横断ルール: 金額は本人のみ閲覧可）。
  */
 export async function getStaffDisplayInfo(
   repo: TipRepository,
-  staffId: string,
+  membershipId: string,
 ): Promise<StaffDisplayInfo | null> {
-  // staff + store を結合して表示情報を取得
-  const row = await repo.findStaffDisplay(staffId);
+  // membership から staff(人)＋store(店) を解決して表示情報を取得
+  const row = await repo.findMembershipDisplay(membershipId);
   if (!row) return null;
 
   // 表示に必要な項目だけに絞って返す
   return {
+    membershipId: row.membershipId,
     staffId: row.staffId,
     displayName: row.displayName,
     headline: row.headline,
@@ -98,11 +99,11 @@ export class StaffNotChargeableError extends Error {
 export async function createTipIntent(
   repo: TipRepository,
   deps: CreateTipIntentDeps,
-  staffId: string,
+  membershipId: string,
   input: CreateTipInput,
 ): Promise<TipIntentResult | null> {
-  // 送り先 staff の存在と所属店を確認（送信時点の所属を tip に固定保存するため）
-  const staffRow = await repo.findStaffDisplay(staffId);
+  // 送り先 membership（人×店）を解決（送信時点の店を tip に固定保存するため）
+  const staffRow = await repo.findMembershipDisplay(membershipId);
   if (!staffRow) return null;
 
   // Connected Account が無いと Direct charge の課金先が存在しない（着金口の準備が未了）
@@ -114,10 +115,12 @@ export async function createTipIntent(
   const amounts = buildTipAmounts(input.amount);
 
   // まず tip を pending で記録する（決済確定は Webhook を正とするため succeeded にしない）。
+  // staff_id（人）＋ store_id（membership の店を固定）＋ membership_id（追跡用）を記録する。
   // PaymentIntent ID は Direct charge 作成後に後付けする。
   const saved = await repo.insertTip({
     staffId: staffRow.staffId,
     storeId: staffRow.storeId,
+    membershipId: staffRow.membershipId,
     amount: amounts.amount,
     platformFee: amounts.platformFee,
     customerTotal: amounts.customerTotal,
@@ -166,26 +169,27 @@ export async function createTipIntent(
  * 完了画面の表示情報を取得する。
  * 当該 tip の送金額・メッセージと、送り先店員さんの名前を再掲する。
  * amount は「当該 tip の送金額のみ」を返す（履歴・合算は返さない）。
+ * URL は membership（人×店）を指すため、membership を解決して当該 tip の店員(人)と照合する。
  */
 export async function getTipComplete(
   repo: TipRepository,
-  staffId: string,
+  membershipId: string,
   tipId: string,
 ): Promise<TipComplete | null> {
   // tip を ID で取得
   const tip = await repo.findTipById(tipId);
   if (!tip) return null;
 
-  // URL の staffId と tip の staffId が一致しない場合は取り違えとして拒否する
-  if (tip.staffId !== staffId) return null;
+  // 完了 URL の membership を解決し、送り先店員さん（人）を特定する
+  const membership = await repo.findMembershipDisplay(membershipId);
+  if (!membership) return null;
 
-  // 送り先店員さんの表示名を取得（誰に送ったかの再掲）
-  const staffRow = await repo.findStaffDisplay(staffId);
-  if (!staffRow) return null;
+  // URL の membership の店員（人）と tip の staffId が一致しない場合は取り違えとして拒否する
+  if (tip.staffId !== membership.staffId) return null;
 
   return {
     tipId: tip.id,
-    staffDisplayName: staffRow.displayName,
+    staffDisplayName: membership.displayName,
     amount: tip.amount,
     message: tip.message,
     // 完了表示は succeeded 確定後に成立させるため、決済ステータスも返す（Webhook を正とする）

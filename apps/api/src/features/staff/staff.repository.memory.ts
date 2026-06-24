@@ -3,6 +3,7 @@ import type {
   StaffRepository,
   InviteRow,
   StaffProfileRow,
+  StaffMembershipRow,
   StaffConnectRow,
 } from "./staff.repository.js";
 import type { IdentityStatus } from "./staff.model.js";
@@ -12,14 +13,21 @@ import type { IdentityStatus } from "./staff.model.js";
  * DATABASE_URL が無い環境（ローカル疎通・一部テスト）でも Service を動かせるようにする。
  * 実 DB 実装（createStaffRepository）と同じ契約（StaffRepository）を満たす差し替え。
  *
+ * 多対多モデル: staff（人）はプロフィールを1つ持ち、所属（membership）を複数持てる。
+ *
  * 招待・店の初期データは環境変数 SEED_INVITE_CODE / SEED_STORE_NAME から最小限を投入できる
  * （未設定なら空。実運用は実 DB を使う）。
  */
 export function createInMemoryStaffRepository(): StaffRepository {
   // 招待の簡易ストア（code をキー）
   const invites = new Map<string, InviteRow>();
-  // staff の簡易ストア（authUserId をキー）
-  const staffByAuth = new Map<string, StaffProfileRow>();
+  // staff プロフィールの簡易ストア（authUserId をキー）
+  const profileByAuth = new Map<string, StaffProfileRow>();
+  // 所属（membership）の簡易ストア（membershipId をキー）。staff(人)＝authUserId と店を結ぶ
+  const memberships = new Map<
+    string,
+    { authUserId: string; storeId: string; storeName: string; createdAt: number }
+  >();
   // Connect 連携状態（authUserId をキー）。Stripe Account ID と identity_status を持つ
   const connectByAuth = new Map<
     string,
@@ -44,35 +52,76 @@ export function createInMemoryStaffRepository(): StaffRepository {
     },
 
     async findStaffByAuthUserId(authUserId) {
-      return staffByAuth.get(authUserId) ?? null;
+      return profileByAuth.get(authUserId) ?? null;
     },
 
-    async createStaffWithInvite(code, params) {
-      const invite = invites.get(code);
-      // 二重消費の防止（pending 以外は使えない）
-      if (!invite || invite.inviteStatus !== "pending") {
-        throw new Error("invite_not_usable");
-      }
+    async listMembershipsByAuthUserId(authUserId) {
+      const list = [...memberships.entries()]
+        .filter(([, m]) => m.authUserId === authUserId)
+        .sort((a, b) => a[1].createdAt - b[1].createdAt);
+      return list.map<StaffMembershipRow>(([id, m]) => ({
+        membershipId: id,
+        storeId: m.storeId,
+        storeName: m.storeName,
+      }));
+    },
+
+    async createStaffProfile(params) {
       const id = randomUUID();
       const row: StaffProfileRow = {
         id,
         displayName: params.displayName,
         headline: params.headline,
         avatarUrl: params.avatarUrl,
-        storeId: params.storeId,
-        storeName: invite.storeName,
         identityStatus: "none",
       };
-      // 招待を消費し、staff を登録する
-      invites.set(code, { ...invite, inviteStatus: "accepted" });
-      staffByAuth.set(params.authUserId, row);
+      profileByAuth.set(params.authUserId, row);
       // Connect 連携状態は初期値（未連携・identity_status=none）で持つ
       connectByAuth.set(params.authUserId, { stripeAccountId: null, identityStatus: "none" });
       return row;
     },
 
+    async joinStoreByInvite(authUserId, code) {
+      const invite = invites.get(code);
+      // 招待が pending かつ店承認済みでなければ使えない
+      if (!invite || invite.inviteStatus !== "pending" || !invite.storeAdopted) {
+        throw new Error("invite_not_usable");
+      }
+      const profile = profileByAuth.get(authUserId);
+      if (!profile) {
+        throw new Error("staff_not_found");
+      }
+      // 既に同じ店に所属していないか（多重参加不可）
+      const existing = [...memberships.entries()].find(
+        ([, m]) => m.authUserId === authUserId && m.storeId === invite.storeId,
+      );
+      if (existing) {
+        return {
+          outcome: "already_member" as const,
+          membershipId: existing[0],
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      }
+      // 新規所属を作成し、招待を消費する
+      const membershipId = randomUUID();
+      memberships.set(membershipId, {
+        authUserId,
+        storeId: invite.storeId,
+        storeName: invite.storeName,
+        createdAt: Date.now(),
+      });
+      invites.set(code, { ...invite, inviteStatus: "accepted" });
+      return {
+        outcome: "joined" as const,
+        membershipId,
+        storeId: invite.storeId,
+        storeName: invite.storeName,
+      };
+    },
+
     async updateStaffProfile(authUserId, params) {
-      const existing = staffByAuth.get(authUserId);
+      const existing = profileByAuth.get(authUserId);
       if (!existing) return null;
       const updated: StaffProfileRow = {
         ...existing,
@@ -80,13 +129,13 @@ export function createInMemoryStaffRepository(): StaffRepository {
         headline: params.headline,
         avatarUrl: params.avatarUrl,
       };
-      staffByAuth.set(authUserId, updated);
+      profileByAuth.set(authUserId, updated);
       return updated;
     },
 
     // 本人の Connect 連携状態を返す（オンボーディングの起点）
     async findStaffConnect(authUserId) {
-      const profile = staffByAuth.get(authUserId);
+      const profile = profileByAuth.get(authUserId);
       if (!profile) return null;
       const connect = connectByAuth.get(authUserId) ?? {
         stripeAccountId: null,
@@ -147,8 +196,8 @@ export function createInMemoryStaffRepository(): StaffRepository {
       }
       // verified へ確定し、プロフィールの identity_status も同期する
       connectByAuth.set(foundAuth, { ...connect, identityStatus: "verified" });
-      const profile = staffByAuth.get(foundAuth);
-      if (profile) staffByAuth.set(foundAuth, { ...profile, identityStatus: "verified" });
+      const profile = profileByAuth.get(foundAuth);
+      if (profile) profileByAuth.set(foundAuth, { ...profile, identityStatus: "verified" });
       return { found: true, verified: true, promotedTips: 0 };
     },
   };

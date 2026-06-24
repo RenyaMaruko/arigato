@@ -15,11 +15,14 @@ import type {
  * SQL・金額計算・業務ロジックは置かない。依存（Service ユースケース）は注入で受け取る。
  */
 
-// Service ユースケースを注入で受け取る（コンポジションルートで配線）
+// Service ユースケースを注入で受け取る（コンポジションルートで配線）。識別子は membership（人×店）
 type TipDeps = {
-  getStaffDisplayInfo: (staffId: string) => Promise<StaffDisplayInfo | null>;
-  createTipIntent: (staffId: string, input: CreateTipInput) => Promise<TipIntentResult | null>;
-  getTipComplete: (staffId: string, tipId: string) => Promise<TipComplete | null>;
+  getStaffDisplayInfo: (membershipId: string) => Promise<StaffDisplayInfo | null>;
+  createTipIntent: (
+    membershipId: string,
+    input: CreateTipInput,
+  ) => Promise<TipIntentResult | null>;
+  getTipComplete: (membershipId: string, tipId: string) => Promise<TipComplete | null>;
 };
 
 // 完了画面のクエリ（?tipId=...）検証スキーマ
@@ -33,21 +36,21 @@ const CompleteQuerySchema = z.object({
  */
 export function createTipRoute(deps: TipDeps) {
   const route = new Hono()
-    // 投げ銭画面の表示情報（顔写真・名前・店名・一言）。金額・履歴は返さない
-    .get("/:staffId", async (c) => {
-      const staffId = c.req.param("staffId");
-      const info = await deps.getStaffDisplayInfo(staffId);
+    // 投げ銭画面の表示情報（顔写真・名前・店名・一言）。membership から人＋店を解決。金額・履歴は返さない
+    .get("/:membershipId", async (c) => {
+      const membershipId = c.req.param("membershipId");
+      const info = await deps.getStaffDisplayInfo(membershipId);
       if (!info) {
         return c.json({ error: "staff_not_found" }, 404);
       }
       return c.json(info);
     })
-    // 投げ銭の作成（Stripe Direct charge）。Checkout の URL を返す（決済確定は Webhook を正とする）
-    .post("/:staffId/intent", zValidator("json", CreateTipInputSchema), async (c) => {
-      const staffId = c.req.param("staffId");
+    // 投げ銭の作成（Stripe Direct charge）。client_secret を返す（決済確定は Webhook を正とする）
+    .post("/:membershipId/intent", zValidator("json", CreateTipInputSchema), async (c) => {
+      const membershipId = c.req.param("membershipId");
       const input = c.req.valid("json");
       try {
-        const result = await deps.createTipIntent(staffId, input);
+        const result = await deps.createTipIntent(membershipId, input);
         if (!result) {
           return c.json({ error: "staff_not_found" }, 404);
         }
@@ -60,11 +63,11 @@ export function createTipRoute(deps: TipDeps) {
         throw err;
       }
     })
-    // 完了画面の表示情報（誰に・¥◯◯・メッセージ・スタンプの再掲）
-    .get("/:staffId/complete", zValidator("query", CompleteQuerySchema), async (c) => {
-      const staffId = c.req.param("staffId");
+    // 完了画面の表示情報（誰に・¥◯◯・メッセージの再掲）
+    .get("/:membershipId/complete", zValidator("query", CompleteQuerySchema), async (c) => {
+      const membershipId = c.req.param("membershipId");
       const { tipId } = c.req.valid("query");
-      const complete = await deps.getTipComplete(staffId, tipId);
+      const complete = await deps.getTipComplete(membershipId, tipId);
       if (!complete) {
         return c.json({ error: "tip_not_found" }, 404);
       }

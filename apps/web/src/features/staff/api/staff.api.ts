@@ -4,11 +4,13 @@ import {
   StaffTipsResponseSchema,
   StaffBalanceSchema,
   ConnectOnboardResponseSchema,
+  JoinStoreResultSchema,
   type StaffMe,
   type InviteInfo,
   type StaffTipsResponse,
   type StaffBalance,
   type ConnectOnboardResponse,
+  type JoinStoreResult,
   type CreateStaffProfileInput,
   type UpdateStaffProfileInput,
 } from "@arigato/shared";
@@ -41,14 +43,15 @@ export async function fetchStaffMe(): Promise<StaffMe | null> {
 }
 
 /**
- * POST /staff/me — 初回プロフィールを作成する（招待コードで所属確定）。
+ * POST /staff/me — 初回プロフィールを作成する（display_name / headline のみ）。
+ * 所属の確定（参加）は別途 POST /staff/me/join に集約する（多対多・掛け持ち）。
  */
 export async function createStaffProfile(
   input: CreateStaffProfileInput,
 ): Promise<StaffMe> {
   const res = await apiClient.staff.me.$post({ json: input });
   if (!res.ok) {
-    // 招待が無効・多重作成などの業務エラーは error コードを添えて投げる
+    // 多重作成などの業務エラーは error コードを添えて投げる
     let code = `status_${res.status}`;
     try {
       const body = (await res.json()) as { error?: string };
@@ -59,6 +62,27 @@ export async function createStaffProfile(
     throw new Error(code);
   }
   return StaffMeSchema.parse(await res.json());
+}
+
+/**
+ * POST /staff/me/join — 招待コードで所属（staff_store）を追加する（参加の確定点）。
+ * 新規/既存問わず参加はここに集約する。返り値の status で
+ * joined（参加完了画面へ）と already_member（既に所属の案内へ）を出し分ける。
+ * 招待無効（409）・プロフィール未作成（404）は error コードを添えて投げる。
+ */
+export async function joinStore(inviteCode: string): Promise<JoinStoreResult> {
+  const res = await apiClient.staff.me.join.$post({ json: { inviteCode } });
+  if (!res.ok) {
+    let code = `status_${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) code = body.error;
+    } catch {
+      // JSON でなければステータスのみ
+    }
+    throw new Error(code);
+  }
+  return JoinStoreResultSchema.parse(await res.json());
 }
 
 /**

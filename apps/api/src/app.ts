@@ -27,6 +27,7 @@ import {
   getInviteInfo,
   getStaffMe,
   createStaffProfile,
+  joinStore,
   updateStaffProfile,
   getStaffTips,
   getStaffBalance,
@@ -94,8 +95,9 @@ export function createApp() {
   // フロントのベース URL（WEB_BASE_URL、未設定はローカル）。QR用URL・Connect 戻り先の組み立てに使う。
   const webBaseUrl = process.env.WEB_BASE_URL ?? "http://localhost:5173";
 
-  // QR用URL（/tip/:staffId）の組み立てに使うフロントのベース URL（QR が指す固定 URL）
-  const buildStaffTipUrl = (staffId: string) => buildTipUrl(webBaseUrl, staffId);
+  // QR用URL（/tip/:membershipId）の組み立てに使うフロントのベース URL（QR が指す固定 URL）。
+  // QR は所属（membership＝人×店）単位で発行するため、membershipId を受ける。
+  const buildStaffTipUrl = (membershipId: string) => buildTipUrl(webBaseUrl, membershipId);
 
   // スタッフ招待リンク（/invite/:code）の組み立てに使うフロントのベース URL
   const buildStoreInviteUrl = (code: string) => buildInviteUrl(webBaseUrl, code);
@@ -131,6 +133,9 @@ export function createApp() {
     getStaffMe: (authUserId) => getStaffMe(staffRepo, buildStaffTipUrl, authUserId),
     createStaffProfile: (authUserId, input) =>
       createStaffProfile(staffRepo, buildStaffTipUrl, authUserId, input),
+    // 招待コードで所属（staff_store）を追加する（参加の確定点。新規/既存問わず）
+    joinStore: (authUserId, inviteCode) =>
+      joinStore(staffRepo, buildStaffTipUrl, authUserId, inviteCode),
     updateStaffProfile: (authUserId, input) =>
       updateStaffProfile(staffRepo, buildStaffTipUrl, authUserId, input),
     // 受取履歴・保留残高・申告 CSV は本人スコープのユースケースを注入する

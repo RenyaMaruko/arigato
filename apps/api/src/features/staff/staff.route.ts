@@ -3,8 +3,10 @@ import { zValidator } from "@hono/zod-validator";
 import {
   CreateStaffProfileInputSchema,
   UpdateStaffProfileInputSchema,
+  JoinStoreInputSchema,
   type StaffMe,
   type InviteInfo,
+  type JoinStoreResult,
   type CreateStaffProfileInput,
   type UpdateStaffProfileInput,
   type StaffTipsResponse,
@@ -16,6 +18,7 @@ import type { AuthVariables } from "../../middleware/auth.js";
 import {
   InviteNotUsableError,
   StaffAlreadyExistsError,
+  StaffNotFoundError,
 } from "./staff.service.js";
 
 /**
@@ -35,6 +38,8 @@ type StaffDeps = {
     authUserId: string,
     input: CreateStaffProfileInput,
   ) => Promise<StaffMe>;
+  // 招待コードで所属（staff_store）を追加する（参加の確定点）。joined / already_member を返す
+  joinStore: (authUserId: string, inviteCode: string) => Promise<JoinStoreResult>;
   updateStaffProfile: (
     authUserId: string,
     input: UpdateStaffProfileInput,
@@ -65,7 +70,7 @@ export function createStaffRoute(deps: StaffDeps) {
       }
       return c.json(me);
     })
-    // 初回プロフィール作成（招待コードで所属確定・本人確認なしで成立）
+    // 初回プロフィール作成（人ごと1つ・本人確認なしで成立）。所属は join で追加する
     .post("/me", zValidator("json", CreateStaffProfileInputSchema), async (c) => {
       const authUser = c.get("authUser");
       const input = c.req.valid("json");
@@ -73,13 +78,28 @@ export function createStaffRoute(deps: StaffDeps) {
         const me = await deps.createStaffProfile(authUser.id, input);
         return c.json(me, 201);
       } catch (err) {
+        // 既にプロフィール作成済み（多重作成）
+        if (err instanceof StaffAlreadyExistsError) {
+          return c.json({ error: "staff_already_exists" }, 409);
+        }
+        throw err;
+      }
+    })
+    // 招待コードで所属（staff_store）を追加する（参加の確定点。新規/既存問わず）
+    .post("/me/join", zValidator("json", JoinStoreInputSchema), async (c) => {
+      const authUser = c.get("authUser");
+      const input = c.req.valid("json");
+      try {
+        const result = await deps.joinStore(authUser.id, input.inviteCode);
+        return c.json(result, 201);
+      } catch (err) {
         // 招待が無効（消費済み・失効・店未承認）
         if (err instanceof InviteNotUsableError) {
           return c.json({ error: "invite_not_usable" }, 409);
         }
-        // 既にプロフィール作成済み（多重作成）
-        if (err instanceof StaffAlreadyExistsError) {
-          return c.json({ error: "staff_already_exists" }, 409);
+        // プロフィール未作成（先に POST /staff/me が必要）
+        if (err instanceof StaffNotFoundError) {
+          return c.json({ error: "staff_not_found" }, 404);
         }
         throw err;
       }

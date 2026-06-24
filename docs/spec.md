@@ -40,8 +40,9 @@
 - 低: 言語切替UI（構造のみ。初期は日本語固定で可）
 
 ### 店員さん（staff）
-- 高: 店の招待リンク/コード経由でアカウント作成（Google / メール）し所属確定。本人確認なしで QR 発行まで到達
-- 高: 個人QR の発行（印刷可能な形・固定URL）
+- 高: 店の招待リンク経由で参加。**新規はプロフィール作成→参加、既存ユーザーはプロフィール流用で即参加**。参加完了画面「〇〇店に参加しました！」を表示。本人確認なしで到達
+- 高: **複数店の掛け持ち可**（人は複数 staff_store を持てる）。既に同じ店に所属済みの招待は「既に所属しています」案内
+- 高: 店ごとのQR発行（所属＝membership ごと・印刷可能・固定URL）
 - 高: 受け取った投げ銭が「保留残高（未着金）」として溜まる
 - 高: 受取履歴の閲覧（**金額は本人のみ**）とメッセージ閲覧
 - 高: 本人確認・口座登録（Stripe Connect オンボーディング、後回し可）。完了で着金可能へ遷移
@@ -78,27 +79,37 @@
 
 ### お客さま（tip）— モック4画面に対応
 ```
-QR読取
+QR読取（QR は membership＝人×店 を指す）
   ↓
-[01 金額を選ぶ]  /tip/:staffId
-  - 顔写真・名前・店名 / 金額3択 / メッセージ(任意)
+[01 金額を選ぶ]  /tip/:membershipId
+  - 顔写真・名前・店名（membership から人＋店を解決）/ 金額3択 / メッセージ(任意)
   - 「Pay で送る」「G Pay で送る」
   ↓
 [03 支払い方法]（ボトムシート sheetUp / 背面スクリム）
   - Apple Pay / Google Pay / カード / ✕・スクリムタップで [01] へ戻る
   ↓ 決済成立（PaymentIntent succeeded を起点に完了表示）
-[04 完了]  /tip/:staffId/complete
-  - 「ありがとうを届けました！」/ 誰に・¥◯◯ / メッセージ再掲
+[04 完了]  /tip/:membershipId/complete
+  - 誰に・¥◯◯ / メッセージ再掲
   - 「もう一度送る」→[01] / 「閉じる」
 ```
 > 注: [02 メッセージ入力済み] は [01] の入力後状態であり、別ルートではなく [01] の状態違い。
 
-### 店員さん（staff）
+### 店員さん（staff）— 参加フロー（招待）
+```
+招待リンク /invite/:code（予告：〇〇店 に所属します）
+  → [はじめる] → （未ログインならログイン/サインアップ）
+    ├ 新規ユーザー → プロフィール作成 → 送信（参加確定）→ 参加完了「〇〇店に参加しました！」→ ホーム
+    ├ 既存ユーザー（別店所属）→ プロフィール流用で参加確定 → 参加完了「〇〇店に参加しました！」→ ホーム
+    └ 既に同じ店に所属済み → 「すでに〇〇店に所属しています」案内 → ホーム
+```
+> 既存ユーザーが /staff/setup 等の作成ルートに来ても、プロフィール作成済みなら作成画面は出さず参加完了/ホームへ（ガード）。
+
+### 店員さん（staff）— ホーム
 ```
 ログイン → ホーム（保留残高・着金状態サマリ）
-  ├ 自分のQR（印刷用）
-  ├ 受取履歴（金額あり・本人のみ）→ 各投げ銭の詳細（メッセージ・文脈）
-  ├ 本人確認・口座登録（Stripe Connect オンボーディングへ遷移 → 戻り）
+  ├ 所属店の一覧（複数可）。各店ごとの QR（印刷用）
+  ├ 受取履歴（金額あり・本人のみ。店ラベル付き）→ 各投げ銭の詳細
+  ├ 本人確認・口座登録（Stripe Connect。人ごとに1回）
   └ 申告データ出力（CSV）
 ```
 
@@ -130,21 +141,30 @@ QR読取
 - 店はお金に触れないため、決済・残高に関わるカラムを持たない。
 - 運営は事後に監視し、必要なら停止できる（suspended フラグ等は admin 実装時に追加）。
 
-### staff_invite（スタッフ招待）— 追加方式A
-- id, store_id, code（一意・招待コード/リンク用トークン）, label（任意メモ＝誰宛か。例「佐藤さん」「ホール担当」）, status（pending / accepted / revoked）, created_at, accepted_at, accepted_staff_id
-- **スタッフ追加は店が招待を発行 → 店員が招待経由でアカウント作成し所属確定**。これにより「店承認」が招待で自然に担保される。
-- **label（任意メモ）**で「誰宛の招待か」を店が識別できる。招待中リストに label を表示し、所属確定後は店員の実名（display_name）を優先表示。空でも可（その場合は「招待中」とだけ表示）。
-- 店員は自分のアカウント作成時に code を消費して staff.store_id が確定する。
+### 店員さんの所属モデル（多対多・掛け持ち対応）
+- **1人の店員（staff＝人）が複数の店に所属できる**（例：カフェAとバーBで働く）。所属は `staff_store`（中間テーブル）で表す。
+- **staff（人）はプロフィール（表示名・一言・写真・Stripe口座・本人確認状態）を1つ持ち、全所属店で共通**。
+- **QR は「人×店」の所属（membership）ごとに発行**＝店ごとに別QR。店ごとに違うQRを貼る。投げ銭はそのQRの店にカウント（帰属が明確）。お金は人（1つのStripe口座）に届く。
 
-### staff（店員さん）
-- id, auth_user_id（Supabase auth.users 参照）, store_id（招待経由で確定）, display_name, headline（一言）, avatar_url
-- stripe_account_id（Connect の Connected Account。未連携は null）
-- identity_status（本人確認・着金可否の状態。下記7参照）
+### staff_invite（スタッフ招待）— 追加方式A
+- id, store_id, code（一意・招待コード/リンク用トークン）, label（任意メモ＝誰宛か。例「佐藤さん」）, status（pending / accepted / revoked）, created_at, accepted_at, accepted_staff_id
+- **店が招待を発行 → 店員が招待経由で参加**。これにより「店承認」が招待で自然に担保される。label は招待中一覧での識別用（任意）。
+- 招待を消費すると、その店員（人）に対し当該店の **staff_store（所属）が1件作られる**（既存ユーザーはプロフィール流用、新規ユーザーはプロフィール作成と同時）。
+
+### staff（店員さん＝人）
+- id, auth_user_id（Supabase auth.users 参照）, display_name, headline（一言）, avatar_url
+- stripe_account_id（Connect の Connected Account。未連携は null。**人ごとに1つ**）
+- identity_status（本人確認・着金可否の状態。下記7参照。**人ごと**）
 - created_at
-- **QR は staff.id を指す固定 URL（`/tip/:staffId`）として発行**。別テーブルを持たず staff に紐づく。**一度発行したら不変（再発行・失効は当面なし）**。発行主体は店員本人（店ではない）。
+- **store_id は持たない**（所属は staff_store で表す）。
+
+### staff_store（所属＝membership）
+- id, staff_id, store_id, created_at（一意制約：同じ (staff_id, store_id) は1件＝二重所属不可）
+- **QR の単位**。QR URL は membership を指す（例 `/tip/:membershipId`）→ 投げ銭画面は staff(人)＋store(店) を解決して表示。**固定・再発行/失効なし**。発行主体は店員本人。
+- 退店時はこの所属を外す（人やプロフィールは残る）。
 
 ### tip（投げ銭）— 構造化された感謝データの中核
-- id, staff_id, store_id（送信時点の所属を固定保存＝後で異動しても文脈が残る）
+- id, staff_id, store_id（QR=membership の店を送信時点で固定保存）, membership_id（任意・追跡用）
 - amount（店員さんに届く満額・円）, platform_fee（運営手数料・円）, customer_total（お客さま支払額・円）
 - message（任意・最大80文字）
 - stripe_payment_intent_id, status（pending / succeeded / failed）
@@ -201,9 +221,9 @@ verified（着金可能）
 ### tip（お客さま・認証なし）
 | メソッド | パス | 役割 |
 |---|---|---|
-| GET | `/tip/:staffId` | 投げ銭画面の表示情報（顔写真・名前・店名・一言）。金額・履歴は返さない |
-| POST | `/tip/:staffId/intent` | 投げ銭の PaymentIntent 作成（金額・メッセージを受け、Direct charge / application_fee を構成）。tip を pending で記録 |
-| GET | `/tip/:staffId/complete?tipId=` | 完了表示用（誰に・¥◯◯・メッセージ）。amount は当該 tip の送金額のみ |
+| GET | `/tip/:membershipId` | 投げ銭画面の表示情報（membership から 人＋店を解決：顔写真・名前・店名・一言）。金額・履歴は返さない |
+| POST | `/tip/:membershipId/intent` | 投げ銭の PaymentIntent 作成（金額・メッセージ。Direct charge は membership の店員の Stripe 口座宛、tip に staff_id＋store_id＋membership_id を pending で記録） |
+| GET | `/tip/:membershipId/complete?tipId=` | 完了表示用（誰に・¥◯◯・メッセージ）。amount は当該 tip の送金額のみ |
 
 ### webhooks（認証なし・raw body）
 | メソッド | パス | 役割 |
@@ -213,11 +233,12 @@ verified（着金可能）
 ### staff（認証必須・本人スコープ）
 | メソッド | パス | 役割 |
 |---|---|---|
-| POST | `/staff/me` | 初回プロフィール作成（display_name・headline・**招待コードで store 紐付け**）。本人確認なしで成立 |
-| GET | `/staff/me` | 自分のプロフィール・identity_status・QR用URL |
-| GET | `/staff/me/balance` | 保留残高（held合計）・着金可能額の集計（**本人のみ**） |
-| GET | `/staff/me/tips` | 受取履歴（**金額・メッセージ含む。本人のみ**） |
-| POST | `/staff/me/connect/onboard` | Stripe Connect オンボーディングリンクの発行 |
+| POST | `/staff/me` | 初回プロフィール作成（display_name・headline）。本人確認なしで成立。**プロフィールは人ごと1つ** |
+| POST | `/staff/me/join` | 招待コードで所属（staff_store）を追加。**新規/既存問わず参加の確定点**。既に同店所属なら `already_member` を返す（多重参加不可） |
+| GET | `/staff/me` | 自分のプロフィール・identity_status・**所属店一覧（各 membership と店ごとQR用URL）** |
+| GET | `/staff/me/balance` | 保留残高（held合計）・着金可能額の集計（**本人のみ・人ごと集約**） |
+| GET | `/staff/me/tips` | 受取履歴（**金額・メッセージ・店ラベル含む。本人のみ**） |
+| POST | `/staff/me/connect/onboard` | Stripe Connect オンボーディングリンクの発行（人ごと1回） |
 | GET | `/staff/me/tax-report` | 申告データ CSV 出力（受取記録） |
 
 ### store（認証必須・店スコープ）

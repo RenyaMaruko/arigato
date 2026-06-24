@@ -9,8 +9,8 @@ import { MessageInput } from "../components/MessageInput.js";
 import { PaymentSheet } from "../components/PaymentSheet.js";
 
 /**
- * 投げ銭画面（/tip/:staffId、モック 01/02）。
- * 店員さんの表示情報（顔写真枠・名前・店名・一言）を出し、
+ * 投げ銭画面（/tip/:membershipId、モック 01/02）。
+ * QR が指す所属（membership＝人×店）から、店員さんの表示情報（顔写真枠・名前・店名・一言）を出し、
  * 金額3択・メッセージを選んで「送る」から支払いシートを開く。
  *
  * 「送る」押下で投げ銭の PaymentIntent を作成し（Direct charge）、得られた client_secret を使って
@@ -23,13 +23,13 @@ import { PaymentSheet } from "../components/PaymentSheet.js";
 export function TipPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  // URL パラメータ（/tip/$staffId）
-  const { staffId } = useParams({ from: "/tip/$staffId" });
+  // URL パラメータ（/tip/$membershipId）。QR が指す所属（人×店）
+  const { membershipId } = useParams({ from: "/tip/$membershipId" });
 
-  // サーバー状態: 店員さんの表示情報
-  const { data: staff, isLoading, isError } = useStaffDisplayInfo(staffId);
+  // サーバー状態: membership から解決した店員さん（人）＋店の表示情報
+  const { data: staff, isLoading, isError } = useStaffDisplayInfo(membershipId);
   // 投げ銭作成（PaymentIntent 作成・client_secret 取得）ミューテーション
-  const createIntent = useCreateTipIntent(staffId);
+  const createIntent = useCreateTipIntent(membershipId);
 
   // 決済中フラグの setter（埋め込みフォームの confirm 中・完了遷移時に状態を同期する）。
   // 値自体はシート内のフォームが管理するため、ここでは setter だけ使う。
@@ -66,8 +66,8 @@ export function TipPage() {
     closeSheet();
     setPaying(false);
     navigate({
-      to: "/tip/$staffId/complete",
-      params: { staffId },
+      to: "/tip/$membershipId/complete",
+      params: { membershipId },
       search: { tipId },
     });
   };
@@ -81,8 +81,8 @@ export function TipPage() {
   // 決済確定後の戻り先 URL（PayPay 等リダイレクト必須手段でのみ使われる。完了画面で succeeded を待つ）
   const tipId = createIntent.data?.tipId;
   const returnUrl = tipId
-    ? `${window.location.origin}/tip/${staffId}/complete?tipId=${tipId}`
-    : `${window.location.origin}/tip/${staffId}`;
+    ? `${window.location.origin}/tip/${membershipId}/complete?tipId=${tipId}`
+    : `${window.location.origin}/tip/${membershipId}`;
 
   return (
     <PhoneFrame>

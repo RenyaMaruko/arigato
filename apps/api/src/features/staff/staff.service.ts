@@ -3,6 +3,7 @@ import type {
   UpdateStaffProfileInput,
   StaffMe,
   InviteInfo,
+  JoinStoreResult,
   StaffTipsResponse,
   StaffBalance,
   ConnectOnboardResponse,
@@ -19,6 +20,7 @@ import {
 import type {
   StaffRepository,
   StaffProfileRow,
+  StaffMembershipRow,
   ApplyAccountUpdateResult,
 } from "./staff.repository.js";
 import type { CreateOnboardingLinkResult } from "../../infrastructure/stripe/stripe.types.js";
@@ -28,12 +30,15 @@ import type { CreateOnboardingLinkResult } from "../../infrastructure/stripe/str
  * Model（招待判定・URL組み立て）と Repository（DB）を組み合わせて店員さんのユースケースを実現する。
  * Repository は引数で受け取り（注入）、feature から infrastructure を直接 import しない。
  *
+ * 多対多モデル: staff（人）はプロフィールを1つ持ち、所属（membership）を複数持てる（掛け持ち）。
+ * QR は membership 単位（/tip/:membershipId）。参加の確定点は join（招待コードで所属追加）に集約する。
+ *
  * アクセス制御はこの層で守る。`/staff/me` 系は必ず認証済みの authUserId をキーに本人の行だけを扱い、
  * 他人のデータが返らないようにする（横断ルール: 自分のスコープのみ）。
  */
 
-// QR用URL の組み立てに使うフロントのベース URL を Service に注入する関数の型
-export type BuildTipUrl = (staffId: string) => string;
+// QR用URL の組み立てに使うフロントのベース URL を Service に注入する関数の型（membership 単位）
+export type BuildTipUrl = (membershipId: string) => string;
 
 /**
  * 本人確認の状態から着金可能かを返すユースケース（Sprint 1 から残す薄いラッパ）。
@@ -42,18 +47,26 @@ export function resolvePayoutAvailability(status: IdentityStatus): boolean {
   return canPayout(status);
 }
 
-// プロフィール行を API 応答（StaffMe）へ変換する内部ヘルパ
-function toStaffMe(row: StaffProfileRow, buildUrl: BuildTipUrl): StaffMe {
+// プロフィール行＋所属一覧を API 応答（StaffMe）へ変換する内部ヘルパ
+function toStaffMe(
+  profile: StaffProfileRow,
+  memberships: StaffMembershipRow[],
+  buildUrl: BuildTipUrl,
+): StaffMe {
   return {
-    id: row.id,
-    displayName: row.displayName,
-    headline: row.headline,
-    avatarUrl: row.avatarUrl,
-    storeId: row.storeId,
-    storeName: row.storeName,
-    identityStatus: row.identityStatus,
-    // QR が指す固定 URL（/tip/:staffId）
-    tipUrl: buildUrl(row.id),
+    id: profile.id,
+    displayName: profile.displayName,
+    headline: profile.headline,
+    avatarUrl: profile.avatarUrl,
+    identityStatus: profile.identityStatus,
+    // 所属店一覧（各 membership ごとに店ごとQR用URL を組み立てる）
+    memberships: memberships.map((m) => ({
+      membershipId: m.membershipId,
+      storeId: m.storeId,
+      storeName: m.storeName,
+      // QR が指す固定 URL（/tip/:membershipId）
+      tipUrl: buildUrl(m.membershipId),
+    })),
   };
 }
 
@@ -81,7 +94,7 @@ export async function getInviteInfo(
 
 /**
  * 自分のプロフィールを取得する（GET /staff/me・本人スコープ）。
- * 認証済みの authUserId をキーに本人の staff 行のみを返す（他人のデータは取得できない）。
+ * 認証済みの authUserId をキーに本人の staff 行＋所属一覧（店ごとQR用URL）を返す。
  * 未作成（初回ログイン）なら null を返し、フロントはプロフィール作成へ誘導する。
  */
 export async function getStaffMe(
@@ -89,12 +102,13 @@ export async function getStaffMe(
   buildUrl: BuildTipUrl,
   authUserId: string,
 ): Promise<StaffMe | null> {
-  const row = await repo.findStaffByAuthUserId(authUserId);
-  if (!row) return null;
-  return toStaffMe(row, buildUrl);
+  const profile = await repo.findStaffByAuthUserId(authUserId);
+  if (!profile) return null;
+  const memberships = await repo.listMembershipsByAuthUserId(authUserId);
+  return toStaffMe(profile, memberships, buildUrl);
 }
 
-// プロフィール作成で起こりうる業務エラー（Route で HTTP ステータスに変換する）
+// プロフィール作成・参加で起こりうる業務エラー（Route で HTTP ステータスに変換する）
 export class InviteNotUsableError extends Error {
   constructor() {
     super("invite_not_usable");
@@ -107,14 +121,20 @@ export class StaffAlreadyExistsError extends Error {
     this.name = "StaffAlreadyExistsError";
   }
 }
+// 参加（join）時にプロフィールが未作成だった（先に POST /staff/me が必要）
+export class StaffNotFoundError extends Error {
+  constructor() {
+    super("staff_not_found");
+    this.name = "StaffNotFoundError";
+  }
+}
 
 /**
  * 初回プロフィールを作成する（POST /staff/me・本人スコープ）。
- * 招待コードで store_id を確定し、本人確認・口座登録・Stripe Connect 連携なしで成立させる
- * （identity_status は DB 既定の none のまま）。
+ * プロフィール（表示名・一言・写真）を人ごとに1つ作る。所属の確定はここでは行わない
+ * （参加は POST /staff/me/join に集約する）。本人確認・口座登録・Connect 連携は一切求めない。
  *
  * - 既に自分の staff があれば多重作成を防ぐ（StaffAlreadyExistsError）。
- * - 招待が無効（消費済み・失効・店が導入承認未同意）なら InviteNotUsableError。
  */
 export async function createStaffProfile(
   repo: StaffRepository,
@@ -128,26 +148,59 @@ export async function createStaffProfile(
     throw new StaffAlreadyExistsError();
   }
 
-  // 招待を検証（未消費かつ店承認済みのときのみ所属確定に使える）
-  const invite = await repo.findInviteByCode(input.inviteCode);
+  // プロフィールを作成（所属はまだ無い）
+  const profile = await repo.createStaffProfile({
+    authUserId,
+    displayName: input.displayName,
+    headline: normalizeHeadline(input.headline),
+    avatarUrl: input.avatarUrl ?? null,
+  });
+  // 作成直後は所属なし。所属一覧は空配列で返す（後続の join で追加される）
+  return toStaffMe(profile, [], buildUrl);
+}
+
+/**
+ * 招待コードで所属（staff_store）を追加する（POST /staff/me/join・本人スコープ）。
+ * 新規/既存問わず「参加の確定点」。
+ * - プロフィール未作成なら StaffNotFoundError（先に POST /staff/me が必要）。
+ * - 招待が無効（消費済み・失効・店未承認）なら InviteNotUsableError。
+ * - 既に同店所属なら already_member を返す（招待は消費せず・多重参加不可）。
+ * - 新規なら membership を作り joined を返す。
+ */
+export async function joinStore(
+  repo: StaffRepository,
+  buildUrl: BuildTipUrl,
+  authUserId: string,
+  inviteCode: string,
+): Promise<JoinStoreResult> {
+  // 本人のプロフィールが必要（先に作成済みのはず）
+  const profile = await repo.findStaffByAuthUserId(authUserId);
+  if (!profile) {
+    throw new StaffNotFoundError();
+  }
+
+  // 招待を検証（未消費かつ店承認済みのときのみ使える）。事前検証でユーザーに早く弾く
+  const invite = await repo.findInviteByCode(inviteCode);
   if (!invite || !isInviteUsable(invite.inviteStatus, invite.storeAdopted)) {
     throw new InviteNotUsableError();
   }
 
-  // 招待を消費しつつ staff を作成（原子的に。二重消費は Repository 内で弾く）
+  // 所属を追加（既存なら already_member）。二重消費・一意制約は Repository のトランザクションで担保
   try {
-    const row = await repo.createStaffWithInvite(invite.code, {
-      authUserId,
-      storeId: invite.storeId,
-      displayName: input.displayName,
-      headline: normalizeHeadline(input.headline),
-      avatarUrl: input.avatarUrl ?? null,
-    });
-    return toStaffMe(row, buildUrl);
+    const result = await repo.joinStoreByInvite(authUserId, inviteCode);
+    return {
+      status: result.outcome,
+      membershipId: result.membershipId,
+      storeId: result.storeId,
+      storeName: result.storeName,
+      tipUrl: buildUrl(result.membershipId),
+    };
   } catch (err) {
-    // 検証後に他リクエストが招待を先に消費していた場合の競合
     if (err instanceof Error && err.message === "invite_not_usable") {
       throw new InviteNotUsableError();
+    }
+    if (err instanceof Error && err.message === "staff_not_found") {
+      throw new StaffNotFoundError();
     }
     throw err;
   }
@@ -155,7 +208,7 @@ export async function createStaffProfile(
 
 /**
  * 自分のプロフィールを編集する（PATCH /staff/me・本人スコープ）。
- * 所属・招待は変更せず、display_name・headline・avatar のみ更新する。
+ * 所属は変更せず、display_name・headline・avatar のみ更新する。
  * 自分の staff が無ければ null（作成前のため編集できない）。
  */
 export async function updateStaffProfile(
@@ -164,20 +217,22 @@ export async function updateStaffProfile(
   authUserId: string,
   input: UpdateStaffProfileInput,
 ): Promise<StaffMe | null> {
-  const row = await repo.updateStaffProfile(authUserId, {
+  const profile = await repo.updateStaffProfile(authUserId, {
     displayName: input.displayName,
     headline: normalizeHeadline(input.headline),
     avatarUrl: input.avatarUrl ?? null,
   });
-  if (!row) return null;
-  return toStaffMe(row, buildUrl);
+  if (!profile) return null;
+  // 更新後の所属一覧も併せて返す（ホーム再描画に使える）
+  const memberships = await repo.listMembershipsByAuthUserId(authUserId);
+  return toStaffMe(profile, memberships, buildUrl);
 }
 
 /**
  * 受取履歴を取得する（GET /staff/me/tips・本人スコープ）。
  * 認証済みの authUserId をキーに本人の成立済み投げ銭だけを新しい順に返す。
  * 金額・メッセージを含むのは本人スコープのこの経路だけ（横断ルール: 金額は本人のみ）。
- * プロフィール未作成なら null。
+ * 店ラベル（storeName）付き。プロフィール未作成なら null。
  */
 export async function getStaffTips(
   repo: StaffRepository,
@@ -207,7 +262,7 @@ export async function getStaffTips(
 /**
  * 保留残高サマリを取得する（GET /staff/me/balance・本人スコープ）。
  * 本人の成立済み投げ銭から held 合計（保留残高）・payable 合計（着金可能額）・paid 合計を集計する。
- * 集計は Model の純粋関数に委ねる。金額を返すのは本人スコープのこの経路だけ。
+ * 残高・本人確認は人ごとに集約する（全所属店をまとめる）。金額を返すのは本人スコープのこの経路だけ。
  * プロフィール未作成なら null。
  */
 export async function getStaffBalance(
@@ -262,7 +317,7 @@ export type BuildOnboardingUrls = () => { returnUrl: string; refreshUrl: string 
 /**
  * Stripe Connect オンボーディングを開始する（POST /staff/me/connect/onboard・本人スコープ）。
  * 本人の Connected Account（無ければ作成）に対してオンボーディングリンクを発行し、URL を返す。
- * 新規作成した Connected Account は本人の staff に保存する。
+ * 新規作成した Connected Account は本人の staff に保存する（人ごと1回）。
  * 完了の判定はこのリンクの戻りではなく account.updated Webhook を正とする。
  * プロフィール未作成なら null。
  */

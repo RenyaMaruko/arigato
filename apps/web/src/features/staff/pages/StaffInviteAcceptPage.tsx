@@ -4,11 +4,16 @@ import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useInviteInfo } from "../hooks/useStaff.js";
 
+// ログインを跨いでも招待コードを引き継ぐための保管キー（sessionStorage）
+const PENDING_INVITE_KEY = "arigato.pendingInvite";
+
 /**
  * 招待受け入れ画面（/invite/:code）。
  * 招待リンクからの流入口。GET /invites/:code で招待を検証し、所属先の店名を表示する。
- * 「はじめる」で、ログイン済みならプロフィール作成、未ログインならログインへ繋ぐ。
- * いずれも招待コードを ?invite= に載せて引き継ぎ、所属（store_id）を確定させる。
+ * 「はじめる」で、招待コードを引き継いで参加フロー（/staff/setup?invite=）へ繋ぐ。
+ *   - 新規ユーザー → プロフィール作成 → 参加 → 参加完了「〇〇店に参加しました！」
+ *   - 既存ユーザー → 作成をスキップして参加 → 参加完了（同店所属済みなら「既に所属」案内）
+ * 未ログインのときはログインを挟むため、招待コードを sessionStorage にも退避して引き継ぐ。
  */
 export function StaffInviteAcceptPage() {
   const { t } = useTranslation();
@@ -20,14 +25,26 @@ export function StaffInviteAcceptPage() {
   // 招待検証
   const inviteQuery = useInviteInfo(code);
 
-  // 「はじめる」: 招待コードを引き継いで、ログイン or プロフィール作成へ
+  // 「はじめる」: 招待コードを引き継いで参加フローへ
   const handleStart = () => {
     if (isAuthenticated) {
-      // ログイン済みは作成画面へ（招待コードを ?invite= で渡す）
+      // ログイン済みは参加フロー（作成画面・既存はスキップして参加）へ直接進む。
+      // ?invite= で引き継ぐため sessionStorage は使わず、残っていれば消しておく（再発火防止）。
+      try {
+        sessionStorage.removeItem(PENDING_INVITE_KEY);
+      } catch {
+        // 取り除けなくても致命的でない
+      }
       navigate({ to: "/staff/setup", search: { invite: code } });
     } else {
-      // 未ログインはログイン画面へ（ログイン後に作成へ進む）
-      navigate({ to: "/staff" });
+      // 未ログインはログイン画面へ。ログインを跨いで引き継ぐため sessionStorage に退避する。
+      // ログイン後に入口（/staff）が保留中の招待を拾って参加へ進む（拾った時点で消費・除去する）。
+      try {
+        sessionStorage.setItem(PENDING_INVITE_KEY, code);
+      } catch {
+        // ストレージが使えない環境ではログイン後に手動で招待リンクを開き直す
+      }
+      navigate({ to: "/staff/login" });
     }
   };
 

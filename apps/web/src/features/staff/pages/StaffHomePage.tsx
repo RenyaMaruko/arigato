@@ -6,9 +6,11 @@ import { signOut } from "../../../lib/auth.js";
 
 /**
  * 店員さんホーム（ログイン後の起点・/staff）。
- * 自分の表示名・一言・所属店・本人確認の状態を表示し、QR発行・プロフィール編集へ導く。
- * 受取履歴・保留残高・本人確認オンボーディングの本実装は Sprint 5 に委ねる
- * （ここでは表示の枠と起点のみ）。
+ * 自分の表示名・一言・本人確認の状態を表示し、所属店一覧（複数可・掛け持ち）と
+ * 店ごとのQRへの導線・プロフィール編集・受取履歴・残高・申告データへ導く。
+ *
+ * 多対多モデル: 所属（membership）は複数持てる。各店ごとに別QR（/tip/:membershipId）を貼るため、
+ * 店ごとにQRボタンを並べ、?m= で対象 membership を QR 画面に渡す。
  */
 export function StaffHomePage({ me }: { me: StaffMe }) {
   const { t } = useTranslation();
@@ -62,7 +64,6 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           <span className="text-token-3xl font-bold text-ink">{me.displayName} </span>
           <span className="text-token-md text-ink">{t("staff.san")}</span>
         </div>
-        <div className="mt-1 text-center text-token-md text-ink-sub">{me.storeName}</div>
         {me.headline && (
           <div className="mt-1 text-center text-token-md text-muted">{me.headline}</div>
         )}
@@ -86,15 +87,42 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           {identityLabel}
         </div>
 
-        {/* 主要アクション（QR発行・残高・受取履歴・プロフィール編集・申告データ） */}
+        {/* 所属店一覧（複数可・掛け持ち）。各店ごとに別QR（/tip/:membershipId）へ導く */}
+        <div className="mt-7">
+          <div className="text-token-base font-bold text-ink-label">
+            {t("staff.homeStoresLabel")}
+          </div>
+          {me.memberships.length === 0 ? (
+            // 所属がまだ無いとき（招待リンクからの参加を促す）
+            <div className="mt-3 rounded-xl border-[1.5px] border-line bg-surface-subtle px-4 py-4 text-center text-token-sm text-ink-sub">
+              {t("staff.homeNoStores")}
+            </div>
+          ) : (
+            <div className="mt-3 flex flex-col gap-2.5">
+              {me.memberships.map((m) => (
+                // 1店ぶんのカード（店名＋その店のQRを表示する導線）
+                <div
+                  key={m.membershipId}
+                  className="flex items-center justify-between gap-3 rounded-xl border-[1.5px] border-line bg-page px-4 py-3.5"
+                >
+                  <span className="min-w-0 flex-1 truncate text-token-md font-semibold text-ink">
+                    {m.storeName}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => navigate({ to: "/staff/qr", search: { m: m.membershipId } })}
+                    className="flex-none rounded-lg bg-rose px-4 py-2 text-token-sm font-bold text-page"
+                  >
+                    {t("staff.homeStoreQr")}
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* 主要アクション（残高・受取履歴・プロフィール編集・申告データ） */}
         <div className="mt-7 flex flex-col gap-[11px]">
-          <button
-            type="button"
-            onClick={() => navigate({ to: "/staff/qr" })}
-            className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
-          >
-            {t("staff.homeQr")}
-          </button>
           <button
             type="button"
             onClick={() => navigate({ to: "/staff/balance" })}

@@ -13,6 +13,7 @@ import { StaffProfileCreatePage } from "../features/staff/pages/StaffProfileCrea
 import { StaffQrPage } from "../features/staff/pages/StaffQrPage.js";
 import { StaffProfileEditPage } from "../features/staff/pages/StaffProfileEditPage.js";
 import { StaffInviteAcceptPage } from "../features/staff/pages/StaffInviteAcceptPage.js";
+import { StaffJoinCompletePage } from "../features/staff/pages/StaffJoinCompletePage.js";
 import { StaffTipsHistoryPage } from "../features/staff/pages/StaffTipsHistoryPage.js";
 import { StaffBalancePage } from "../features/staff/pages/StaffBalancePage.js";
 import { StaffIdentityFlowPage } from "../features/staff/pages/StaffIdentityFlowPage.js";
@@ -31,13 +32,13 @@ import { StoreProfilePage } from "../features/store/pages/StoreProfilePage.js";
 /**
  * TanStack Router のルーティング定義。
  * ホーム（疎通確認）に加え、お客さま投げ銭フローと店員さんアカウント系の画面を登録する。
- *  - /tip/$staffId          投げ銭画面（金額・メッセージ・スタンプ・支払いシート）
- *  - /tip/$staffId/complete 完了画面（?tipId= で当該 tip の再掲情報を引く）
- *  - /staff                 店員さん入口（認証ゲート: 未ログイン→ログイン / 未作成→作成 / 作成済→ホーム）
- *  - /staff/setup           プロフィール作成（?invite= で招待コードを引き継ぐ）
- *  - /staff/qr              個人QR の発行（/tip/:staffId を指す QR・印刷）
- *  - /staff/profile         プロフィール編集
- *  - /invite/$code          招待受け入れ（招待検証→ログイン/作成へ）
+ *  - /tip/$membershipId          投げ銭画面（membership＝人×店。金額・メッセージ・支払いシート）
+ *  - /tip/$membershipId/complete 完了画面（?tipId= で当該 tip の再掲情報を引く）
+ *  - /staff                      店員さん入口（認証ゲート: 未ログイン→ログイン / 未作成→作成 / 作成済→ホーム）
+ *  - /staff/setup                プロフィール作成（?invite= で招待コードを引き継ぐ・作成済はガードで弾く）
+ *  - /staff/qr                   店ごとのQR の発行（?m= で membership を指定・/tip/:membershipId を指す QR・印刷）
+ *  - /staff/profile              プロフィール編集
+ *  - /invite/$code               招待受け入れ（招待検証→ログイン/作成/参加→参加完了へ）
  * 認証ガードは StaffPage 系の各画面で session を見て出し分ける（未ログインはログインへ誘導）。
  */
 
@@ -53,17 +54,17 @@ const indexRoute = createRoute({
   component: HomePage,
 });
 
-// "/tip/$staffId" に投げ銭画面を割り当てる（staffId は URL パラメータ）
+// "/tip/$membershipId" に投げ銭画面を割り当てる（membership＝人×店。URL パラメータ）
 const tipRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/tip/$staffId",
+  path: "/tip/$membershipId",
   component: TipPage,
 });
 
-// "/tip/$staffId/complete" に完了画面を割り当てる。?tipId= を検証して受け取る
+// "/tip/$membershipId/complete" に完了画面を割り当てる。?tipId= を検証して受け取る
 const tipCompleteRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/tip/$staffId/complete",
+  path: "/tip/$membershipId/complete",
   component: TipCompletePage,
   // 完了画面は tipId クエリで当該 tip を引く（文字列・任意）
   validateSearch: (search: Record<string, unknown>): { tipId: string } => ({
@@ -106,11 +107,15 @@ const staffOnboardRoute = createRoute({
   validateSearch: inviteSearch,
 });
 
-// "/staff/qr" 個人QR の発行画面
+// "/staff/qr" 店ごとのQR 発行画面。?m= でどの所属（membership）のQRかを指定する
 const staffQrRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/staff/qr",
   component: StaffQrPage,
+  // 表示対象の membership ID（未指定なら最初の所属を使う）
+  validateSearch: (search: Record<string, unknown>): { m?: string } => ({
+    m: typeof search.m === "string" ? search.m : undefined,
+  }),
 });
 
 // "/staff/profile" プロフィール編集画面
@@ -153,6 +158,19 @@ const staffExportRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/staff/export",
   component: StaffTaxExportPage,
+});
+
+// "/staff/joined" 参加完了画面。?store= 店名・?status= 結果区分（joined / already）を受け取る
+const staffJoinedRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/joined",
+  component: StaffJoinCompletePage,
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { store: string; status: "joined" | "already" } => ({
+    store: typeof search.store === "string" ? search.store : "",
+    status: search.status === "already" ? "already" : "joined",
+  }),
 });
 
 // "/invite/$code" 招待受け入れ画面（招待コードは URL パラメータ）
@@ -245,6 +263,7 @@ const routeTree = rootRoute.addChildren([
   staffIdentityRoute,
   staffIdentityCompleteRoute,
   staffExportRoute,
+  staffJoinedRoute,
   inviteRoute,
   storeRoute,
   storeLoginRoute,

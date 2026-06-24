@@ -128,13 +128,14 @@ export function isInviteUsable(inviteStatus: InviteStatus, storeAdopted: boolean
 }
 
 /**
- * staff.id から QR が指す固定 URL（/tip/:staffId）を組み立てる純粋関数。
- * QR は別テーブルを持たず staff.id を指す URL として発行し、一度発行したら不変。
+ * membership（staff_store.id＝人×店）から QR が指す固定 URL（/tip/:membershipId）を組み立てる純粋関数。
+ * QR は店ごと（所属ごと）に別 URL を発行し、一度発行したら不変。
+ * お客さま投げ銭画面は membership から staff(人)＋store(店) を解決して表示する。
  */
-export function buildTipUrl(webBaseUrl: string, staffId: string): string {
+export function buildTipUrl(webBaseUrl: string, membershipId: string): string {
   // 末尾スラッシュを除いて結合する
   const base = webBaseUrl.replace(/\/$/, "");
-  return `${base}/tip/${staffId}`;
+  return `${base}/tip/${membershipId}`;
 }
 
 /**
