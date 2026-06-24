@@ -159,6 +159,44 @@ export function createInMemoryStaffRepository(): StaffRepository {
       connectByAuth.set(authUserId, { ...existing, stripeAccountId });
     },
 
+    // 送金（payout）の本人・Connect 連携状態を返す（送金可否判定・Stripe payout の実行先）
+    async findPayoutContext(authUserId) {
+      const profile = profileByAuth.get(authUserId);
+      if (!profile) return null;
+      const connect = connectByAuth.get(authUserId) ?? {
+        stripeAccountId: null,
+        identityStatus: profile.identityStatus,
+      };
+      return {
+        staffId: profile.id,
+        stripeAccountId: connect.stripeAccountId,
+        identityStatus: connect.identityStatus,
+      };
+    },
+
+    // インメモリ実装は tip を保持しないため着金可能な tip は空（実 DB 環境で本実装が動く）
+    async listPayableTipsByAuthUserId() {
+      return [];
+    },
+
+    // インメモリ実装は payout を永続化しないため、記録は擬似的に返すのみ（実 DB 環境で本実装が動く）
+    async createPayoutAndMarkTipsPaid(params) {
+      return { id: randomUUID(), amount: params.amount, status: "pending" as const };
+    },
+
+    // 同上。送金履歴も空
+    async listPayoutsByAuthUserId() {
+      return [];
+    },
+
+    // 同上。payout を保持しないため照合できず、反映なし（false）
+    async markPayoutPaid() {
+      return false;
+    },
+    async markPayoutFailedAndRevertTips() {
+      return false;
+    },
+
     // インメモリ実装は tip を保持しないため受取履歴は空（実 DB 環境で本実装が動く）
     async listTipsByAuthUserId() {
       return [];

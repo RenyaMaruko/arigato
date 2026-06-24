@@ -16,6 +16,7 @@ import { StaffInviteAcceptPage } from "../features/staff/pages/StaffInviteAccept
 import { StaffJoinCompletePage } from "../features/staff/pages/StaffJoinCompletePage.js";
 import { StaffTipsHistoryPage } from "../features/staff/pages/StaffTipsHistoryPage.js";
 import { StaffBalancePage } from "../features/staff/pages/StaffBalancePage.js";
+import { StaffPayoutPage } from "../features/staff/pages/StaffPayoutPage.js";
 import { StaffIdentityFlowPage } from "../features/staff/pages/StaffIdentityFlowPage.js";
 import { StaffIdentityCompletePage } from "../features/staff/pages/StaffIdentityCompletePage.js";
 import { StaffTaxExportPage } from "../features/staff/pages/StaffTaxExportPage.js";
@@ -159,6 +160,13 @@ const staffBalanceRoute = createRoute({
   component: StaffBalancePage,
 });
 
+// "/staff/payout" 送金（振込申請）画面（着金可能額の全額を登録口座へ。本人のみ）
+const staffPayoutRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/payout",
+  component: StaffPayoutPage,
+});
+
 // "/staff/identity" 本人確認・口座登録の流れ（Connect オンボーディングへ遷移）
 const staffIdentityRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -287,6 +295,7 @@ const routeTree = rootRoute.addChildren([
   staffProfileRoute,
   staffHistoryRoute,
   staffBalanceRoute,
+  staffPayoutRoute,
   staffIdentityRoute,
   staffIdentityCompleteRoute,
   staffExportRoute,

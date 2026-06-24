@@ -5,12 +5,16 @@ import {
   StaffBalanceSchema,
   ConnectOnboardResponseSchema,
   JoinStoreResultSchema,
+  CreatePayoutResultSchema,
+  PayoutListSchema,
   type StaffMe,
   type InviteInfo,
   type StaffTipsResponse,
   type StaffBalance,
   type ConnectOnboardResponse,
   type JoinStoreResult,
+  type CreatePayoutResult,
+  type PayoutList,
   type CreateStaffProfileInput,
   type UpdateStaffProfileInput,
 } from "@arigato/shared";
@@ -153,6 +157,42 @@ export async function startConnectOnboard(): Promise<ConnectOnboardResponse> {
     throw new Error(`connect onboard failed: ${res.status}`);
   }
   return ConnectOnboardResponseSchema.parse(await res.json());
+}
+
+/**
+ * POST /staff/me/payouts — 送金（振込申請）。着金可能額の全額を登録口座へ送金する（手動送金）。
+ * 失敗時は error コードを添えて投げる（payout_not_verified＝本人確認/口座登録が必要・409 /
+ * payout_below_minimum＝最低送金額に満たない・422）。呼び出し側はこのコードで案内を出し分ける。
+ */
+export async function createPayout(): Promise<CreatePayoutResult> {
+  const res = await apiClient.staff.me.payouts.$post();
+  if (!res.ok) {
+    // バックの error コードをそのまま投げ、フロントで導線（本人確認誘導・残高不足案内）を出し分ける
+    let code = `status_${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) code = body.error;
+    } catch {
+      // JSON でなければステータスのみ
+    }
+    throw new Error(code);
+  }
+  return CreatePayoutResultSchema.parse(await res.json());
+}
+
+/**
+ * GET /staff/me/payouts — 自分の送金履歴（金額・状態・申請日時・着金日時）を取得する（本人のみ）。
+ * 未作成（404）の場合は null。
+ */
+export async function fetchPayouts(): Promise<PayoutList | null> {
+  const res = await apiClient.staff.me.payouts.$get();
+  if (res.status === 404) {
+    return null;
+  }
+  if (!res.ok) {
+    throw new Error(`staff payouts request failed: ${res.status}`);
+  }
+  return PayoutListSchema.parse(await res.json());
 }
 
 /**

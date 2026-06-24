@@ -46,6 +46,12 @@ export type VerifiedWebhookEvent = {
   accountId: string | null;
   // Connected Account の payouts_enabled（着金可否の起点。account.updated 以外は null）
   payoutsEnabled: boolean | null;
+  // payout.* 系の Stripe Payout ID（該当しないイベントは null。送金の着金/失敗の照合に使う）
+  payoutId: string | null;
+  // payout.* の着金日時（payout.paid の arrival_date から。未設定・対象外は null）
+  payoutArrivedAt: Date | null;
+  // payout.failed の失敗理由（failure_message。対象外は null）
+  payoutFailureReason: string | null;
 };
 
 // Connect オンボーディングリンク発行の入力（infrastructure が受け取るパラメータ）
@@ -73,4 +79,20 @@ export type PaymentIntentStatusSnapshot = {
   paymentIntentId: string;
   // Stripe 側のステータス（succeeded / canceled / requires_payment_method など）
   status: string;
+};
+
+// 送金（payout）を Connected Account 上で実行するときに infrastructure が受け取るパラメータ
+export type CreatePayoutParams = {
+  // 送金元の Connected Account（この口座の残高から銀行へ payout する）
+  connectedAccountId: string;
+  // 送金額（店員さんが銀行で受け取る額・円）。JPY は最小単位＝1円のため整数をそのまま渡す
+  amount: number;
+  // 通貨コード（jpy）
+  currency: string;
+};
+
+// 送金（payout）実行の結果（feature 側はこれを受け取って payout を記録する）
+export type CreatePayoutResult = {
+  // 生成された Stripe Payout の ID（payout 行に保存し、payout.* Webhook で照合する）
+  payoutId: string;
 };

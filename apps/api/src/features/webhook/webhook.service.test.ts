@@ -33,6 +33,9 @@ function succeededEvent(
     tipId: "tipId" in opts ? (opts.tipId ?? null) : "tip_1",
     accountId: null,
     payoutsEnabled: null,
+    payoutId: null,
+    payoutArrivedAt: null,
+    payoutFailureReason: null,
   };
 }
 
@@ -49,8 +52,51 @@ function accountUpdatedEvent(
     tipId: null,
     accountId,
     payoutsEnabled,
+    payoutId: null,
+    payoutArrivedAt: null,
+    payoutFailureReason: null,
   };
 }
+
+// payout.paid / payout.failed の検証済みイベントを作る（Stripe Payout ID で照合する）
+function payoutEvent(
+  eventId: string,
+  type: "payout.paid" | "payout.failed",
+  payoutId: string,
+  opts: { arrivedAt?: Date | null; failureReason?: string | null } = {},
+): VerifiedEvent {
+  return {
+    id: eventId,
+    type,
+    paymentIntentId: null,
+    tipId: null,
+    accountId: null,
+    payoutsEnabled: null,
+    payoutId,
+    payoutArrivedAt: opts.arrivedAt ?? null,
+    payoutFailureReason: opts.failureReason ?? null,
+  };
+}
+
+// payout.* 反映関数のモック。反映できたか（true）を返す。冪等のため受信済み payout ID は false にできる。
+function makeApplyPayoutUpdate(updated = true) {
+  const seen = new Set<string>();
+  return vi.fn(
+    async (params: {
+      kind: "paid" | "failed";
+      stripePayoutId: string;
+      arrivedAt: Date | null;
+      failureReason: string | null;
+    }) => {
+      if (seen.has(params.stripePayoutId)) return false;
+      seen.add(params.stripePayoutId);
+      return updated;
+    },
+  );
+}
+
+// 既定の no-op applyPayoutUpdate（payout 以外のテストで使う）
+const noopApplyPayoutUpdate = vi.fn(async () => false);
 
 // テスト用の更新関数群（tipId 主・PaymentIntent ID 従）を、件数を固定して作る
 function makeUpdateDeps(returns = 1) {
@@ -90,6 +136,7 @@ describe("webhook.service handleStripeWebhook", () => {
       repo,
       update,
       noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
       succeededEvent("evt_1"),
     );
 
@@ -102,6 +149,7 @@ describe("webhook.service handleStripeWebhook", () => {
       tipUpdated: true,
       identityVerified: false,
       promotedTips: 0,
+      payoutUpdated: false,
     });
   });
 
@@ -116,8 +164,11 @@ describe("webhook.service handleStripeWebhook", () => {
       tipId: "tip_2",
       accountId: null,
       payoutsEnabled: null,
+      payoutId: null,
+      payoutArrivedAt: null,
+      payoutFailureReason: null,
     };
-    const result = await handleStripeWebhook(repo, update, noopApplyAccountUpdate, failed);
+    const result = await handleStripeWebhook(repo, update, noopApplyAccountUpdate, noopApplyPayoutUpdate, failed);
 
     expect(update.byTipId).toHaveBeenCalledWith("tip_2", "failed", "pi_2");
     expect(result.tipUpdated).toBe(true);
@@ -131,6 +182,7 @@ describe("webhook.service handleStripeWebhook", () => {
       repo,
       update,
       noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
       succeededEvent("evt_pi_only", { tipId: null, piId: "pi_only" }),
     );
 
@@ -148,6 +200,7 @@ describe("webhook.service handleStripeWebhook", () => {
       repo,
       update,
       noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
       succeededEvent("evt_same"),
     );
     // 2回目: 同じイベント ID → 冪等にスキップ
@@ -155,6 +208,7 @@ describe("webhook.service handleStripeWebhook", () => {
       repo,
       update,
       noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
       succeededEvent("evt_same"),
     );
 
@@ -177,8 +231,11 @@ describe("webhook.service handleStripeWebhook", () => {
       tipId: "tip_x",
       accountId: null,
       payoutsEnabled: null,
+      payoutId: null,
+      payoutArrivedAt: null,
+      payoutFailureReason: null,
     };
-    const result = await handleStripeWebhook(repo, update, noopApplyAccountUpdate, other);
+    const result = await handleStripeWebhook(repo, update, noopApplyAccountUpdate, noopApplyPayoutUpdate, other);
 
     expect(update.byTipId).not.toHaveBeenCalled();
     expect(update.byPaymentIntentId).not.toHaveBeenCalled();
@@ -194,6 +251,7 @@ describe("webhook.service handleStripeWebhook", () => {
       repo,
       update,
       noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
       succeededEvent("evt_3"),
     );
 
@@ -213,6 +271,7 @@ describe("webhook.service handleStripeWebhook", () => {
       repo,
       update,
       applyAccountUpdate,
+      noopApplyPayoutUpdate,
       accountUpdatedEvent("evt_acct_1", "acct_123", true),
     );
 
@@ -225,6 +284,7 @@ describe("webhook.service handleStripeWebhook", () => {
       tipUpdated: false,
       identityVerified: true,
       promotedTips: 3,
+      payoutUpdated: false,
     });
   });
 
@@ -237,6 +297,7 @@ describe("webhook.service handleStripeWebhook", () => {
       repo,
       update,
       applyAccountUpdate,
+      noopApplyPayoutUpdate,
       accountUpdatedEvent("evt_acct_same", "acct_123", true),
     );
     // 同一イベント ID の再送 → webhook_event の冪等性でスキップ
@@ -244,6 +305,7 @@ describe("webhook.service handleStripeWebhook", () => {
       repo,
       update,
       applyAccountUpdate,
+      noopApplyPayoutUpdate,
       accountUpdatedEvent("evt_acct_same", "acct_123", true),
     );
 
@@ -265,6 +327,7 @@ describe("webhook.service handleStripeWebhook", () => {
       repo,
       update,
       applyAccountUpdate,
+      noopApplyPayoutUpdate,
       accountUpdatedEvent("evt_acct_a", "acct_777", true),
     );
     // 別イベント ID（webhook_event は通過する）だが、口座は既に verified
@@ -272,6 +335,7 @@ describe("webhook.service handleStripeWebhook", () => {
       repo,
       update,
       applyAccountUpdate,
+      noopApplyPayoutUpdate,
       accountUpdatedEvent("evt_acct_b", "acct_777", true),
     );
 
@@ -291,11 +355,93 @@ describe("webhook.service handleStripeWebhook", () => {
       repo,
       update,
       applyAccountUpdate,
+      noopApplyPayoutUpdate,
       accountUpdatedEvent("evt_acct_pending", "acct_999", false),
     );
 
     expect(applyAccountUpdate).toHaveBeenCalledWith("acct_999", false);
     expect(result.identityVerified).toBe(false);
     expect(result.promotedTips).toBe(0);
+  });
+
+  // --- payout.paid / payout.failed（送金の着金確定・失敗） ---
+
+  it("payout.paid で送金を着金済へ反映する（着金日時を渡す）", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(0);
+    const applyPayout = makeApplyPayoutUpdate(true);
+    const arrivedAt = new Date("2026-06-30T00:00:00Z");
+
+    const result = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      applyPayout,
+      payoutEvent("evt_po_paid", "payout.paid", "po_123", { arrivedAt }),
+    );
+
+    // 着金確定は Webhook を正とする。kind=paid・arrivedAt を渡して反映する
+    expect(applyPayout).toHaveBeenCalledWith({
+      kind: "paid",
+      stripePayoutId: "po_123",
+      arrivedAt,
+      failureReason: null,
+    });
+    // tip の決済更新・account 反映は呼ばれない
+    expect(update.byTipId).not.toHaveBeenCalled();
+    expect(noopApplyAccountUpdate).not.toHaveBeenCalled();
+    expect(result.payoutUpdated).toBe(true);
+  });
+
+  it("payout.failed で送金を失敗にし、tip を payable へ戻す（失敗理由を渡す）", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(0);
+    const applyPayout = makeApplyPayoutUpdate(true);
+
+    const result = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      applyPayout,
+      payoutEvent("evt_po_failed", "payout.failed", "po_456", {
+        failureReason: "account_closed",
+      }),
+    );
+
+    expect(applyPayout).toHaveBeenCalledWith({
+      kind: "failed",
+      stripePayoutId: "po_456",
+      arrivedAt: null,
+      failureReason: "account_closed",
+    });
+    expect(result.payoutUpdated).toBe(true);
+  });
+
+  it("payout.* は冪等で、同一イベント再送では二重反映しない", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(0);
+    const applyPayout = makeApplyPayoutUpdate(true);
+
+    const first = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      applyPayout,
+      payoutEvent("evt_po_same", "payout.paid", "po_789"),
+    );
+    // 同一イベント ID の再送 → webhook_event の冪等性でスキップ
+    const second = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      applyPayout,
+      payoutEvent("evt_po_same", "payout.paid", "po_789"),
+    );
+
+    expect(first.payoutUpdated).toBe(true);
+    expect(second.duplicate).toBe(true);
+    expect(second.payoutUpdated).toBe(false);
+    // 反映は1回だけ（二重反映しない）
+    expect(applyPayout).toHaveBeenCalledTimes(1);
   });
 });

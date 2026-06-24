@@ -1,4 +1,4 @@
-import { STAFF_TAKE_RATE } from "@arigato/shared";
+import { STAFF_TAKE_RATE, MIN_PAYOUT_AMOUNT } from "@arigato/shared";
 
 /**
  * staff feature の Model 層（純粋関数）。
@@ -138,6 +138,34 @@ export function buildTaxReportCsv(rows: TaxReportRow[]): string {
   }
   // 行は CRLF で区切る（RFC4180）。先頭に BOM。
   return "﻿" + lines.join("\r\n") + "\r\n";
+}
+
+// 送金（payout）のステータス（pending: 申請中 / paid: 着金済 / failed: 失敗）
+export type PayoutStatus = "pending" | "paid" | "failed";
+
+// 送金申請の可否判定の結果区分。
+// ok: 申請できる / not_verified: 本人確認・口座登録が未完了 / below_minimum: 着金可能額が最低送金額に満たない
+export type PayoutEligibility = "ok" | "not_verified" | "below_minimum";
+
+/**
+ * 送金（振込申請）が今できるかを判定する純粋関数。
+ * 手動送金（メルカリ型）の業務ルールを1か所に集約する:
+ *  - verified（着金可能＝口座登録済）でなければ申請できない（not_verified）。
+ *  - 着金可能額（payable な tip の手取り合計）が最低送金額 MIN_PAYOUT_AMOUNT 未満なら申請できない（below_minimum）。
+ *    残高0も同様に below_minimum。
+ *  - 上記を満たせば全額を送金できる（ok）。送金額は着金可能額の全額（部分送金なし）。
+ *
+ * payableTakeAmount は payable な tip の「手取り合計（floor(amount×0.85) の総和）」を渡すこと。
+ */
+export function evaluatePayoutEligibility(
+  identityStatus: IdentityStatus,
+  payableTakeAmount: number,
+): PayoutEligibility {
+  // verified でなければ着金できない（本人確認・口座登録が必要）
+  if (!canPayout(identityStatus)) return "not_verified";
+  // 最低送金額に満たない（残高0を含む）
+  if (payableTakeAmount < MIN_PAYOUT_AMOUNT) return "below_minimum";
+  return "ok";
 }
 
 /**

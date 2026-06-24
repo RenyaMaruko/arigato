@@ -36,6 +36,10 @@ export const tip = pgTable("tip", {
   status: text("status").notNull().default("pending"),
   // 着金ステータス（held: 保留 / payable: 着金可能 / paid: 着金済）
   settlementStatus: text("settlement_status").notNull().default("held"),
+  // この tip がどの送金（payout）で paid になったかの追跡（未送金は null）。
+  // payout.failed で paid→payable へ戻すときに、対象 tip をこの payout_id で特定する。
+  // payout テーブルを直接 import すると循環参照になるため、FK は payout 側から張らず ID 文字列で保持する。
+  payoutId: uuid("payout_id"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
   succeededAt: timestamp("succeeded_at", { withTimezone: true }),
 });

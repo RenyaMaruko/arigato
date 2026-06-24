@@ -10,9 +10,14 @@ import {
   getStaffTaxReport,
   startConnectOnboarding,
   applyConnectAccountUpdate,
+  createStaffPayout,
+  getStaffPayouts,
+  applyPayoutWebhookUpdate,
   InviteNotUsableError,
   StaffAlreadyExistsError,
   StaffNotFoundError,
+  PayoutNotVerifiedError,
+  PayoutBelowMinimumError,
 } from "./staff.service.js";
 import { buildTipUrl } from "./staff.model.js";
 import type {
@@ -38,18 +43,40 @@ import type {
  * - Connect オンボーディング・account.updated（held→payable 遷移・冪等）
  */
 
+// 受取履歴の拡張型（送金検証のため payoutId 追跡を足したもの。既存シードを壊さないため任意）
+type TestTip = StaffTipRow & { payoutId?: string | null };
+// 送金（payout）の内部表現
+type TestPayout = {
+  id: string;
+  staffId: string;
+  authUserId: string;
+  amount: number;
+  status: "pending" | "paid" | "failed";
+  stripePayoutId: string;
+  createdAt: string;
+  arrivedAt: string | null;
+  failureReason: string | null;
+};
+
 // テスト用のモック Repository（実 DB を使わず Service のロジックを検証する・多対多）
 function createMockRepo() {
   const invites = new Map<string, InviteRow>();
   const staffByAuth = new Map<string, StaffProfileRow>();
   // authUserId → 所属（membership）一覧
   const membershipsByAuth = new Map<string, StaffMembershipRow[]>();
-  // authUserId → 受取履歴（本人スコープを検証するため auth ごとに分けて保持）
-  const tipsByAuth = new Map<string, StaffTipRow[]>();
+  // authUserId → 受取履歴（本人スコープを検証するため auth ごとに分けて保持）。
+  // 送金検証用に id・payoutId を含む拡張型で保持する（StaffTipRow に追跡用フィールドを足したもの）。
+  const tipsByAuth = new Map<string, TestTip[]>();
   // authUserId → Connected Account ID
   const accountByAuth = new Map<string, string | null>();
+  // staffId（人）→ authUserId（payout 反映時に本人を逆引きするため）
+  const authByStaffId = new Map<string, string>();
+  // payout（送金）の簡易ストア（payoutId をキー）
+  const payoutsByStaff = new Map<string, TestPayout>();
   // membership ID の採番カウンタ
   let membershipSeq = 0;
+  // payout ID の採番カウンタ
+  let payoutSeq = 0;
 
   const repo: StaffRepository = {
     async findInviteByCode(code) {
@@ -74,6 +101,8 @@ function createMockRepo() {
       staffByAuth.set(params.authUserId, row);
       accountByAuth.set(params.authUserId, null);
       membershipsByAuth.set(params.authUserId, []);
+      // staffId → authUserId の逆引きを登録（payout 反映で使う）
+      authByStaffId.set(row.id, params.authUserId);
       return row;
     },
     // 招待コードで所属（staff_store）を追加する（参加の確定点）。
@@ -186,9 +215,99 @@ function createMockRepo() {
       tipsByAuth.set(foundAuth, next);
       return { found: true, verified: true, promotedTips: promoted };
     },
+
+    // 送金（payout）の本人・Connect 連携状態を返す
+    async findPayoutContext(authUserId) {
+      const profile = staffByAuth.get(authUserId);
+      if (!profile) return null;
+      return {
+        staffId: profile.id,
+        stripeAccountId: accountByAuth.get(authUserId) ?? null,
+        identityStatus: profile.identityStatus,
+      };
+    },
+    // 本人の着金可能（payable）な tip の id・額面を返す（本人スコープ）。tip に id を採番して返す
+    async listPayableTipsByAuthUserId(authUserId) {
+      const tips = tipsByAuth.get(authUserId) ?? [];
+      return tips
+        .filter((t) => t.settlementStatus === "payable")
+        .map((t) => ({ tipId: t.id, amount: t.amount }));
+    },
+    // 送金記録（pending）を作り、対象 tip を paid＋payout_id 紐付けへ更新する
+    async createPayoutAndMarkTipsPaid(params) {
+      payoutSeq += 1;
+      const id = `payout-${payoutSeq}`;
+      payoutsByStaff.set(id, {
+        id,
+        staffId: params.staffId,
+        authUserId: authByStaffId.get(params.staffId)!,
+        amount: params.amount,
+        status: "pending",
+        stripePayoutId: params.stripePayoutId,
+        createdAt: new Date().toISOString(),
+        arrivedAt: null,
+        failureReason: null,
+      });
+      // 対象の payable な tip を paid＋紐付けへ
+      const auth = authByStaffId.get(params.staffId)!;
+      const tips = tipsByAuth.get(auth) ?? [];
+      const next = tips.map((t) =>
+        params.tipIds.includes(t.id) && t.settlementStatus === "payable"
+          ? { ...t, settlementStatus: "paid" as const, payoutId: id }
+          : t,
+      );
+      tipsByAuth.set(auth, next);
+      return { id, amount: params.amount, status: "pending" as const };
+    },
+    // 本人の送金履歴を新しい順に返す（本人スコープ）
+    async listPayoutsByAuthUserId(authUserId) {
+      return [...payoutsByStaff.values()]
+        .filter((p) => p.authUserId === authUserId)
+        .sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1))
+        .map((p) => ({
+          id: p.id,
+          amount: p.amount,
+          status: p.status,
+          createdAt: p.createdAt,
+          arrivedAt: p.arrivedAt,
+          failureReason: p.failureReason,
+        }));
+    },
+    // payout.paid を反映する（stripe_payout_id で照合・冪等）
+    async markPayoutPaid(stripePayoutId, arrivedAt) {
+      for (const p of payoutsByStaff.values()) {
+        if (p.stripePayoutId === stripePayoutId && p.status !== "paid") {
+          p.status = "paid";
+          p.arrivedAt = arrivedAt.toISOString();
+          return true;
+        }
+      }
+      return false;
+    },
+    // payout.failed を反映し、対象 tip を payable へ戻す（stripe_payout_id で照合・冪等）
+    async markPayoutFailedAndRevertTips(stripePayoutId, failureReason) {
+      for (const p of payoutsByStaff.values()) {
+        if (p.stripePayoutId === stripePayoutId && p.status !== "failed") {
+          p.status = "failed";
+          p.failureReason = failureReason;
+          // この payout で paid になった tip を payable へ戻す
+          const tips = tipsByAuth.get(p.authUserId) ?? [];
+          tipsByAuth.set(
+            p.authUserId,
+            tips.map((t) =>
+              t.payoutId === p.id && t.settlementStatus === "paid"
+                ? { ...t, settlementStatus: "payable" as const, payoutId: null }
+                : t,
+            ),
+          );
+          return true;
+        }
+      }
+      return false;
+    },
   };
 
-  return { repo, invites, staffByAuth, membershipsByAuth, tipsByAuth, accountByAuth };
+  return { repo, invites, staffByAuth, membershipsByAuth, tipsByAuth, accountByAuth, payoutsByStaff };
 }
 
 // QR用URL の組み立て（ローカルのベース URL を使う・membership 単位）
@@ -580,5 +699,134 @@ describe("staff.service", () => {
     const res = await applyConnectAccountUpdate(mock.repo, "acct_unknown", true);
     expect(res.found).toBe(false);
     expect(res.promotedTips).toBe(0);
+  });
+
+  // --- 送金（payout）---
+
+  // A を verified にして payable な tip を用意するヘルパ（送金検証の前提を整える）
+  async function setupVerifiedWithPayable() {
+    await seedTwoStaffWithTips();
+    await startConnectOnboarding(
+      mock.repo,
+      async () => ({
+        onboardingUrl: "https://connect.stripe.com/x",
+        connectedAccountId: "acct_A",
+      }),
+      () => ({ returnUrl: "r", refreshUrl: "f" }),
+      "auth-A",
+    );
+    // account.updated で verified へ → A の held 2件（額面300/500）が payable（手取り 255+425=680）へ
+    await applyConnectAccountUpdate(mock.repo, "acct_A", true);
+  }
+
+  // テスト用の Stripe payout 実行（呼ばれた額を記録し、指定の payout ID を返す）
+  function makeStripePayout(payoutId = "po_test_1") {
+    return vi.fn(
+      async (_params: { connectedAccountId: string; amount: number; currency: string }) => ({
+        payoutId,
+      }),
+    );
+  }
+
+  it("createStaffPayout: verified＋payable があれば全額（手取り合計）を送金し、tip を paid にする", async () => {
+    await setupVerifiedWithPayable();
+    const stripePayout = makeStripePayout();
+
+    const result = await createStaffPayout(mock.repo, stripePayout, "auth-A");
+    expect(result).not.toBeNull();
+    // 送金額は payable な tip の手取り合計（255+425=680）。全額送金（部分送金なし）
+    expect(result!.amount).toBe(680);
+    expect(result!.status).toBe("pending");
+    // Stripe payout は Connected Account 上で手取り合計を送金する
+    expect(stripePayout).toHaveBeenCalledWith({
+      connectedAccountId: "acct_A",
+      amount: 680,
+      currency: "jpy",
+    });
+
+    // 残高: payable→paid に移り、着金可能額は 0 になる（二重送金を防ぐ）
+    const balance = await getStaffBalance(mock.repo, "auth-A");
+    expect(balance!.payableAmount).toBe(0);
+    expect(balance!.paidAmount).toBe(680);
+
+    // 送金履歴に1件（pending・680円）が現れる
+    const payouts = await getStaffPayouts(mock.repo, "auth-A");
+    expect(payouts!.items).toHaveLength(1);
+    expect(payouts!.items[0]!.amount).toBe(680);
+    expect(payouts!.items[0]!.status).toBe("pending");
+  });
+
+  it("createStaffPayout: verified でなければ PayoutNotVerifiedError（本人確認・口座登録が必要）", async () => {
+    // verified にせず（held のまま）に送金を試みる
+    await seedTwoStaffWithTips();
+    const stripePayout = makeStripePayout();
+    await expect(createStaffPayout(mock.repo, stripePayout, "auth-A")).rejects.toBeInstanceOf(
+      PayoutNotVerifiedError,
+    );
+    // Stripe payout は実行されない
+    expect(stripePayout).not.toHaveBeenCalled();
+  });
+
+  it("createStaffPayout: 着金可能額が最低送金額未満なら PayoutBelowMinimumError", async () => {
+    // verified だが payable が無い（残高0）状態を作る
+    await setupAndJoin(mock, "auth-C", "Cさん", "INV-OK");
+    await startConnectOnboarding(
+      mock.repo,
+      async () => ({
+        onboardingUrl: "https://connect.stripe.com/x",
+        connectedAccountId: "acct_C",
+      }),
+      () => ({ returnUrl: "r", refreshUrl: "f" }),
+      "auth-C",
+    );
+    await applyConnectAccountUpdate(mock.repo, "acct_C", true);
+
+    const stripePayout = makeStripePayout();
+    await expect(createStaffPayout(mock.repo, stripePayout, "auth-C")).rejects.toBeInstanceOf(
+      PayoutBelowMinimumError,
+    );
+    expect(stripePayout).not.toHaveBeenCalled();
+  });
+
+  it("createStaffPayout: プロフィール未作成なら null", async () => {
+    const stripePayout = makeStripePayout();
+    const result = await createStaffPayout(mock.repo, stripePayout, "auth-unknown");
+    expect(result).toBeNull();
+  });
+
+  it("applyPayoutWebhookUpdate: payout.paid で着金済へ・payout.failed で paid→payable へ戻す", async () => {
+    await setupVerifiedWithPayable();
+    const stripePayout = makeStripePayout();
+    await createStaffPayout(mock.repo, stripePayout, "auth-A");
+
+    // payout.failed → 送金失敗・対象 tip は payable へ戻る（着金可能額が復活する）
+    const reverted = await applyPayoutWebhookUpdate(mock.repo, {
+      kind: "failed",
+      stripePayoutId: "po_test_1",
+      arrivedAt: null,
+      failureReason: "account_closed",
+    });
+    expect(reverted).toBe(true);
+    const afterFail = await getStaffBalance(mock.repo, "auth-A");
+    expect(afterFail!.payableAmount).toBe(680);
+    expect(afterFail!.paidAmount).toBe(0);
+    const failedHistory = await getStaffPayouts(mock.repo, "auth-A");
+    expect(failedHistory!.items[0]!.status).toBe("failed");
+    expect(failedHistory!.items[0]!.failureReason).toBe("account_closed");
+
+    // 再送金して payout.paid → 着金済（arrived_at 記録）。payable は再び 0 になる
+    await createStaffPayout(mock.repo, makeStripePayout("po_test_2"), "auth-A");
+    const paid = await applyPayoutWebhookUpdate(mock.repo, {
+      kind: "paid",
+      stripePayoutId: "po_test_2",
+      arrivedAt: new Date("2026-07-01T00:00:00Z"),
+      failureReason: null,
+    });
+    expect(paid).toBe(true);
+    const paidHistory = await getStaffPayouts(mock.repo, "auth-A");
+    // 最新（先頭）の送金が paid・着金日時つき
+    const latestPaid = paidHistory!.items.find((p) => p.status === "paid");
+    expect(latestPaid).toBeTruthy();
+    expect(latestPaid!.arrivedAt).not.toBeNull();
   });
 });

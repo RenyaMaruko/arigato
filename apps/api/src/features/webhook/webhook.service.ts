@@ -21,6 +21,12 @@ export type VerifiedEvent = {
   accountId: string | null;
   // Connected Account の payouts_enabled（着金可否の起点。account.updated 以外は null）
   payoutsEnabled: boolean | null;
+  // payout.* 系の Stripe Payout ID（送金の着金/失敗の照合に使う。該当しないイベントは null）
+  payoutId: string | null;
+  // payout.paid の着金日時（対象外は null）
+  payoutArrivedAt: Date | null;
+  // payout.failed の失敗理由（対象外は null）
+  payoutFailureReason: string | null;
 };
 
 /**
@@ -52,7 +58,27 @@ export type HandleWebhookResult = {
   identityVerified: boolean;
   // account.updated で held → payable へ遷移した tip の件数
   promotedTips: number;
+  // payout.* で送金（payout）の状態を更新できたか（該当 payout 無し・冪等スキップなら false）
+  payoutUpdated: boolean;
 };
+
+/**
+ * payout.* （送金の着金確定・失敗）を反映する関数（コンポジションルートで配線）。
+ * webhook feature は staff feature を直接 import せず、この注入関数を通して状態更新を行う。
+ *  - payout.paid   → status=paid・arrived_at 記録
+ *  - payout.failed → status=failed・failure_reason 記録・該当 tip を payable へ戻す
+ * 反映できたか（boolean）を返す（既に確定済み・該当 payout 無しなら false）。
+ */
+export type ApplyPayoutUpdate = (params: {
+  // 確定種別（paid / failed）
+  kind: "paid" | "failed";
+  // 自前 payout を照合する Stripe Payout ID
+  stripePayoutId: string;
+  // payout.paid の着金日時
+  arrivedAt: Date | null;
+  // payout.failed の失敗理由
+  failureReason: string | null;
+}) => Promise<boolean>;
 
 /**
  * account.updated（Connected Account の状態変化）を本人確認・着金へ反映する関数（コンポジションルートで配線）。
@@ -70,63 +96,70 @@ const EVENT_TO_TIP_STATUS: Record<string, TipStatus | undefined> = {
   "payment_intent.payment_failed": "failed",
 };
 
+// 何も更新しなかったときの結果の素地（冪等記録だけ残した・対象外イベント等）
+const NO_OP_RESULT: HandleWebhookResult = {
+  received: true,
+  duplicate: false,
+  tipUpdated: false,
+  identityVerified: false,
+  promotedTips: 0,
+  payoutUpdated: false,
+};
+
 /**
  * 署名検証済みの Webhook イベントを処理する。
  * 冪等性を最初に判定し、新規のときだけ状態更新を行う:
  *  - payment_intent.* → tip.status を更新
  *  - account.updated   → 注入された applyAccountUpdate で identity_status / settlement_status を遷移
+ *  - payout.paid / payout.failed → 注入された applyPayoutUpdate で送金の着金確定・失敗を反映
  * 同一イベント ID の再送は冪等にスキップし、二重遷移しない。
  */
 export async function handleStripeWebhook(
   repo: WebhookRepository,
   updateTip: UpdateTipStatusDeps,
   applyAccountUpdate: ApplyAccountUpdate,
+  applyPayoutUpdate: ApplyPayoutUpdate,
   event: VerifiedEvent,
 ): Promise<HandleWebhookResult> {
   // 冪等性: 同一イベント ID を2回受けても2回目は記録できず false → 何もせずスキップ
   const isNew = await repo.recordEventIfNew(event.id, event.type);
   if (!isNew) {
-    return {
-      received: true,
-      duplicate: true,
-      tipUpdated: false,
-      identityVerified: false,
-      promotedTips: 0,
-    };
+    return { ...NO_OP_RESULT, duplicate: true };
   }
 
   // account.updated: 本人確認の遷移（verified）と held→payable の遷移を行う
   if (event.type === "account.updated") {
     // Connected Account ID が無ければ対象なし（冪等記録だけ残す）
     if (!event.accountId) {
-      return {
-        received: true,
-        duplicate: false,
-        tipUpdated: false,
-        identityVerified: false,
-        promotedTips: 0,
-      };
+      return NO_OP_RESULT;
     }
     const result = await applyAccountUpdate(event.accountId, event.payoutsEnabled === true);
     return {
-      received: true,
-      duplicate: false,
-      tipUpdated: false,
+      ...NO_OP_RESULT,
       identityVerified: result.verified,
       promotedTips: result.promotedTips,
     };
   }
 
+  // payout.paid / payout.failed: 送金の着金確定・失敗を反映する（着金確定は Webhook を正とする）
+  if (event.type === "payout.paid" || event.type === "payout.failed") {
+    // Stripe Payout ID が無ければ照合できず対象なし（冪等記録だけ残す）
+    if (!event.payoutId) {
+      return NO_OP_RESULT;
+    }
+    const updated = await applyPayoutUpdate({
+      kind: event.type === "payout.paid" ? "paid" : "failed",
+      stripePayoutId: event.payoutId,
+      arrivedAt: event.payoutArrivedAt,
+      failureReason: event.payoutFailureReason,
+    });
+    return { ...NO_OP_RESULT, payoutUpdated: updated };
+  }
+
   // 種別を tip ステータスへ写像（対象外イベントはここで終了。冪等記録だけ残す）
   const nextStatus = EVENT_TO_TIP_STATUS[event.type];
   if (!nextStatus) {
-    return {
-      received: true,
-      duplicate: false,
-      tipUpdated: false,
-      identityVerified: false,
-      promotedTips: 0,
-    };
+    return NO_OP_RESULT;
   }
 
   // tip の確定: metadata.tipId があれば tipId で確定（主経路。判明した PaymentIntent ID も記録する）。
@@ -139,11 +172,5 @@ export async function handleStripeWebhook(
   }
 
   // 該当 tip が無い（例: CLI trigger の無関係なテストイベント）場合は 0 件で tipUpdated=false
-  return {
-    received: true,
-    duplicate: false,
-    tipUpdated: updated > 0,
-    identityVerified: false,
-    promotedTips: 0,
-  };
+  return { ...NO_OP_RESULT, tipUpdated: updated > 0 };
 }

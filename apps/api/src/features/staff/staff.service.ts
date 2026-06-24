@@ -7,7 +7,10 @@ import type {
   StaffTipsResponse,
   StaffBalance,
   ConnectOnboardResponse,
+  CreatePayoutResult,
+  PayoutList,
 } from "@arigato/shared";
+import { CURRENCY } from "@arigato/shared";
 import {
   canPayout,
   isInviteUsable,
@@ -16,6 +19,7 @@ import {
   summarizeBalance,
   buildTaxReportCsv,
   calculateStaffTakeAmount,
+  evaluatePayoutEligibility,
   type IdentityStatus,
 } from "./staff.model.js";
 import type {
@@ -24,7 +28,10 @@ import type {
   StaffMembershipRow,
   ApplyAccountUpdateResult,
 } from "./staff.repository.js";
-import type { CreateOnboardingLinkResult } from "../../infrastructure/stripe/stripe.types.js";
+import type {
+  CreateOnboardingLinkResult,
+  CreatePayoutResult as StripeCreatePayoutResult,
+} from "../../infrastructure/stripe/stripe.types.js";
 
 /**
  * staff feature の Service 層（ユースケースの指揮者・アクセス制御）。
@@ -365,4 +372,148 @@ export async function applyConnectAccountUpdate(
   payoutsEnabled: boolean,
 ): Promise<ApplyAccountUpdateResult> {
   return repo.applyAccountUpdate(stripeAccountId, payoutsEnabled);
+}
+
+// Stripe payout を実行する infrastructure 関数の型（コンポジションルートで注入）
+export type CreatePayout = (params: {
+  connectedAccountId: string;
+  amount: number;
+  currency: string;
+}) => Promise<StripeCreatePayoutResult>;
+
+// 送金申請で起こりうる業務エラー（Route で HTTP ステータスに変換する）。
+// 本人確認・口座登録が未完了（verified でない）。Route で 409 にする
+export class PayoutNotVerifiedError extends Error {
+  constructor() {
+    super("payout_not_verified");
+    this.name = "PayoutNotVerifiedError";
+  }
+}
+// 着金可能額が最低送金額（¥100）に満たない（残高0を含む）。Route で 422 にする
+export class PayoutBelowMinimumError extends Error {
+  constructor() {
+    super("payout_below_minimum");
+    this.name = "PayoutBelowMinimumError";
+  }
+}
+
+/**
+ * 送金（振込申請）を実行する（POST /staff/me/payouts・本人スコープ）。
+ * 手動送金（メルカリ型）。着金可能額（payable な tip の手取り合計）の「全額」を銀行へ送金申請する。
+ *
+ * 業務ルール（Model に集約）:
+ *  - verified（着金可能＝口座登録済）でなければ PayoutNotVerifiedError。
+ *  - 着金可能額が最低送金額（¥100）未満／残高0なら PayoutBelowMinimumError。
+ *
+ * 流れ:
+ *  1. 本人の Connect 連携状態と着金可能な tip を取得する。
+ *  2. 送金額＝payable な tip の手取り合計（floor(amount×0.85) の総和）を Model で算出する。
+ *  3. 可否を判定（verified必須・最低額・全額）。
+ *  4. Stripe payout を Connected Account 上で実行する（残高→銀行。送金手数料は店員から取らない）。
+ *  5. payout 行を pending で記録し、対象の payable tip を paid＋payout_id 紐付けに更新する（トランザクション）。
+ *
+ * 着金の確定は payout.paid / payout.failed Webhook を正とする（ここでは pending で記録するだけ）。
+ * プロフィール未作成なら null。
+ */
+export async function createStaffPayout(
+  repo: StaffRepository,
+  createPayout: CreatePayout,
+  authUserId: string,
+): Promise<CreatePayoutResult | null> {
+  // 本人の Connect 連携状態を取得（未作成なら null → 404）
+  const ctx = await repo.findPayoutContext(authUserId);
+  if (!ctx) return null;
+
+  // 着金可能（payable）な tip の id・額面を取得し、手取り合計を Model で算出する
+  const payableTips = await repo.listPayableTipsByAuthUserId(authUserId);
+  // 1件ごとに手取り（約85%・floor）へ変換して合算する（受取履歴・残高の表示と整合）
+  const payoutAmount = payableTips.reduce(
+    (sum, t) => sum + calculateStaffTakeAmount(t.amount),
+    0,
+  );
+
+  // 送金可否を判定（verified必須・最低¥100・全額）。Model の純粋関数に集約
+  const eligibility = evaluatePayoutEligibility(ctx.identityStatus, payoutAmount);
+  if (eligibility === "not_verified") {
+    throw new PayoutNotVerifiedError();
+  }
+  if (eligibility === "below_minimum") {
+    throw new PayoutBelowMinimumError();
+  }
+
+  // verified なら Connected Account が必ずある想定だが、念のため確認（着金先が無ければ送金不可）
+  if (!ctx.stripeAccountId) {
+    throw new PayoutNotVerifiedError();
+  }
+
+  // Stripe payout を実行（Connected Account の残高→銀行。送金額はそのまま店員さんが受け取る）
+  const stripeResult = await createPayout({
+    connectedAccountId: ctx.stripeAccountId,
+    amount: payoutAmount,
+    currency: CURRENCY,
+  });
+
+  // payout 行を pending で記録し、対象の payable tip を paid＋payout_id 紐付けへ（トランザクション）
+  const payout = await repo.createPayoutAndMarkTipsPaid({
+    staffId: ctx.staffId,
+    amount: payoutAmount,
+    stripePayoutId: stripeResult.payoutId,
+    tipIds: payableTips.map((t) => t.tipId),
+  });
+
+  return {
+    id: payout.id,
+    amount: payout.amount,
+    status: payout.status,
+  };
+}
+
+/**
+ * 送金履歴を取得する（GET /staff/me/payouts・本人スコープ）。
+ * 認証済みの authUserId をキーに本人の送金（payout）だけを新しい順に返す。
+ * 金額・状態・申請日時・着金日時を含むのは本人スコープのこの経路だけ（横断ルール: 金額は本人のみ）。
+ * プロフィール未作成なら null。
+ */
+export async function getStaffPayouts(
+  repo: StaffRepository,
+  authUserId: string,
+): Promise<PayoutList | null> {
+  // 本人が存在するか（未作成なら送金履歴も無い）
+  const me = await repo.findStaffByAuthUserId(authUserId);
+  if (!me) return null;
+
+  const rows = await repo.listPayoutsByAuthUserId(authUserId);
+  return {
+    items: rows.map((p) => ({
+      id: p.id,
+      amount: p.amount,
+      status: p.status,
+      createdAt: p.createdAt,
+      arrivedAt: p.arrivedAt,
+      failureReason: p.failureReason,
+    })),
+  };
+}
+
+/**
+ * payout.* （送金の着金確定・失敗）を反映する（Webhook 経由）。
+ * webhook feature から直接 import せず、コンポジションルートでこの関数を注入して使う。
+ *  - paid   → status=paid・arrived_at 記録（着金確定）
+ *  - failed → status=failed・failure_reason 記録・該当 tip を payable へ戻す
+ * 反映できたか（boolean）を返す（冪等・該当 payout 無しなら false）。
+ */
+export async function applyPayoutWebhookUpdate(
+  repo: StaffRepository,
+  params: {
+    kind: "paid" | "failed";
+    stripePayoutId: string;
+    arrivedAt: Date | null;
+    failureReason: string | null;
+  },
+): Promise<boolean> {
+  if (params.kind === "paid") {
+    // 着金日時は Webhook の値（無ければ現在時刻）
+    return repo.markPayoutPaid(params.stripePayoutId, params.arrivedAt ?? new Date());
+  }
+  return repo.markPayoutFailedAndRevertTips(params.stripePayoutId, params.failureReason);
 }

@@ -5,6 +5,8 @@ import type {
   PaymentIntentStatusSnapshot,
   CreateOnboardingLinkParams,
   CreateOnboardingLinkResult,
+  CreatePayoutParams,
+  CreatePayoutResult,
 } from "./stripe.types.js";
 
 /**
@@ -143,6 +145,36 @@ export async function createConnectOnboardingLink(
   });
 
   return { onboardingUrl: link.url, connectedAccountId };
+}
+
+/**
+ * 送金（payout）を Connected Account 上で実行する（infrastructure 層・手動送金）。
+ *
+ * 設計上の肝（資金移動規制の回避）:
+ *  - payout は「Connected Account のコンテキスト」で実行する（リクエストオプションに stripeAccount を渡す）。
+ *    これにより Connected Account（店員さん）の残高から、登録済みの銀行口座へ直接振り込まれる。
+ *    運営の残高を一度も経由しない（Direct charge で貯まった残高をそのまま銀行へ出す）。
+ *  - Separate charges and transfers（運営が一旦受けて transfer する方式）は使わない。
+ *  - 送金手数料は店員から取らない（amount はそのまま店員さんが受け取る額）。
+ *
+ * 着金確定はこの戻り値ではなく payout.paid / payout.failed Webhook を正とする
+ * （ここでは payout を作成し、その ID を返すだけ）。
+ */
+export async function createPayout(params: CreatePayoutParams): Promise<CreatePayoutResult> {
+  const stripe = getStripe();
+
+  // payout を Connected Account のコンテキストで作成する（= 店員さんの残高→銀行）。
+  const payout = await stripe.payouts.create(
+    {
+      // 送金額（円）。JPY は最小単位＝1円のため整数をそのまま渡す
+      amount: params.amount,
+      currency: params.currency,
+    },
+    // ★ Connected Account のコンテキストで実行（運営の残高を経由しない）
+    { stripeAccount: params.connectedAccountId },
+  );
+
+  return { payoutId: payout.id };
 }
 
 /**

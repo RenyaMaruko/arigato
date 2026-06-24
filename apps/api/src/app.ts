@@ -34,6 +34,9 @@ import {
   getStaffTaxReport,
   startConnectOnboarding,
   applyConnectAccountUpdate,
+  createStaffPayout,
+  getStaffPayouts,
+  applyPayoutWebhookUpdate,
 } from "./features/staff/staff.service.js";
 import { createStaffRepository } from "./features/staff/staff.repository.js";
 import { createInMemoryStaffRepository } from "./features/staff/staff.repository.memory.js";
@@ -61,6 +64,7 @@ import { createAuthMiddleware } from "./middleware/auth.js";
 import {
   createDirectChargePaymentIntent,
   createConnectOnboardingLink,
+  createPayout,
 } from "./infrastructure/stripe/stripe-connect.js";
 import { verifyWebhookEvent } from "./infrastructure/stripe/stripe-webhook.js";
 // Supabase JWT の検証（JWKS / 非対称鍵）は infrastructure/auth に隔離する
@@ -150,6 +154,12 @@ export function createApp() {
         buildOnboardingUrls,
         authUserId,
       ),
+    // 送金（振込申請）。Stripe payout（infrastructure）を注入。着金可能額の全額を銀行へ。
+    // verified必須・最低額・全額算出のビジネスルールは Service（Model）に集約する。
+    createStaffPayout: (authUserId) =>
+      createStaffPayout(staffRepo, createPayout, authUserId),
+    // 送金履歴（本人のみ）
+    getStaffPayouts: (authUserId) => getStaffPayouts(staffRepo, authUserId),
   });
   // 招待検証（認証不要）。店員さんのアカウント作成画面で所属先を表示するために使う。
   const inviteRoute = createInviteRoute({
@@ -194,6 +204,8 @@ export function createApp() {
         // （webhook feature は staff feature を直接 import せず、ここで接続する）。
         (stripeAccountId, payoutsEnabled) =>
           applyConnectAccountUpdate(staffRepo, stripeAccountId, payoutsEnabled),
+        // payout.paid / payout.failed の反映（着金確定・失敗で tip を payable へ戻す）も staff Service を配線
+        (params) => applyPayoutWebhookUpdate(staffRepo, params),
         event,
       ),
   });

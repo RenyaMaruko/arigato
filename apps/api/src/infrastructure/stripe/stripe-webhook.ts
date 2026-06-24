@@ -55,6 +55,10 @@ export function verifyWebhookEvent(
   // account.updated 系の Connected Account ID と着金可否
   let accountId: string | null = null;
   let payoutsEnabled: boolean | null = null;
+  // payout.* 系の Stripe Payout ID・着金日時・失敗理由
+  let payoutId: string | null = null;
+  let payoutArrivedAt: Date | null = null;
+  let payoutFailureReason: string | null = null;
 
   if (event.type === "payment_intent.succeeded" || event.type === "payment_intent.payment_failed") {
     const pi = event.data.object as Stripe.PaymentIntent;
@@ -65,6 +69,16 @@ export function verifyWebhookEvent(
     const account = event.data.object as Stripe.Account;
     accountId = account.id;
     payoutsEnabled = account.payouts_enabled === true;
+  } else if (event.type === "payout.paid" || event.type === "payout.failed") {
+    // 送金（payout）の着金確定・失敗。stripe_payout_id で自前 payout を照合する。
+    const po = event.data.object as Stripe.Payout;
+    payoutId = po.id;
+    if (event.type === "payout.paid") {
+      // arrival_date は秒単位の epoch。着金日時として記録する
+      payoutArrivedAt = po.arrival_date ? new Date(po.arrival_date * 1000) : new Date();
+    } else {
+      payoutFailureReason = po.failure_message ?? po.failure_code ?? null;
+    }
   }
 
   return {
@@ -74,5 +88,8 @@ export function verifyWebhookEvent(
     tipId,
     accountId,
     payoutsEnabled,
+    payoutId,
+    payoutArrivedAt,
+    payoutFailureReason,
   };
 }

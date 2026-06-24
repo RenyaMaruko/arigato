@@ -51,14 +51,15 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
             {verified ? t("staff.homeBalanceVerifiedNote") : t("staff.homeBalanceToSendNote")}
           </div>
 
-          {/* 残高のすぐ下のアクション。未確認なら本人確認へ、確認済なら残高・着金の詳細へ */}
+          {/* 残高のすぐ下のアクション。未確認なら本人確認へ、確認済なら送金（送金画面）へ */}
           {verified ? (
             <button
               type="button"
-              onClick={() => navigate({ to: "/staff/balance" })}
-              className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-rose-spark bg-page py-3 text-token-md font-bold text-rose"
+              onClick={() => navigate({ to: "/staff/payout" })}
+              className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-xl bg-rose py-3 text-token-md font-bold text-page"
             >
-              {t("staff.homeBalanceDetailCta")}
+              {t("staff.homePayoutCta")}
+              <ChevronIcon />
             </button>
           ) : (
             <button

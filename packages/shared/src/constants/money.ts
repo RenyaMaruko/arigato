@@ -43,3 +43,7 @@ export const MAX_TIP_AMOUNT = 50000;
 
 // メッセージの最大文字数（任意入力・80文字まで）
 export const MESSAGE_MAX_LENGTH = 80;
+
+// 最低送金額（円）。着金可能額（手取り合計）がこれ未満なら送金申請できない。
+// 手動送金（メルカリ型）の下限。送金額は着金可能額の全額（部分送金なし）。
+export const MIN_PAYOUT_AMOUNT = 100;

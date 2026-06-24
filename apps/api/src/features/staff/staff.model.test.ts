@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { MIN_PAYOUT_AMOUNT } from "@arigato/shared";
 import {
   canPayout,
   isInviteUsable,
@@ -9,6 +10,7 @@ import {
   summarizeBalance,
   buildTaxReportCsv,
   escapeCsvCell,
+  evaluatePayoutEligibility,
 } from "./staff.model.js";
 
 /**
@@ -30,6 +32,18 @@ describe("staff.model", () => {
     expect(deriveIdentityStatus("pending", false)).toBe("pending");
     // 一度 verified になったら後退させない（取りこぼし再送対策）
     expect(deriveIdentityStatus("verified", false)).toBe("verified");
+  });
+
+  it("evaluatePayoutEligibility: verified必須・最低送金額（全額）の判定", () => {
+    // verified でなければ送金不可（本人確認・口座登録が必要）
+    expect(evaluatePayoutEligibility("none", 10000)).toBe("not_verified");
+    expect(evaluatePayoutEligibility("pending", 10000)).toBe("not_verified");
+    // verified でも着金可能額が最低送金額未満なら不可（残高0を含む）
+    expect(evaluatePayoutEligibility("verified", 0)).toBe("below_minimum");
+    expect(evaluatePayoutEligibility("verified", MIN_PAYOUT_AMOUNT - 1)).toBe("below_minimum");
+    // verified かつ最低送金額以上なら送金可（全額送金）
+    expect(evaluatePayoutEligibility("verified", MIN_PAYOUT_AMOUNT)).toBe("ok");
+    expect(evaluatePayoutEligibility("verified", 7650)).toBe("ok");
   });
 
   it("nextSettlementOnVerified: held のみ payable へ。payable / paid は据え置き（二重遷移しない）", () => {

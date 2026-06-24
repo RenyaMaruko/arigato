@@ -138,6 +138,8 @@ export const ja = {
       // 残高のすぐ下のアクション（未確認＝本人確認へ／確認済＝残高の詳細へ）
       homeVerifyCta: "本人確認をする",
       homeBalanceDetailCta: "残高の詳細を見る",
+      // 確認済みのホームの主アクション（送金画面へ）
+      homePayoutCta: "送金する",
       identityNone: "本人確認はまだです（後でOK）",
       identityPending: "本人確認を確認中です",
       identityVerified: "本人確認済み",
@@ -180,6 +182,39 @@ export const ja = {
       balanceVerifiedNote: "本人確認が完了しています。着金可能額をご確認ください。",
       // 手取り型の補足（店員さんに届くのは受取の約85%。手数料15%・決済料込み）
       balanceTakeNote: "表示金額は手取り額です（投げ銭の約85%。手数料15%・決済料込み）",
+      // 送金（振込申請・手動送金）
+      payoutTitle: "送金",
+      payoutAvailableLabel: "着金可能額",
+      payoutAvailableSub: "（登録口座へ送金できる金額）",
+      // 着金タイミングの明示（数営業日）
+      payoutArrivalNote: "送金すると、申請から数営業日で登録口座に着金します。",
+      // 送金ボタン・確認シート
+      payoutCta: "送金する",
+      payoutConfirmTitle: "送金の確認",
+      // {{amount}} に送金額（例: ¥7,650）
+      payoutConfirmBody: "{{amount}} を登録口座へ送金します。申請から数営業日で着金します。",
+      payoutConfirmCta: "送金する",
+      payoutCancel: "キャンセル",
+      payoutSending: "送金中…",
+      // {{amount}} に送金額
+      payoutDone: "{{amount}} を送金しました。数営業日で着金します。",
+      // 送金できない理由
+      payoutNoBalance: "送金できる残高がありません。",
+      // {{min}} に最低送金額（例: ¥100）
+      payoutBelowMinimum: "最低送金額（{{min}}）に達していません。",
+      // verified でないとき
+      payoutNeedVerify: "送金には本人確認・口座登録が必要です。",
+      payoutGoVerify: "本人確認・口座登録をする",
+      // エラー表示
+      payoutError: "送金できませんでした。もう一度お試しください。",
+      payoutErrorNotVerified: "送金には本人確認・口座登録が必要です。",
+      payoutErrorBelowMinimum: "最低送金額に達していないため送金できません。",
+      // 送金履歴
+      payoutHistoryTitle: "送金履歴",
+      payoutHistoryEmpty: "まだ送金はありません",
+      payoutStatusPending: "申請中",
+      payoutStatusPaid: "着金済",
+      payoutStatusFailed: "失敗",
       // 本人確認の流れ（06）
       identityTitle: "本人確認・口座登録",
       identityStep1Title: "1. 基本情報の入力",

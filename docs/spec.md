@@ -181,6 +181,15 @@ QR読取（QR は membership＝人×店 を指す）
 - stripe_event_id（一意）, type, processed_at
 - 受信済イベントIDを記録し、重複再送は無視（二重記録防止）。raw body で署名検証。
 
+### payout（送金＝振込申請）
+- id, staff_id, amount（送金額＝店員が銀行で受け取る額・円）, status（pending / paid / failed）, stripe_payout_id, created_at, arrived_at（着金日・nullable）, failure_reason（nullable）
+- **手動送金（メルカリ型）**：verified（口座登録済＝payouts_enabled）な店員が、着金可能額（payable な tip の手取り合計）を自分のタイミングで銀行へ送金申請する。
+- **最低送金額 ¥100**（`MIN_PAYOUT_AMOUNT = 100`）。
+- **送金額は着金可能額の全額**（v1。部分送金は将来）。
+- 申請時：対象の payable な tip を **paid** に更新し、その手取り合計を payout.amount として Stripe payout を実行（Connected Account の残高→銀行）。
+- 確定は Webhook を正とする：`payout.paid`→status=paid・arrived_at 記録／`payout.failed`→status=failed・該当 tip を payable へ戻す。
+- 送金手数料は店員から取らない（日本の payout は無料前提）。着金は申請から数営業日。
+
 ### 通知（任意・中優先）
 - notification: id, staff_id, tip_id, read_at, created_at（「〇〇さんからありがとうが届きました」）。初期はメール送信でも可。
 
@@ -206,8 +215,9 @@ verified（着金可能）
 
 [着金]   held（本人確認前に成立した分）
            └──(account.updated: payouts_enabled=true)──▶ payable
-                                                            └─(Stripe payout)─▶ paid
+                                                            └─(店員が送金申請→Stripe payout)─▶ paid
          ※ 本人確認済の状態で成立した分は succeeded 時に payable から開始
+         ※ payout.failed の場合は paid → payable へ戻す
 ```
 - **「正」を2段構えにする**:
   - **お客さま向けの完了/失敗表示**は、ブラウザの決済処理結果（Stripe.js `confirmPayment` が返す PaymentIntent ステータス）で**即時に出す**。Webhook 到着を待たない（待たせない・永久ロードを作らない）。
@@ -242,6 +252,8 @@ verified（着金可能）
 | POST | `/staff/me/join` | 招待コードで所属（staff_store）を追加。**新規/既存問わず参加の確定点**。既に同店所属なら `already_member` を返す（多重参加不可） |
 | GET | `/staff/me` | 自分のプロフィール・identity_status・**所属店一覧（各 membership と店ごとQR用URL）** |
 | GET | `/staff/me/balance` | 保留残高（held合計）・着金可能額の集計（**本人のみ・人ごと集約**） |
+| POST | `/staff/me/payouts` | 送金（振込申請）。着金可能額の全額を銀行へ。最低¥100・verified必須。Stripe payout 実行＋payout記録、対象 tip を paid に |
+| GET | `/staff/me/payouts` | 送金履歴（いつ・いくら・状態 pending/paid/failed・着金日。**本人のみ**） |
 | GET | `/staff/me/tips` | 受取履歴（**金額・メッセージ・店ラベル含む。本人のみ**） |
 | POST | `/staff/me/connect/onboard` | Stripe Connect オンボーディングリンクの発行（人ごと1回） |
 | GET | `/staff/me/tax-report` | 申告データ CSV 出力（受取記録） |

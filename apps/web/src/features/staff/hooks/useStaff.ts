@@ -12,6 +12,8 @@ import {
   fetchStaffTips,
   fetchStaffBalance,
   startConnectOnboard,
+  createPayout,
+  fetchPayouts,
 } from "../api/staff.api.js";
 
 /**
@@ -125,5 +127,33 @@ export function useStaffBalance(enabled: boolean) {
 export function useStartConnectOnboard() {
   return useMutation({
     mutationFn: () => startConnectOnboard(),
+  });
+}
+
+/**
+ * 送金履歴（GET /staff/me/payouts）を取得する。本人のみ・ログイン済みのときだけ走らせる。
+ */
+export function useStaffPayouts(enabled: boolean) {
+  return useQuery({
+    queryKey: ["staff", "payouts"],
+    queryFn: fetchPayouts,
+    enabled,
+    retry: false,
+  });
+}
+
+/**
+ * 送金（振込申請・POST /staff/me/payouts）。着金可能額の全額を登録口座へ送金する。
+ * 成功時は残高（payable→paid に移る）と送金履歴を取り直す。
+ */
+export function useCreatePayout() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: () => createPayout(),
+    onSuccess: () => {
+      // 着金可能額が減り、送金履歴が増えるため両方を無効化して取り直す
+      qc.invalidateQueries({ queryKey: ["staff", "balance"] });
+      qc.invalidateQueries({ queryKey: ["staff", "payouts"] });
+    },
   });
 }

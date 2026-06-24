@@ -8,4 +8,5 @@ export { staff } from "./staff.js";
 export { staffStore } from "./staff-store.js";
 export { staffInvite } from "./staff-invite.js";
 export { tip } from "./tip.js";
+export { payout } from "./payout.js";
 export { webhookEvent } from "./webhook-event.js";

@@ -3,6 +3,7 @@ import type {
   IdentityStatus,
   InviteStatus,
   SettlementStatus,
+  PayoutStatus,
 } from "./staff.model.js";
 
 /**
@@ -106,6 +107,41 @@ export type ApplyAccountUpdateResult = {
   promotedTips: number;
 };
 
+// 着金可能（payable）な tip 1件の最小情報（送金額算出・paid 化の対象特定に使う）。amount は額面。
+export type PayableTipRow = {
+  tipId: string;
+  // 額面（お客さま支払額・円）。送金額は手取り（約85%）合計を Model で算出する
+  amount: number;
+};
+
+// 送金（payout）の本人・Connect 連携状態（送金可否判定・Stripe payout 実行に使う）
+export type PayoutContextRow = {
+  // staff（人）の ID
+  staffId: string;
+  // 本人の Connected Account（未連携は null）。Stripe payout の実行先
+  stripeAccountId: string | null;
+  identityStatus: IdentityStatus;
+};
+
+// 送金履歴1件分（本人のみ・金額を含む）
+export type PayoutRow = {
+  id: string;
+  amount: number;
+  status: PayoutStatus;
+  // 申請日時（ISO 文字列）
+  createdAt: string;
+  // 着金日時（着金済のみ・ISO 文字列。未着金は null）
+  arrivedAt: string | null;
+  failureReason: string | null;
+};
+
+// 送金記録＋対象 tip の paid 化をまとめて作った結果
+export type CreatePayoutRow = {
+  id: string;
+  amount: number;
+  status: PayoutStatus;
+};
+
 /**
  * Service が依存する Repository の契約（注入点）。
  * 実装は下の createStaffRepository（実 DB）。テストではこの型を満たすモックを渡す。
@@ -145,6 +181,30 @@ export type StaffRepository = {
     stripeAccountId: string,
     payoutsEnabled: boolean,
   ) => Promise<ApplyAccountUpdateResult>;
+  // 送金（payout）の本人・Connect 連携状態を取得（送金可否判定・Stripe payout の実行先）。未作成は null
+  findPayoutContext: (authUserId: string) => Promise<PayoutContextRow | null>;
+  // 本人の着金可能（payable）な成立済み tip の id・額面を取得する（送金額の算出・paid 化の対象特定）
+  listPayableTipsByAuthUserId: (authUserId: string) => Promise<PayableTipRow[]>;
+  // 送金記録（pending）を1件作り、対象の payable な tip を paid＋payout_id 紐付けに更新する。
+  // 1トランザクションで原子的に行う。対象 tip は引数の tipIds（事前に算出した payable 集合）に限定する。
+  createPayoutAndMarkTipsPaid: (params: {
+    staffId: string;
+    amount: number;
+    stripePayoutId: string;
+    tipIds: string[];
+  }) => Promise<CreatePayoutRow>;
+  // 本人の送金履歴を新しい順に取得する（金額・状態・申請日時・着金日時。本人のみ）
+  listPayoutsByAuthUserId: (authUserId: string) => Promise<PayoutRow[]>;
+  // payout.paid を反映する。stripe_payout_id で照合し status=paid・arrived_at を記録する。
+  // 既に paid なら二重遷移しない（冪等）。反映できたか（boolean）を返す。
+  markPayoutPaid: (stripePayoutId: string, arrivedAt: Date) => Promise<boolean>;
+  // payout.failed を反映する。stripe_payout_id で照合し status=failed・failure_reason を記録し、
+  // この payout で paid になった tip を payable へ戻す（tip.payout_id=null・settlement_status=payable）。
+  // 1トランザクションで原子的に行う。反映できたか（boolean）を返す。
+  markPayoutFailedAndRevertTips: (
+    stripePayoutId: string,
+    failureReason: string | null,
+  ) => Promise<boolean>;
 };
 
 /**
@@ -462,6 +522,141 @@ export function createStaffRepository(): StaffRepository {
         `);
 
         return { found: true, verified: true, promotedTips: promoted.length };
+      });
+    },
+
+    // 送金の本人・Connect 連携状態を取得する（送金可否判定・Stripe payout の実行先）
+    async findPayoutContext(authUserId) {
+      const db = getDb();
+      const rows = await db.execute<PayoutContextRow>(sql`
+        SELECT
+          id                AS "staffId",
+          stripe_account_id AS "stripeAccountId",
+          identity_status   AS "identityStatus"
+        FROM staff
+        WHERE auth_user_id = ${authUserId}
+        LIMIT 1
+      `);
+      return rows[0] ?? null;
+    },
+
+    // 本人の着金可能（payable）な成立済み tip の id・額面を取得する（本人スコープ）。
+    // 送金額（手取り合計）の算出と、paid 化する対象の特定にだけ使う。
+    async listPayableTipsByAuthUserId(authUserId) {
+      const db = getDb();
+      const rows = await db.execute<PayableTipRow>(sql`
+        SELECT
+          t.id     AS "tipId",
+          t.amount AS "amount"
+        FROM tip t
+        JOIN staff s ON s.id = t.staff_id
+        WHERE s.auth_user_id = ${authUserId}
+          AND t.status = 'succeeded'
+          AND t.settlement_status = 'payable'
+      `);
+      return rows;
+    },
+
+    // 送金記録（pending）を作り、対象の payable な tip を paid＋payout_id 紐付けへ更新する。
+    // 1トランザクションで原子的に行う。tip は引数の tipIds かつ今なお payable のものに限定し、
+    // 別リクエストとの競合（同じ payable を二重送金）を WHERE 条件で弾く。
+    async createPayoutAndMarkTipsPaid(params) {
+      const db = getDb();
+      return await db.transaction(async (tx) => {
+        // 送金記録（pending）を作成する
+        const inserted = await tx.execute<CreatePayoutRow>(sql`
+          INSERT INTO payout (staff_id, amount, status, stripe_payout_id)
+          VALUES (${params.staffId}, ${params.amount}, 'pending', ${params.stripePayoutId})
+          RETURNING
+            id     AS "id",
+            amount AS "amount",
+            status AS "status"
+        `);
+        const payoutRow = inserted[0]!;
+
+        // 対象の payable な tip を paid＋この payout に紐付け（今なお payable のものだけを更新）
+        await tx.execute(sql`
+          UPDATE tip
+          SET settlement_status = 'paid',
+              payout_id = ${payoutRow.id}
+          WHERE id = ANY(${params.tipIds})
+            AND settlement_status = 'payable'
+        `);
+
+        return payoutRow;
+      });
+    },
+
+    // 本人の送金履歴を新しい順に取得する（金額・状態・申請日時・着金日時。本人のみ）
+    async listPayoutsByAuthUserId(authUserId) {
+      const db = getDb();
+      const rows = await db.execute<PayoutRow>(sql`
+        SELECT
+          p.id     AS "id",
+          p.amount AS "amount",
+          p.status AS "status",
+          to_char(p.created_at AT TIME ZONE 'UTC',
+                  'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "createdAt",
+          CASE WHEN p.arrived_at IS NULL THEN NULL
+               ELSE to_char(p.arrived_at AT TIME ZONE 'UTC',
+                            'YYYY-MM-DD"T"HH24:MI:SS"Z"') END AS "arrivedAt",
+          p.failure_reason AS "failureReason"
+        FROM payout p
+        JOIN staff s ON s.id = p.staff_id
+        WHERE s.auth_user_id = ${authUserId}
+        ORDER BY p.created_at DESC
+      `);
+      return rows;
+    },
+
+    // payout.paid を反映する。stripe_payout_id で照合し、まだ paid でなければ status=paid・arrived_at を記録する。
+    // 既に paid なら 0 件更新（冪等・二重遷移しない）。反映できたかを返す。
+    // 着金日時は ISO 文字列に変換して timestamptz へ渡す（postgres-js は Date を直接束縛できないため）。
+    async markPayoutPaid(stripePayoutId, arrivedAt) {
+      const db = getDb();
+      const arrivedAtIso = arrivedAt.toISOString();
+      const updated = await db.execute<{ id: string }>(sql`
+        UPDATE payout
+        SET status = 'paid',
+            arrived_at = ${arrivedAtIso}::timestamptz
+        WHERE stripe_payout_id = ${stripePayoutId}
+          AND status <> 'paid'
+        RETURNING id
+      `);
+      return updated.length > 0;
+    },
+
+    // payout.failed を反映する。stripe_payout_id で照合し status=failed・failure_reason を記録し、
+    // この payout で paid になった tip を payable へ戻す（payout_id=null・settlement_status=payable）。
+    // 既に failed なら何もしない（冪等）。1トランザクションで原子的に行う。
+    async markPayoutFailedAndRevertTips(stripePayoutId, failureReason) {
+      const db = getDb();
+      return await db.transaction(async (tx) => {
+        // 対象 payout を failed に確定する（まだ failed でなければ）
+        const updated = await tx.execute<{ id: string }>(sql`
+          UPDATE payout
+          SET status = 'failed',
+              failure_reason = ${failureReason}
+          WHERE stripe_payout_id = ${stripePayoutId}
+            AND status <> 'failed'
+          RETURNING id
+        `);
+        const payoutRow = updated[0];
+        if (!payoutRow) {
+          // 既に failed・該当なし → 何もしない（冪等）
+          return false;
+        }
+
+        // この payout で paid になった tip を payable へ戻す（紐付けも解除）
+        await tx.execute(sql`
+          UPDATE tip
+          SET settlement_status = 'payable',
+              payout_id = NULL
+          WHERE payout_id = ${payoutRow.id}
+            AND settlement_status = 'paid'
+        `);
+
+        return true;
       });
     },
   };

@@ -12,6 +12,8 @@ import {
   type StaffTipsResponse,
   type StaffBalance,
   type ConnectOnboardResponse,
+  type CreatePayoutResult,
+  type PayoutList,
 } from "@arigato/shared";
 import type { MiddlewareHandler } from "hono";
 import type { AuthVariables } from "../../middleware/auth.js";
@@ -19,6 +21,8 @@ import {
   InviteNotUsableError,
   StaffAlreadyExistsError,
   StaffNotFoundError,
+  PayoutNotVerifiedError,
+  PayoutBelowMinimumError,
 } from "./staff.service.js";
 
 /**
@@ -52,6 +56,10 @@ type StaffDeps = {
   getStaffTaxReport: (authUserId: string, year: number) => Promise<string | null>;
   // Connect オンボーディングリンク発行。未作成なら null
   startConnectOnboarding: (authUserId: string) => Promise<ConnectOnboardResponse | null>;
+  // 送金（振込申請）。着金可能額の全額を銀行へ。未作成なら null（verified必須・最低額は Service が判定）
+  createStaffPayout: (authUserId: string) => Promise<CreatePayoutResult | null>;
+  // 送金履歴（金額・状態・申請日時・着金日時・本人のみ）。未作成なら null
+  getStaffPayouts: (authUserId: string) => Promise<PayoutList | null>;
 };
 
 /**
@@ -140,6 +148,37 @@ export function createStaffRoute(deps: StaffDeps) {
         return c.json({ error: "staff_not_found" }, 404);
       }
       return c.json(result);
+    })
+    // 送金（振込申請）。着金可能額の全額を登録口座へ送金する（手動送金）。
+    // verified でなければ 409（本人確認・口座登録が必要）、最低送金額未満／残高0なら 422 を返す。
+    .post("/me/payouts", async (c) => {
+      const authUser = c.get("authUser");
+      try {
+        const result = await deps.createStaffPayout(authUser.id);
+        if (!result) {
+          return c.json({ error: "staff_not_found" }, 404);
+        }
+        return c.json(result, 201);
+      } catch (err) {
+        // 本人確認・口座登録が未完了（verified でない）
+        if (err instanceof PayoutNotVerifiedError) {
+          return c.json({ error: "payout_not_verified" }, 409);
+        }
+        // 着金可能額が最低送金額に満たない（残高0を含む）
+        if (err instanceof PayoutBelowMinimumError) {
+          return c.json({ error: "payout_below_minimum" }, 422);
+        }
+        throw err;
+      }
+    })
+    // 送金履歴（いつ・いくら・状態 pending/paid/failed・着金日。本人のみ）
+    .get("/me/payouts", async (c) => {
+      const authUser = c.get("authUser");
+      const payouts = await deps.getStaffPayouts(authUser.id);
+      if (!payouts) {
+        return c.json({ error: "staff_not_found" }, 404);
+      }
+      return c.json(payouts);
     })
     // 申告データ CSV の出力（受取記録。本人のみ）。?year= で対象年を絞る（既定は今年）
     .get("/me/tax-report", async (c) => {
