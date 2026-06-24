@@ -48,7 +48,6 @@ export const ja = {
       // 決済確定（confirmPayment）に失敗したとき
       payConfirmError: "決済に失敗しました。内容をご確認のうえ、もう一度お試しください。",
       // 完了画面
-      completeTitle: "ありがとうを\n届けました！",
       completeTo: "さん に",
       completeDelivered: "を届けました",
       sendAgain: "もう一度送る",

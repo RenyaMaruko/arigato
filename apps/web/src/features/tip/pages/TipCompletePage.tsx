@@ -28,9 +28,6 @@ export function TipCompletePage() {
     navigate({ to: "/tip/$staffId", params: { staffId } });
   };
 
-  // 完了見出しは i18n に改行（\n）を含むため <br> へ変換して描画する
-  const titleLines = t("tip.completeTitle").split("\n");
-
   return (
     <PhoneFrame>
       <div className="flex flex-1 flex-col px-[26px] pb-[30px] pt-2">
@@ -106,18 +103,8 @@ export function TipCompletePage() {
               </div>
             </div>
 
-            {/* 主役の見出し */}
-            <div className="mt-[30px] text-center text-token-4xl font-bold leading-[1.4] text-rose">
-              {titleLines.map((line, i) => (
-                <span key={i}>
-                  {line}
-                  {i < titleLines.length - 1 && <br />}
-                </span>
-              ))}
-            </div>
-
             {/* 誰に・いくら の再掲 */}
-            <div className="mt-6 text-center text-token-2xl leading-[1.8] text-ink">
+            <div className="mt-[30px] text-center text-token-2xl leading-[1.8] text-ink">
               <span className="font-bold">{complete.staffDisplayName}</span> {t("tip.completeTo")}
               <br />
               <span className="font-bold">¥{complete.amount}</span> {t("tip.completeDelivered")}
