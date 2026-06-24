@@ -1,8 +1,13 @@
+import { useEffect, useState } from "react";
 import { useNavigate, useParams, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { useTipComplete } from "../hooks/useTip.js";
 import { useTipFormStore } from "../stores/tipFormStore.js";
+
+// 決済確認のタイムアウト（ミリ秒）。これを過ぎても pending なら「確認に時間がかかっています」案内に切り替える。
+// Webhook 確定は通常数秒だが、通信状況で遅れることがあるため、永久ロードを避ける逃げ道を設ける。
+const CONFIRM_TIMEOUT_MS = 30000;
 
 /**
  * 完了画面（/tip/:membershipId/complete?tipId=、モック 04）。
@@ -18,9 +23,28 @@ export function TipCompletePage() {
   const { tipId } = useSearch({ from: "/tip/$membershipId/complete" });
 
   // サーバー状態: 完了画面の再掲情報（誰に・金額・メッセージ）
-  const { data: complete, isLoading, isError } = useTipComplete(membershipId, tipId);
+  const { data: complete, isLoading, isError, refetch } = useTipComplete(membershipId, tipId);
   // フォームを初期化する（もう一度送る/閉じる で新規入力に戻すため）
   const reset = useTipFormStore((s) => s.reset);
+
+  // 確認待ち（pending）が長引いたか。一定時間で案内を切り替え、永久ロードを防ぐ
+  const [timedOut, setTimedOut] = useState(false);
+  const isPending = complete?.status === "pending";
+  useEffect(() => {
+    // pending の間だけタイマーを張る。確定（succeeded/failed）したら解除・リセット
+    if (!isPending) {
+      setTimedOut(false);
+      return;
+    }
+    const timer = setTimeout(() => setTimedOut(true), CONFIRM_TIMEOUT_MS);
+    return () => clearTimeout(timer);
+  }, [isPending]);
+
+  // 「もう一度確認する」: タイマーをリセットして再取得（ポーリングは継続）
+  const recheck = () => {
+    setTimedOut(false);
+    refetch();
+  };
 
   // 投げ銭画面へ戻る（フォームをリセットしてから遷移）
   const backToTip = () => {
@@ -38,8 +62,8 @@ export function TipCompletePage() {
           <p className="mt-10 text-center text-token-md text-rose">{t("tip.notFound")}</p>
         )}
 
-        {/* 決済確認中（pending）: 決済成立は Webhook を正とするため、succeeded を待ってから完了表示する */}
-        {complete && complete.status === "pending" && (
+        {/* 決済確認中（pending・タイムアウト前）: Webhook 確定を待ってスピナー表示 */}
+        {complete && complete.status === "pending" && !timedOut && (
           <div className="mt-16 flex flex-1 flex-col items-center">
             {/* くるくる回るスピナー（確認中の表現） */}
             <div className="h-12 w-12 animate-spin rounded-full border-4 border-line-soft border-t-rose" />
@@ -49,6 +73,40 @@ export function TipCompletePage() {
             <p className="mt-2 text-center text-token-md leading-[1.7] text-ink-sub">
               {t("tip.confirmingNote")}
             </p>
+          </div>
+        )}
+
+        {/* 確認が長引いたとき（タイムアウト）: 永久ロードを避け、案内＋再確認/戻るを出す。
+            裏ではポーリングを継続しているので、確定すれば自動で完了表示へ切り替わる */}
+        {complete && complete.status === "pending" && timedOut && (
+          <div className="flex flex-1 flex-col">
+            <div className="mt-16 flex flex-col items-center">
+              <div className="flex h-[88px] w-[88px] items-center justify-center rounded-full bg-surface-subtle text-token-3xl text-muted">
+                ⏳
+              </div>
+              <p className="mt-6 text-center text-token-2xl font-bold text-ink">
+                {t("tip.confirmTimeout")}
+              </p>
+              <p className="mt-2 text-center text-token-md leading-[1.7] text-ink-sub">
+                {t("tip.confirmTimeoutNote")}
+              </p>
+            </div>
+            <div className="mt-auto flex flex-col gap-3 pt-[30px]">
+              <button
+                type="button"
+                onClick={recheck}
+                className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
+              >
+                {t("tip.recheck")}
+              </button>
+              <button
+                type="button"
+                onClick={backToTip}
+                className="rounded-xl border-[1.5px] border-line bg-page py-4 text-center text-token-lg font-semibold text-ink"
+              >
+                {t("tip.close")}
+              </button>
+            </div>
           </div>
         )}
 
