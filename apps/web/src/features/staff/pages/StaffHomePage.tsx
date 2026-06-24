@@ -4,29 +4,33 @@ import { useTranslation } from "react-i18next";
 import type { StaffMe } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StaffBottomNav } from "../components/StaffBottomNav.js";
+import { useStaffBalance } from "../hooks/useStaff.js";
 
 /**
  * 店員さんホーム（ログイン後の起点・/staff）。
- * モック01のトーン（中央アバター・ローズ淡色のステータスカード・機能アイコングリッド・下部ボトムナビ）を
+ * モック01のトーン（中央アバター・ローズ淡色の残高カード・機能アイコングリッド・下部ボトムナビ）を
  * 踏襲しつつ、多対多モデル（掛け持ち）に合わせて「所属しているお店」を一覧で見せ、店ごとの別QRへ導く。
  *
  * 多対多モデル: 所属（membership）は複数持てる。各店ごとに別QR（/tip/:membershipId）を貼るため、
  * 店ごとにQRボタンを並べ、?m= で対象 membership を QR 画面に渡す。
- * ホームでは残高金額は持たないため、ステータスカードは「本人確認の状態」を見せて残高画面へ導く。
+ * 残高カード: 受け取った投げ銭は本人確認の有無に関係なく保留残高（held）として溜まるため、
+ * 本人スコープの残高API（GET /staff/me/balance）から保留残高を主役に・着金可能額（payable）を併記する。
+ * 着金（銀行送金）には本人確認が要る関係を、本人確認前の一言＋残高画面への導線で示す。
+ * 金額表示はこの本人画面のみ（横断ルール: 金額は本人のみ。店向け経路には出さない）。
  * ログアウトは設定画面（/staff/settings）へ移設したため、ホーム上部の操作行は持たない（モック01に準拠）。
  */
 export function StaffHomePage({ me }: { me: StaffMe }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
 
-  // 本人確認の状態（verified / pending / none）。カードの色と文言を出し分ける
-  const verified = me.identityStatus === "verified";
-  const pending = me.identityStatus === "pending";
-  const identityLabel = verified
-    ? t("staff.identityVerified")
-    : pending
-      ? t("staff.identityPending")
-      : t("staff.identityNone");
+  // 保留残高サマリ（本人のみ）。このページはログイン済み＋プロフィール取得済みのときだけ描画されるため有効化する
+  const balanceQuery = useStaffBalance(true);
+  const balance = balanceQuery.data;
+  // 未取得・ローディング時は 0 として控えめに扱い、レイアウトを崩さない
+  const heldAmount = balance?.heldAmount ?? 0;
+  const payableAmount = balance?.payableAmount ?? 0;
+  // 着金可能（本人確認済み）かどうかは残高API の canPayout を正とする（プロフィールの identityStatus と整合）
+  const verified = balance?.canPayout ?? me.identityStatus === "verified";
 
   return (
     <PhoneFrame>
@@ -57,43 +61,53 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           <div className="mt-1 text-center text-token-md text-ink-sub">{me.headline}</div>
         )}
 
-        {/* ステータスカード（モック01の残高カードのトーン）。本人確認の状態を見せ、残高画面へ導く。
-            ホームは残高金額を持たないため、金額の代わりに状態と次の一歩を示す */}
+        {/* 残高カード（モック01）。保留残高（held）を主役にローズで大きく見せ、着金可能額（payable）を併記する。
+            カードタップで残高・ステータス画面（/staff/balance・モック05）へ。金額は本人のみ表示 */}
         <button
           type="button"
           onClick={() => navigate({ to: "/staff/balance" })}
-          className={
-            verified
-              ? "mt-[22px] flex w-full items-center justify-between rounded-2xl border border-line-soft bg-surface-subtle px-4 py-4 text-left"
-              : "mt-[22px] flex w-full items-center justify-between rounded-2xl border border-rose-spark/50 bg-rose-soft px-4 py-4 text-left"
-          }
+          className="mt-[22px] w-full rounded-2xl border border-rose-spark/50 bg-rose-soft px-4 py-0.5 text-left"
         >
-          <div className="min-w-0">
-            <div className={verified ? "text-token-sm text-ink-sub" : "text-token-sm text-rose/80"}>
-              {t("staff.homeStatusLabel")}
+          {/* 保留残高（held 合計・主役）。本人確認の有無に関係なく溜まる金額を本人に表示する */}
+          <div className="flex items-center justify-between py-3.5">
+            <div className="min-w-0">
+              <div className="text-token-xs text-rose/80">
+                {t("staff.homeHeldLabel")}{" "}
+                <span className="text-rose/50">{t("staff.homeHeldSub")}</span>
+              </div>
+              <div className="mt-0.5 text-[26px] font-bold leading-none text-rose">
+                ¥{heldAmount.toLocaleString()}
+              </div>
             </div>
-            <div
-              className={
-                verified
-                  ? "mt-1 text-token-lg font-bold text-ink"
-                  : "mt-1 text-token-lg font-bold text-rose"
-              }
-            >
-              {identityLabel}
-            </div>
-            {!verified && (
-              <div className="mt-1 text-token-xs text-rose/70">{t("staff.homeStatusNote")}</div>
-            )}
+            <span className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-full bg-rose-spark/40 text-rose">
+              <ClockIcon />
+            </span>
           </div>
-          <span
-            className={
-              verified
-                ? "flex h-[38px] w-[38px] flex-none items-center justify-center rounded-full bg-stamp-bg text-ink-sub"
-                : "flex h-[38px] w-[38px] flex-none items-center justify-center rounded-full bg-rose-spark/40 text-rose"
-            }
-          >
-            <ClockIcon />
-          </span>
+
+          {/* 区切り線（モック01のローズ淡色） */}
+          <div className="h-px bg-rose-spark/60" />
+
+          {/* 着金可能額（payable 合計・併記）。着金には本人確認が要る関係を補足で示す */}
+          <div className="flex items-center justify-between py-3.5">
+            <div className="min-w-0">
+              <div className="text-token-xs text-ink-sub">
+                {t("staff.homePayableLabel")}{" "}
+                <span className="text-muted-soft">{t("staff.homePayableSub")}</span>
+              </div>
+              <div className="mt-0.5 text-token-2xl font-bold leading-none text-ink">
+                ¥{payableAmount.toLocaleString()}
+              </div>
+              {/* 本人確認前は「口座登録で着金できる」、完了後は「着金可能」を一言で示す */}
+              <div className="mt-1.5 text-token-xs text-rose/70">
+                {verified
+                  ? t("staff.homeBalanceVerifiedNote")
+                  : t("staff.homeBalanceRegisterNote")}
+              </div>
+            </div>
+            <span className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-full border-[1.5px] border-rose-spark/70 text-rose/70">
+              <ChevronIcon />
+            </span>
+          </div>
         </button>
 
         {/* 所属しているお店（複数可・掛け持ち）。各店ごとに別QR（/tip/:membershipId）へ導く */}
@@ -212,6 +226,25 @@ function ClockIcon() {
     >
       <circle cx="12" cy="12" r="9" />
       <path d="M12 7.5V12l3 2" />
+    </svg>
+  );
+}
+
+/** 右シェブロン（残高画面へ進む含意）。モック01の着金可能額の右端アイコン。 */
+function ChevronIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M9 6l6 6-6 6" />
     </svg>
   );
 }
