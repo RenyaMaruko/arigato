@@ -120,8 +120,8 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
             icon={<HistoryIcon />}
           />
           <FeatureTile
-            label={t("staff.homeBalance")}
-            onClick={() => navigate({ to: "/staff/balance" })}
+            label={t("staff.homePayout")}
+            onClick={() => navigate({ to: "/staff/payout" })}
             icon={<WalletIcon />}
           />
           <FeatureTile

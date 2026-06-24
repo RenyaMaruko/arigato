@@ -159,9 +159,9 @@ export const ja = {
       editSubmit: "保存する",
       editSaved: "保存しました",
       editError: "保存に失敗しました。もう一度お試しください。",
-      // ホームの導線（受取履歴・残高）
+      // ホームの導線（受取履歴・送金）
       homeHistory: "受取履歴",
-      homeBalance: "残高・ステータス",
+      homePayout: "送金",
       // 受取履歴（04）
       tipsTitle: "受取履歴",
       tipsTotalLabel: "合計",
