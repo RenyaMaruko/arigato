@@ -44,6 +44,7 @@ import {
   updateStore,
   createStoreInvite,
   listStoreInvites,
+  revokeStoreInvite,
   listStoreStaff,
   getStoreGratitude,
 } from "./features/store/store.service.js";
@@ -162,6 +163,8 @@ export function createApp() {
       createStoreInvite(storeRepo, buildStoreInviteUrl, authUserId, storeId, input),
     listStoreInvites: (authUserId, storeId) =>
       listStoreInvites(storeRepo, buildStoreInviteUrl, authUserId, storeId),
+    revokeStoreInvite: (authUserId, storeId, code) =>
+      revokeStoreInvite(storeRepo, authUserId, storeId, code),
     listStoreStaff: (authUserId, storeId) => listStoreStaff(storeRepo, authUserId, storeId),
     // 感謝の件数集計の基準時刻はサーバーの現在時刻（now）を渡す（Model で JST 判定）
     getStoreGratitude: (authUserId, storeId) =>

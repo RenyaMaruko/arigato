@@ -5,6 +5,7 @@ import {
   createStore,
   updateStore,
   createStoreInvite,
+  revokeStoreInvite,
   fetchStoreInvites,
   fetchStoreStaff,
   fetchStoreGratitude,
@@ -83,6 +84,20 @@ export function useCreateStoreInvite(storeId: string | undefined) {
   const qc = useQueryClient();
   return useMutation({
     mutationFn: (label?: string) => createStoreInvite(storeId!, label),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["store", "invites", storeId] });
+    },
+  });
+}
+
+/**
+ * 招待中（pending）の招待を取り消す（POST /store/:storeId/invites/:code/revoke）。
+ * 成功時は招待一覧を無効化して最新を取り直す（取り消した招待は pending 一覧から消える）。
+ */
+export function useRevokeStoreInvite(storeId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (code: string) => revokeStoreInvite(storeId!, code),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["store", "invites", storeId] });
     },

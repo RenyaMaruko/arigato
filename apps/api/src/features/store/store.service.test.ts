@@ -6,10 +6,12 @@ import {
   updateStore,
   createStoreInvite,
   listStoreInvites,
+  revokeStoreInvite,
   listStoreStaff,
   getStoreGratitude,
   StoreForbiddenError,
   StoreAlreadyExistsError,
+  StoreInviteNotFoundError,
 } from "./store.service.js";
 import { buildInviteUrl } from "./store.model.js";
 import type {
@@ -88,7 +90,19 @@ function createMockRepo() {
       return invite;
     },
     async listInvites(storeId) {
-      return [...(invitesByStore.get(storeId) ?? [])];
+      // 実装と同じく招待中（pending）だけを返す
+      return (invitesByStore.get(storeId) ?? []).filter((i) => i.status === "pending");
+    },
+    async findInviteByCode(storeId, code) {
+      const list = invitesByStore.get(storeId) ?? [];
+      return list.find((i) => i.code === code && i.status === "pending") ?? null;
+    },
+    async revokeInvite(storeId, code) {
+      const list = invitesByStore.get(storeId) ?? [];
+      const target = list.find((i) => i.code === code && i.status === "pending");
+      if (!target) return 0;
+      target.status = "revoked";
+      return 1;
     },
     async listStaff(storeId) {
       return [...(staffByStore.get(storeId) ?? [])];
@@ -212,6 +226,83 @@ describe("store.service", () => {
     expect(list.pendingCount).toBe(2);
     // 各 item に招待リンクが付く
     expect(list.items[0]!.inviteUrl).toContain("/invite/");
+  });
+
+  it("listStoreInvites: 招待中（pending）だけを返す（accepted/revoked は出さない）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    // pending・accepted・revoked を 1 件ずつ用意する
+    m.invitesByStore.set("store-1", [
+      {
+        code: "pending-1",
+        status: "pending",
+        createdAt: "2026-06-23T00:00:00Z",
+        acceptedStaffName: null,
+        acceptedAt: null,
+        label: "佐藤さん",
+      },
+      {
+        code: "accepted-1",
+        status: "accepted",
+        createdAt: "2026-06-22T00:00:00Z",
+        acceptedStaffName: "山田 さくら",
+        acceptedAt: "2026-06-22T01:00:00Z",
+        label: null,
+      },
+      {
+        code: "revoked-1",
+        status: "revoked",
+        createdAt: "2026-06-21T00:00:00Z",
+        acceptedStaffName: null,
+        acceptedAt: null,
+        label: null,
+      },
+    ]);
+    const list = await listStoreInvites(m.repo, buildUrl, "owner-1", "store-1");
+    // pending の 1 件だけが返る（在籍中タブに出る accepted、履歴管理しない revoked は除外）
+    expect(list.items.length).toBe(1);
+    expect(list.items[0]!.code).toBe("pending-1");
+    expect(list.items[0]!.status).toBe("pending");
+    expect(list.pendingCount).toBe(1);
+  });
+
+  it("revokeStoreInvite: 招待中（pending）を取り消すと一覧から消える", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    const invite = await createStoreInvite(m.repo, buildUrl, "owner-1", "store-1", {
+      label: "佐藤さん",
+    });
+    // 取り消し前は招待中に存在する
+    expect((await listStoreInvites(m.repo, buildUrl, "owner-1", "store-1")).items.length).toBe(1);
+    await revokeStoreInvite(m.repo, "owner-1", "store-1", invite.code);
+    // 取り消し後は pending 一覧から消える
+    const after = await listStoreInvites(m.repo, buildUrl, "owner-1", "store-1");
+    expect(after.items.length).toBe(0);
+    expect(after.pendingCount).toBe(0);
+  });
+
+  it("revokeStoreInvite: 対象が無い（未発行コード）は StoreInviteNotFoundError", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    await expect(
+      revokeStoreInvite(m.repo, "owner-1", "store-1", "no-such-code"),
+    ).rejects.toBeInstanceOf(StoreInviteNotFoundError);
+  });
+
+  it("revokeStoreInvite: 既に取り消し済み（pending でない）は再取り消しできない", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    const invite = await createStoreInvite(m.repo, buildUrl, "owner-1", "store-1");
+    await revokeStoreInvite(m.repo, "owner-1", "store-1", invite.code);
+    // 2 回目は対象が無い扱い
+    await expect(
+      revokeStoreInvite(m.repo, "owner-1", "store-1", invite.code),
+    ).rejects.toBeInstanceOf(StoreInviteNotFoundError);
+  });
+
+  it("revokeStoreInvite: 他店（別 owner）の招待は取り消せない（404 相当）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    const invite = await createStoreInvite(m.repo, buildUrl, "owner-1", "store-1");
+    // 別アカウントが同じ店に対して取り消そうとすると店スコープで弾かれる
+    await expect(
+      revokeStoreInvite(m.repo, "intruder", "store-1", invite.code),
+    ).rejects.toBeInstanceOf(StoreForbiddenError);
   });
 
   it("listStoreStaff: 自店の所属スタッフを名簿順で返す（金額・件数なし）", async () => {

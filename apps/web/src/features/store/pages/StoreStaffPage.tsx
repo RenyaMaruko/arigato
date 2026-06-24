@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import type { StoreProfile, StoreInviteItem } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StoreBottomNav } from "../components/StoreBottomNav.js";
@@ -9,10 +9,12 @@ import { useStoreStaff, useStoreInvites } from "../hooks/useStore.js";
 import { formatDate } from "../utils/format.js";
 
 /**
- * スタッフ一覧画面（/store/staff）。モック03に対応。
+ * スタッフ一覧画面（/store/staff）。
  * 「在籍中 / 招待中」タブを同一画面内で切り替え、タブ下のリスト部分だけが入れ替わる
- * （画面遷移はしない）。QR は店員さん本人が発行する主体のため、店側はここで発行しない。
+ * （画面遷移はしない）。?tab=invited を付けると招待中タブを初期表示する（招待発行後の導線）。
+ * QR は店員さん本人が発行する主体のため、店側はここで発行しない。
  * 金額・受取件数のランキングは表示しない。
+ * 招待中タブの行は全て pending（招待中）で、タップするとリンク再コピー画面へ遷移する。
  */
 export function StoreStaffPage() {
   return <StoreGuard>{(store) => <StoreStaffContent store={store} />}</StoreGuard>;
@@ -24,11 +26,13 @@ type StaffTab = "active" | "invited";
 function StoreStaffContent({ store }: { store: StoreProfile }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // ?tab=invited で初期タブを指定できる（招待発行後に招待中タブを開く導線）
+  const search = useSearch({ from: "/store/staff" });
   const staffQuery = useStoreStaff(store.id);
   const invitesQuery = useStoreInvites(store.id);
 
-  // どちらのタブを表示しているか（同一画面でリストだけ差し替える）
-  const [tab, setTab] = useState<StaffTab>("active");
+  // どちらのタブを表示しているか（URL の ?tab を初期値にし、以降は同一画面でリストだけ差し替える）
+  const [tab, setTab] = useState<StaffTab>(search.tab === "invited" ? "invited" : "active");
 
   const staff = staffQuery.data?.items ?? [];
   const activeCount = staffQuery.data?.count ?? 0;
@@ -134,7 +138,7 @@ function StoreStaffContent({ store }: { store: StoreProfile }) {
                         <div className="mt-0.5 text-token-sm text-muted">{s.headline}</div>
                       )}
                     </div>
-                    {/* 右端の山括弧（モック03のリスト行）。装飾的なので淡色 */}
+                    {/* 右端の山括弧（リスト行）。装飾的なので淡色 */}
                     <span className="flex-none text-muted-soft" aria-hidden="true">
                       <svg
                         width="20"
@@ -164,7 +168,13 @@ function StoreStaffContent({ store }: { store: StoreProfile }) {
             ) : (
               invites.map((inv, i) => (
                 <div key={inv.code}>
-                  <InviteRow invite={inv} />
+                  {/* 招待中（pending）の行。タップでリンク再コピー画面へ遷移する */}
+                  <InviteRow
+                    invite={inv}
+                    onClick={() =>
+                      navigate({ to: "/store/invites/$code", params: { code: inv.code } })
+                    }
+                  />
                   {i < invites.length - 1 && <div className="h-px bg-line-soft" />}
                 </div>
               ))
@@ -188,50 +198,51 @@ function StoreStaffContent({ store }: { store: StoreProfile }) {
 }
 
 /**
- * 招待1件の行（アバター・状態・発行日 or 所属確定）。
+ * 招待1件の行（招待中・pending のみ）。タップでリンク再コピー画面へ遷移する。
+ * 招待者名（label）があれば名前位置に出し、無記名なら状態ラベル（招待中）を出す。
  */
-function InviteRow({ invite }: { invite: StoreInviteItem }) {
+function InviteRow({ invite, onClick }: { invite: StoreInviteItem; onClick: () => void }) {
   const { t } = useTranslation();
 
-  // 状態ラベル（招待中 / 所属確定 / 失効）
-  const statusLabel =
-    invite.status === "accepted"
-      ? t("store.inviteStatusAccepted")
-      : invite.status === "revoked"
-        ? t("store.inviteStatusRevoked")
-        : t("store.inviteStatusPending");
-  // 状態バッジの配色（招待中=ローズ塗り / 所属確定=淡グレー枠 / 失効=最も淡い）
-  const statusBadge =
-    invite.status === "accepted"
-      ? "bg-line-soft text-ink-label"
-      : invite.status === "revoked"
-        ? "bg-surface-subtle text-muted-soft"
-        : "bg-rose-soft text-rose";
-
-  // 名前位置の表示優先順位：所属確定＆実名 → label（誰宛かのメモ） → 状態ラベル（「招待中」等）。
-  // これにより未確定でも、発行時にメモを入れていれば「誰宛の招待か」が一目で分かる。
+  // 招待中タブは pending のみ。名前位置は label（招待者名）→ 状態ラベル（招待中）の優先順
   const primaryName =
-    invite.status === "accepted" && invite.acceptedStaffName
-      ? invite.acceptedStaffName
-      : invite.label && invite.label.trim() !== ""
-        ? invite.label
-        : statusLabel;
+    invite.label && invite.label.trim() !== "" ? invite.label : t("store.inviteStatusPending");
 
   return (
-    <div className="flex items-center gap-3.5 px-1 py-4">
+    <button
+      type="button"
+      onClick={onClick}
+      className="flex w-full items-center gap-3.5 px-1 py-4 text-left"
+    >
       <div className="flex h-[46px] w-[46px] flex-none items-center justify-center rounded-full bg-rose-soft text-token-sm text-muted">
         員
       </div>
       <div className="flex-1">
-        {/* 名前位置：所属確定＆実名 → label（誰宛かのメモ） → 状態ラベル の優先順 */}
+        {/* 名前位置：招待者名（label）→ 状態ラベル（招待中） */}
         <div className="text-token-lg font-bold text-ink">{primaryName}</div>
         <div className="mt-0.5 text-token-sm text-muted">
           {t("store.invitesIssuedAt", { date: formatDate(invite.createdAt) })}
         </div>
       </div>
-      <span className={`flex-none rounded-pill px-2.5 py-1 text-token-xs font-bold ${statusBadge}`}>
-        {statusLabel}
+      {/* 状態バッジ（招待中） */}
+      <span className="flex-none rounded-pill bg-rose-soft px-2.5 py-1 text-token-xs font-bold text-rose">
+        {t("store.inviteStatusPending")}
       </span>
-    </div>
+      {/* 右端の山括弧（タップ可能を示す） */}
+      <span className="flex-none text-muted-soft" aria-hidden="true">
+        <svg
+          width="20"
+          height="20"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M9 6l6 6-6 6" />
+        </svg>
+      </span>
+    </button>
   );
 }

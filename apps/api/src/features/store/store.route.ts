@@ -19,6 +19,7 @@ import {
   StoreNotFoundError,
   StoreForbiddenError,
   StoreAlreadyExistsError,
+  StoreInviteNotFoundError,
 } from "./store.service.js";
 
 /**
@@ -52,8 +53,10 @@ type StoreDeps = {
     storeId: string,
     input: CreateStoreInviteInput,
   ) => Promise<StoreInviteCreated>;
-  // 発行済み招待の一覧（店スコープ）
+  // 招待中（pending）の招待一覧（店スコープ）
   listStoreInvites: (authUserId: string, storeId: string) => Promise<StoreInvitesResponse>;
+  // 招待中（pending）の招待を取り消す（revoke・店スコープ）
+  revokeStoreInvite: (authUserId: string, storeId: string, code: string) => Promise<void>;
   // 所属スタッフ一覧（在籍管理・店スコープ）
   listStoreStaff: (authUserId: string, storeId: string) => Promise<StoreStaffResponse>;
   // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）
@@ -141,7 +144,7 @@ export function createStoreRoute(deps: StoreDeps) {
         throw err;
       }
     })
-    // 発行済み招待の一覧（招待中・所属確定・失効。店スコープ）
+    // 招待中（pending）の招待一覧（店スコープ）
     .get("/:storeId/invites", async (c) => {
       const authUser = c.get("authUser");
       const storeId = c.req.param("storeId");
@@ -149,6 +152,24 @@ export function createStoreRoute(deps: StoreDeps) {
         const invites = await deps.listStoreInvites(authUser.id, storeId);
         return c.json(invites);
       } catch (err) {
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // 招待中（pending）の招待を取り消す（revoke・店スコープ）。自店・pending のみ操作可
+    .post("/:storeId/invites/:code/revoke", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      const code = c.req.param("code");
+      try {
+        await deps.revokeStoreInvite(authUser.id, storeId, code);
+        return c.json({ ok: true });
+      } catch (err) {
+        // 対象の招待が無い（既に消費・失効・他店）は 404 で返す
+        if (err instanceof StoreInviteNotFoundError) {
+          return c.json({ error: "store_invite_not_found" }, 404);
+        }
         const mapped = handleStoreScopeError(err);
         if (mapped) return c.json({ error: mapped.error }, mapped.status);
         throw err;

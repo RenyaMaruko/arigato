@@ -226,13 +226,10 @@ export const ja = {
       staffInviteCta: "スタッフを招待する",
       // スタッフ招待（04）
       inviteTitle: "スタッフ招待",
-      inviteStep1: "リンク発行",
-      inviteStep2: "招待中",
-      inviteStep3: "完了",
       inviteHeading: "スタッフを招待するための\nリンクを発行します",
       inviteLead: "このリンクから新規登録したスタッフは、\n自動でこのお店に所属します。",
-      // 招待ラベル（誰宛かの任意メモ）
-      inviteLabelLabel: "この招待は誰用？（任意メモ）",
+      // 招待者名（任意メモ。誰宛の招待かを見分けるため）
+      inviteLabelLabel: "招待者名",
       inviteLabelPlaceholder: "例：佐藤さん／ホール担当",
       inviteLabelHelp: "招待中の一覧で、誰宛の招待かを見分けるためのメモです。空欄でも発行できます。",
       inviteIssue: "招待リンクを発行",
@@ -242,15 +239,16 @@ export const ja = {
       inviteCopy: "リンクをコピー",
       inviteCopied: "コピーしました",
       inviteSeeList: "招待中の一覧へ",
-      // 招待中の一覧（05）
-      invitesTitle: "招待中の一覧",
+      // 招待リンクの再コピー画面（招待中の行タップ）
+      inviteResendTitle: "招待リンク",
+      inviteRevoke: "この招待を取り消す",
+      inviteRevoking: "取り消し中…",
+      inviteRevokeError: "招待の取り消しに失敗しました。もう一度お試しください。",
+      inviteNotFoundResend: "この招待は見つかりませんでした（取り消し済み・使用済みの可能性があります）",
+      // 招待中の一覧（スタッフ一覧の招待中タブ）
       invitesEmpty: "招待中のスタッフはいません",
       invitesIssuedAt: "招待日：{{date}}",
-      invitesNewInvite: "新しく招待する",
       inviteStatusPending: "招待中",
-      inviteStatusAccepted: "所属確定",
-      inviteStatusRevoked: "失効",
-      invitesAcceptedBy: "{{name}} さんが所属しました",
       // 感謝の可視化（06）
       gratitudeTitle: "感謝の記録",
       gratitudeTabStore: "お店全体",

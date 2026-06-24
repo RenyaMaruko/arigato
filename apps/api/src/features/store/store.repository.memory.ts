@@ -96,8 +96,23 @@ export function createInMemoryStoreRepository(): StoreRepository {
     },
 
     async listInvites(storeId) {
-      // 既に新しい順で保持している
-      return [...(invitesByStore.get(storeId) ?? [])];
+      // 招待中（pending）だけを新しい順に返す（accepted/revoked は二重表示・履歴管理しないため除く）
+      return (invitesByStore.get(storeId) ?? []).filter((i) => i.status === "pending");
+    },
+
+    async findInviteByCode(storeId, code) {
+      // 自店の pending 招待だけを対象にする（再コピー・取り消しの対象確認）
+      const list = invitesByStore.get(storeId) ?? [];
+      return list.find((i) => i.code === code && i.status === "pending") ?? null;
+    },
+
+    async revokeInvite(storeId, code) {
+      // 自店の pending 招待を revoked に更新する。更新できた件数を返す
+      const list = invitesByStore.get(storeId) ?? [];
+      const target = list.find((i) => i.code === code && i.status === "pending");
+      if (!target) return 0;
+      target.status = "revoked";
+      return 1;
     },
 
     async listStaff(storeId) {

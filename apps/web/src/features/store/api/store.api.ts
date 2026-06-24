@@ -115,6 +115,19 @@ export async function fetchStoreInvites(storeId: string): Promise<StoreInvitesRe
 }
 
 /**
+ * POST /store/:storeId/invites/:code/revoke — 招待中（pending）の招待を取り消す。
+ * 取り消すと招待中一覧（pending のみ）から自然に消える。自店・pending のみ操作可。
+ */
+export async function revokeStoreInvite(storeId: string, code: string): Promise<void> {
+  const res = await apiClient.store[":storeId"].invites[":code"].revoke.$post({
+    param: { storeId, code },
+  });
+  if (!res.ok) {
+    throw new Error(`store invite revoke failed: ${res.status}`);
+  }
+}
+
+/**
  * GET /store/:storeId/staff — 所属スタッフ一覧を取得する（在籍管理）。
  */
 export async function fetchStoreStaff(storeId: string): Promise<StoreStaffResponse> {

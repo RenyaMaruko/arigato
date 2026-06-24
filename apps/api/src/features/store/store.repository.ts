@@ -106,8 +106,12 @@ export type StoreRepository = {
   updateStore: (storeId: string, params: UpdateStoreParams) => Promise<StoreRow | null>;
   // 招待を発行する（pending で新規作成）。label は誰宛かの任意メモ（未入力は null）。発行した招待行を返す
   createInvite: (storeId: string, code: string, label: string | null) => Promise<StoreInviteRow>;
-  // 自店の招待を新しい順に取得する（招待中一覧）
+  // 自店の招待中（pending）だけを新しい順に取得する（招待中一覧。accepted/revoked は返さない）
   listInvites: (storeId: string) => Promise<StoreInviteRow[]>;
+  // 自店の招待 1 件を取得する（再コピー画面・取り消しの対象確認に使う）。見つからなければ null
+  findInviteByCode: (storeId: string, code: string) => Promise<StoreInviteRow | null>;
+  // 自店の招待中（pending）を失効（revoked）にする。更新できた件数を返す（0 なら対象なし）
+  revokeInvite: (storeId: string, code: string) => Promise<number>;
   // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（在籍管理。中立な並び）
   listStaff: (storeId: string) => Promise<StoreStaffRow[]>;
   // 自店宛の「お客さまの声」（メッセージのある成立済み投げ銭）を新しい順に取得する（金額なし）
@@ -211,7 +215,8 @@ export function createStoreRepository(): StoreRepository {
       return rows[0]!;
     },
 
-    // 自店の招待を新しい順に取得する。消費済みなら所属した店員名・消費日時も結合する
+    // 自店の招待中（pending）だけを新しい順に取得する。
+    // accepted（在籍中タブに出る）・revoked（履歴管理しない）は二重表示を避けるため返さない。
     async listInvites(storeId) {
       const db = getDb();
       const rows = await db.execute<StoreInviteRow>(sql`
@@ -219,15 +224,49 @@ export function createStoreRepository(): StoreRepository {
           i.code        AS "code",
           i.status      AS "status",
           to_char(i.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')   AS "createdAt",
-          s.display_name AS "acceptedStaffName",
-          to_char(i.accepted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')  AS "acceptedAt",
+          NULL          AS "acceptedStaffName",
+          NULL          AS "acceptedAt",
           i.label        AS "label"
         FROM staff_invite i
-        LEFT JOIN staff s ON s.id = i.accepted_staff_id
         WHERE i.store_id = ${storeId}
+          AND i.status = 'pending'
         ORDER BY i.created_at DESC
       `);
       return rows;
+    },
+
+    // 自店の招待 1 件（pending）を取得する（再コピー画面・取り消しの対象確認）。pending 以外は対象外
+    async findInviteByCode(storeId, code) {
+      const db = getDb();
+      const rows = await db.execute<StoreInviteRow>(sql`
+        SELECT
+          i.code        AS "code",
+          i.status      AS "status",
+          to_char(i.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')   AS "createdAt",
+          NULL          AS "acceptedStaffName",
+          NULL          AS "acceptedAt",
+          i.label        AS "label"
+        FROM staff_invite i
+        WHERE i.store_id = ${storeId}
+          AND i.code = ${code}
+          AND i.status = 'pending'
+        LIMIT 1
+      `);
+      return rows[0] ?? null;
+    },
+
+    // 自店の招待中（pending）を失効（revoked）にする。自店・pending のみ更新し、件数を返す
+    async revokeInvite(storeId, code) {
+      const db = getDb();
+      const rows = await db.execute<{ code: string }>(sql`
+        UPDATE staff_invite
+        SET status = 'revoked'
+        WHERE store_id = ${storeId}
+          AND code = ${code}
+          AND status = 'pending'
+        RETURNING code AS "code"
+      `);
+      return rows.length;
     },
 
     // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（中立な並び・金額や件数では並べない）

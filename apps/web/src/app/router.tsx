@@ -23,7 +23,7 @@ import { StoreLoginPage } from "../features/store/pages/StoreLoginPage.js";
 import { StoreApprovalPage } from "../features/store/pages/StoreApprovalPage.js";
 import { StoreStaffPage } from "../features/store/pages/StoreStaffPage.js";
 import { StoreInviteCreatePage } from "../features/store/pages/StoreInviteCreatePage.js";
-import { StoreInvitesPage } from "../features/store/pages/StoreInvitesPage.js";
+import { StoreInviteResendPage } from "../features/store/pages/StoreInviteResendPage.js";
 import { StoreGratitudePage } from "../features/store/pages/StoreGratitudePage.js";
 import { StoreSettingsPage } from "../features/store/pages/StoreSettingsPage.js";
 import { StoreProfilePage } from "../features/store/pages/StoreProfilePage.js";
@@ -183,11 +183,15 @@ const storeApprovalRoute = createRoute({
   component: StoreApprovalPage,
 });
 
-// "/store/staff" スタッフ一覧（在籍管理）
+// "/store/staff" スタッフ一覧（在籍管理）。?tab=invited で招待中タブを初期表示できる
 const storeStaffRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/store/staff",
   component: StoreStaffPage,
+  // 初期タブ（在籍中=active / 招待中=invited）。それ以外は active 扱い
+  validateSearch: (search: Record<string, unknown>): { tab?: "active" | "invited" } => ({
+    tab: search.tab === "invited" ? "invited" : search.tab === "active" ? "active" : undefined,
+  }),
 });
 
 // "/store/invites/new" スタッフ招待（リンク発行）
@@ -197,11 +201,11 @@ const storeInviteCreateRoute = createRoute({
   component: StoreInviteCreatePage,
 });
 
-// "/store/invites" 招待中の一覧
-const storeInvitesRoute = createRoute({
+// "/store/invites/$code" 招待リンクの再コピー画面（招待者名・リンク・コピー・取り消し）
+const storeInviteResendRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/store/invites",
-  component: StoreInvitesPage,
+  path: "/store/invites/$code",
+  component: StoreInviteResendPage,
 });
 
 // "/store/gratitude" 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし）
@@ -247,7 +251,7 @@ const routeTree = rootRoute.addChildren([
   storeApprovalRoute,
   storeStaffRoute,
   storeInviteCreateRoute,
-  storeInvitesRoute,
+  storeInviteResendRoute,
   storeGratitudeRoute,
   storeSettingsRoute,
   storeProfileRoute,

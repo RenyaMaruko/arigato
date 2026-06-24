@@ -211,8 +211,9 @@ export async function createStoreInvite(
 }
 
 /**
- * 発行済み招待の一覧を取得する（GET /store/:storeId/invites）。店スコープ。
- * pending（招待中）/ accepted（所属確定）/ revoked（失効）を新しい順に返す。
+ * 招待中（pending）の招待一覧を取得する（GET /store/:storeId/invites）。店スコープ。
+ * accepted（所属確定）は在籍中タブに出るため、revoked（失効）は履歴管理しないため返さない。
+ * よって全 item が pending であり、各行はリンク再コピー・取り消しの対象になる。
  */
 export async function listStoreInvites(
   repo: StoreRepository,
@@ -232,9 +233,36 @@ export async function listStoreInvites(
       acceptedAt: i.acceptedAt,
       label: i.label,
     })),
-    // 招待中（pending）の件数
+    // 招待中（pending）の件数。listInvites が pending のみ返すので全件が pending
     pendingCount: invites.filter((i) => i.status === "pending").length,
   };
+}
+
+// 取り消し対象の招待が見つからない（既に消費・失効・他店）ときのエラー（Route で 404 に変換する）
+export class StoreInviteNotFoundError extends Error {
+  constructor() {
+    super("store_invite_not_found");
+    this.name = "StoreInviteNotFoundError";
+  }
+}
+
+/**
+ * 自店の招待中（pending）の招待を取り消す（POST /store/:storeId/invites/:code/revoke）。店スコープ。
+ * pending を revoked にするだけで、取り消した招待は招待中一覧（pending のみ）から自然に消える。
+ * 自店・pending のみが対象。対象が無ければ StoreInviteNotFoundError（既に消費・失効・他店）。
+ */
+export async function revokeStoreInvite(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+  code: string,
+): Promise<void> {
+  // 自店の所有者であることを先に確認する（他店の招待は触れない）
+  await requireOwnedStore(repo, authUserId, storeId);
+  const revoked = await repo.revokeInvite(storeId, code);
+  if (revoked === 0) {
+    throw new StoreInviteNotFoundError();
+  }
 }
 
 /**
