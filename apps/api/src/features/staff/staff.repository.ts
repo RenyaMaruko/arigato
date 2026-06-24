@@ -2,7 +2,6 @@ import { getDb, sql } from "@arigato/db";
 import type {
   IdentityStatus,
   InviteStatus,
-  StoreStatus,
   SettlementStatus,
 } from "./staff.model.js";
 
@@ -20,7 +19,8 @@ export type InviteRow = {
   storeId: string;
   storeName: string;
   inviteStatus: InviteStatus;
-  storeStatus: StoreStatus;
+  // 発行元の店が導入承認に同意済みか（adoption_agreed_at が設定されているか）
+  storeAdopted: boolean;
 };
 
 // プロフィール取得（GET /staff/me）で返す行（staff＋所属店）
@@ -138,7 +138,7 @@ export function createStaffRepository(): StaffRepository {
           i.store_id    AS "storeId",
           st.name       AS "storeName",
           i.status      AS "inviteStatus",
-          st.status     AS "storeStatus"
+          (st.adoption_agreed_at IS NOT NULL) AS "storeAdopted"
         FROM staff_invite i
         JOIN store st ON st.id = i.store_id
         WHERE i.code = ${code}

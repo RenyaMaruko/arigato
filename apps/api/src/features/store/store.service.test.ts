@@ -1,16 +1,15 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import {
   getMyStore,
-  claimStore,
+  createStore,
   getStore,
-  approveStore,
   updateStore,
   createStoreInvite,
   listStoreInvites,
   listStoreStaff,
   getStoreGratitude,
-  StoreNotFoundError,
   StoreForbiddenError,
+  StoreAlreadyExistsError,
 } from "./store.service.js";
 import { buildInviteUrl } from "./store.model.js";
 import type {
@@ -53,24 +52,19 @@ function createMockRepo() {
       }
       return null;
     },
-    async setStoreOwner(storeId, authUserId) {
-      const s = stores.get(storeId);
-      if (!s) return null;
-      if (s.ownerAuthUserId !== null && s.ownerAuthUserId !== authUserId) return null;
-      const updated = { ...s, ownerAuthUserId: authUserId };
-      stores.set(storeId, updated);
-      return updated;
-    },
-    async approveStore(storeId) {
-      const s = stores.get(storeId);
-      if (!s) return null;
-      const updated: StoreRow = {
-        ...s,
-        status: "approved",
-        approvedAt: s.approvedAt ?? "2026-06-23T00:00:00Z",
+    async createStore(params) {
+      const id = `store-${stores.size + 1}`;
+      const created: StoreRow = {
+        id,
+        name: params.name,
+        description: params.description,
+        industry: params.industry,
+        logoUrl: params.logoUrl,
+        adoptionAgreedAt: "2026-06-23T00:00:00Z",
+        ownerAuthUserId: params.ownerAuthUserId,
       };
-      stores.set(storeId, updated);
-      return updated;
+      stores.set(id, created);
+      return created;
     },
     async updateStore(storeId, params) {
       const s = stores.get(storeId);
@@ -112,12 +106,11 @@ function createMockRepo() {
   return { repo, stores, invitesByStore, staffByStore, voicesByStore, timesByStore, perStaffByStore };
 }
 
-// 承認済み・所有者付きの店を1件用意するヘルパ
+// 所有者付きの店を1件用意するヘルパ（既に作成済みの店をシードする）
 function seedOwnedStore(
   m: ReturnType<typeof createMockRepo>,
   storeId: string,
   ownerAuthUserId: string | null,
-  status: "pending" | "approved" = "approved",
 ) {
   m.stores.set(storeId, {
     id: storeId,
@@ -125,8 +118,7 @@ function seedOwnedStore(
     description: null,
     industry: null,
     logoUrl: null,
-    status,
-    approvedAt: status === "approved" ? "2026-06-23T00:00:00Z" : null,
+    adoptionAgreedAt: "2026-06-23T00:00:00Z",
     ownerAuthUserId,
   });
 }
@@ -143,41 +135,40 @@ describe("store.service", () => {
     expect(await getMyStore(m.repo, "stranger")).toBeNull();
   });
 
-  it("claimStore: 未所有の店を引き受けて紐付ける。冪等。他者所有は拒否", async () => {
-    seedOwnedStore(m, "store-1", null, "pending");
-    // 未所有 → 引き受け成功
-    const claimed = await claimStore(m.repo, "owner-1", "store-1");
-    expect(claimed.id).toBe("store-1");
-    expect(m.stores.get("store-1")?.ownerAuthUserId).toBe("owner-1");
-    // 同じ所有者は冪等に成功
-    await expect(claimStore(m.repo, "owner-1", "store-1")).resolves.toBeTruthy();
-    // 別の人は引き受けられない
-    await expect(claimStore(m.repo, "owner-2", "store-1")).rejects.toBeInstanceOf(
+  it("createStore: セルフサーブで店舗を作成し、作成者を所有者・導入承認に同意済みにする", async () => {
+    const created = await createStore(m.repo, "owner-1", {
+      name: "  カフェ Arigato ",
+      adoptionAgreed: true,
+      description: "  ", // 空白は null に正規化
+      industry: "カフェ・喫茶",
+    });
+    // 作成者が所有者になり、自分の店として取得できる
+    expect(created.name).toBe("カフェ Arigato");
+    expect(created.description).toBeNull();
+    expect(created.industry).toBe("カフェ・喫茶");
+    // 導入承認の同意日時が記録される
+    expect(created.adoptionAgreedAt).not.toBeNull();
+    // GET /store/me で自分の店として引ける
+    expect((await getMyStore(m.repo, "owner-1"))?.id).toBe(created.id);
+  });
+
+  it("createStore: 1アカウント1店舗（既に作成済みなら拒否）", async () => {
+    await createStore(m.repo, "owner-1", { name: "1号店", adoptionAgreed: true });
+    // 同じアカウントの2回目は拒否
+    await expect(
+      createStore(m.repo, "owner-1", { name: "2号店", adoptionAgreed: true }),
+    ).rejects.toBeInstanceOf(StoreAlreadyExistsError);
+  });
+
+  it("店スコープ: 他店（別 owner）には触れない（404 相当）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    await expect(getStore(m.repo, "intruder", "store-1")).rejects.toBeInstanceOf(
       StoreForbiddenError,
     );
-    // 無い店
-    await expect(claimStore(m.repo, "owner-1", "nope")).rejects.toBeInstanceOf(StoreNotFoundError);
   });
 
-  it("approveStore: 自店の status を pending→approved に遷移し承認日時を設定する", async () => {
-    seedOwnedStore(m, "store-1", "owner-1", "pending");
-    const result = await approveStore(m.repo, "owner-1", "store-1");
-    expect(result.status).toBe("approved");
-    expect(result.approvedAt).not.toBeNull();
-    expect(m.stores.get("store-1")?.status).toBe("approved");
-  });
-
-  it("店スコープ: 他店（別 owner）には承認できない（404 相当）", async () => {
-    seedOwnedStore(m, "store-1", "owner-1", "pending");
-    await expect(approveStore(m.repo, "intruder", "store-1")).rejects.toBeInstanceOf(
-      StoreForbiddenError,
-    );
-    // status は変わらない
-    expect(m.stores.get("store-1")?.status).toBe("pending");
-  });
-
-  it("店スコープ: owner 未紐付けの店も他人は触れない", async () => {
-    seedOwnedStore(m, "store-1", null, "pending");
+  it("店スコープ: owner 未紐付け（移行用の既存行）も他人は触れない", async () => {
+    seedOwnedStore(m, "store-1", null);
     await expect(getStore(m.repo, "anyone", "store-1")).rejects.toBeInstanceOf(StoreForbiddenError);
   });
 

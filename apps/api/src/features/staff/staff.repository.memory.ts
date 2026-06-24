@@ -26,7 +26,7 @@ export function createInMemoryStaffRepository(): StaffRepository {
     { stripeAccountId: string | null; identityStatus: IdentityStatus }
   >();
 
-  // 開発用シード招待（任意）。承認済み店の pending 招待を1件用意する
+  // 開発用シード招待（任意）。導入承認に同意済みの店の pending 招待を1件用意する
   const seedCode = process.env.SEED_INVITE_CODE;
   if (seedCode) {
     invites.set(seedCode, {
@@ -34,7 +34,7 @@ export function createInMemoryStaffRepository(): StaffRepository {
       storeId: randomUUID(),
       storeName: process.env.SEED_STORE_NAME ?? "テスト店",
       inviteStatus: "pending",
-      storeStatus: "approved",
+      storeAdopted: true,
     });
   }
 

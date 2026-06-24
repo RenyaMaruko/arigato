@@ -16,11 +16,11 @@ export const store = pgTable("store", {
   logoUrl: text("logo_url"),
   // 店アカウントの所有者（Supabase auth.users の UUID）。
   // 店スコープのアクセス制御に使う（この auth ユーザーだけが自店を操作できる）。
-  // auth スキーマは Supabase 管理のため FK は張らず ID 文字列で保持する。未紐付けは null。
+  // auth スキーマは Supabase 管理のため FK は張らず ID 文字列で保持する。
+  // セルフサーブ登録では作成者が必ず所有者になる。移行用の既存行は null のままでも壊れない設計。
   ownerAuthUserId: uuid("owner_auth_user_id"),
-  // 導入ステータス（pending: 承認待ち / approved: 承認済み）
-  status: text("status").notNull().default("pending"),
-  // 承認された日時（未承認は null）
-  approvedAt: timestamp("approved_at", { withTimezone: true }),
+  // 導入承認に同意した日時。店自身の一手間（「うちで投げ銭OK」の同意）として作成時に記録する。
+  // 運営審査のゲート（status の pending→approved）は廃止し、これを導入承認の記録とする。未同意は null。
+  adoptionAgreedAt: timestamp("adoption_agreed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

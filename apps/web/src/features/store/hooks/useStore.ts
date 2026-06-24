@@ -1,10 +1,9 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import type { UpdateStoreProfileInput } from "@arigato/shared";
+import type { UpdateStoreProfileInput, CreateStoreInput } from "@arigato/shared";
 import {
   fetchMyStore,
-  claimStore,
+  createStore,
   updateStore,
-  approveStore,
   createStoreInvite,
   fetchStoreInvites,
   fetchStoreStaff,
@@ -21,7 +20,7 @@ const STORE_ME_KEY = ["store", "me"] as const;
 
 /**
  * 自分（ログイン中の店アカウント）が所有する店（GET /store/me）を取得する。
- * enabled でログイン済みのときだけ走らせる。未紐付けは data=null（導入セットアップへ誘導）。
+ * enabled でログイン済みのときだけ走らせる。未作成は data=null（店舗作成へ誘導）。
  */
 export function useMyStore(enabled: boolean) {
   return useQuery({
@@ -33,28 +32,13 @@ export function useMyStore(enabled: boolean) {
 }
 
 /**
- * 未所有の店を引き受ける（POST /store/:storeId/claim）。
- * 成功時は store/me を更新・無効化して最新を取り直す。
+ * 店舗をセルフサーブで新規作成する（POST /store）。
+ * 成功時は store/me を更新・無効化して最新を取り直し、ホームへ進める。
  */
-export function useClaimStore() {
+export function useCreateStore() {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: (storeId: string) => claimStore(storeId),
-    onSuccess: (store) => {
-      qc.setQueryData(STORE_ME_KEY, store);
-      qc.invalidateQueries({ queryKey: STORE_ME_KEY });
-    },
-  });
-}
-
-/**
- * 導入承認（POST /store/:storeId/approve）。
- * 成功時は store/me を更新して状態（approved）を反映する。
- */
-export function useApproveStore() {
-  const qc = useQueryClient();
-  return useMutation({
-    mutationFn: (storeId: string) => approveStore(storeId),
+    mutationFn: (input: CreateStoreInput) => createStore(input),
     onSuccess: (store) => {
       qc.setQueryData(STORE_ME_KEY, store);
       qc.invalidateQueries({ queryKey: STORE_ME_KEY });

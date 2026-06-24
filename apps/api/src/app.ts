@@ -39,9 +39,8 @@ import { createInMemoryStaffRepository } from "./features/staff/staff.repository
 import { buildTipUrl } from "./features/staff/staff.model.js";
 import {
   getMyStore,
-  claimStore,
+  createStore,
   getStore,
-  approveStore,
   updateStore,
   createStoreInvite,
   listStoreInvites,
@@ -150,14 +149,13 @@ export function createApp() {
   const inviteRoute = createInviteRoute({
     getInviteInfo: (code) => getInviteInfo(staffRepo, code),
   });
-  // store（認証必須・店スコープ）。承認・招待・スタッフ一覧・感謝の可視化のユースケースを注入する。
+  // store（認証必須・店スコープ）。店舗作成・招待・スタッフ一覧・感謝の可視化のユースケースを注入する。
   // 店向けの全ユースケースは Service 層で「自店の所有者か」を検証し、金額・残高・着金を一切返さない。
   const storeRoute = createStoreRoute({
     authMiddleware,
     getMyStore: (authUserId) => getMyStore(storeRepo, authUserId),
-    claimStore: (authUserId, storeId) => claimStore(storeRepo, authUserId, storeId),
+    createStore: (authUserId, input) => createStore(storeRepo, authUserId, input),
     getStore: (authUserId, storeId) => getStore(storeRepo, authUserId, storeId),
-    approveStore: (authUserId, storeId) => approveStore(storeRepo, authUserId, storeId),
     updateStore: (authUserId, storeId, input) =>
       updateStore(storeRepo, authUserId, storeId, input),
     createStoreInvite: (authUserId, storeId) =>

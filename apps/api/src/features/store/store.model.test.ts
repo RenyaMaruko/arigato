@@ -1,7 +1,5 @@
 import { describe, it, expect } from "vitest";
 import {
-  isApproved,
-  nextStatusOnApprove,
   generateInviteCode,
   buildInviteUrl,
   summarizeGratitudeCounts,
@@ -9,20 +7,11 @@ import {
 
 /**
  * store Model のテスト（純粋関数）。
- * 承認判定・招待コード生成・招待リンク組み立て・感謝の件数集計を検証する。
+ * 招待コード生成・招待リンク組み立て・感謝の件数集計を検証する。
+ * 店はセルフサーブで作成し承認ゲートは持たないため、承認判定のテストは無い。
  * 件数集計に金額が混入しないこと（入力も出力も件数のみ）を担保する。
  */
 describe("store.model", () => {
-  it("isApproved は approved のときだけ true", () => {
-    expect(isApproved("approved")).toBe(true);
-    expect(isApproved("pending")).toBe(false);
-  });
-
-  it("nextStatusOnApprove は常に approved（pending→approved・冪等）", () => {
-    expect(nextStatusOnApprove("pending")).toBe("approved");
-    expect(nextStatusOnApprove("approved")).toBe("approved");
-  });
-
   it("generateInviteCode は URL セーフで十分な長さの一意トークンを返す", () => {
     const a = generateInviteCode();
     const b = generateInviteCode();

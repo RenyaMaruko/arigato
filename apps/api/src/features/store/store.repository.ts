@@ -1,5 +1,5 @@
 import { getDb, sql } from "@arigato/db";
-import type { StoreStatus, StoreInviteStatus } from "./store.model.js";
+import type { StoreInviteStatus } from "./store.model.js";
 
 /**
  * store feature の Repository 層（DB アクセス専用・生 SQL）。
@@ -20,11 +20,21 @@ export type StoreRow = {
   description: string | null;
   industry: string | null;
   logoUrl: string | null;
-  status: StoreStatus;
-  // 承認日時（未承認は null。ISO 文字列）
-  approvedAt: string | null;
-  // 店アカウントの所有者（Supabase auth.users の UUID。未紐付けは null）
+  // 導入承認に同意した日時（未同意は null。ISO 文字列）
+  adoptionAgreedAt: string | null;
+  // 店アカウントの所有者（Supabase auth.users の UUID。移行用の既存行は null）
   ownerAuthUserId: string | null;
+};
+
+// 店舗のセルフサーブ作成で Repository が受け取る値
+export type CreateStoreParams = {
+  // 作成者（＝所有者。Supabase auth.users の UUID）
+  ownerAuthUserId: string;
+  name: string;
+  description: string | null;
+  industry: string | null;
+  logoUrl: string | null;
+  // 導入承認に同意した日時（作成時刻。ISO 文字列でなく Date を渡し SQL 側で now() でも可）
 };
 
 // 招待行（招待中一覧・発行結果に使う）
@@ -88,11 +98,8 @@ export type StoreRepository = {
   findStoreById: (storeId: string) => Promise<StoreRow | null>;
   // 所有者（auth ユーザー）から自店を取得する（店ホーム・設定の起点）
   findStoreByOwner: (authUserId: string) => Promise<StoreRow | null>;
-  // 未所有の店に所有者を紐付ける（導入セットアップ）。
-  // 既に別の所有者がいる行は更新しない（横取り防止）。紐付けできなければ null
-  setStoreOwner: (storeId: string, authUserId: string) => Promise<StoreRow | null>;
-  // 店を承認する（pending→approved・approved_at 設定）。承認後の行を返す。既に approved なら据え置く（冪等）
-  approveStore: (storeId: string) => Promise<StoreRow | null>;
+  // 店舗をセルフサーブで新規作成する（作成者＝所有者・導入承認に同意済み）。作成した行を返す
+  createStore: (params: CreateStoreParams) => Promise<StoreRow>;
   // 店プロフィールを更新する。更新後の行を返す
   updateStore: (storeId: string, params: UpdateStoreParams) => Promise<StoreRow | null>;
   // 招待を発行する（pending で新規作成）。発行した招待行を返す
@@ -111,14 +118,13 @@ export type StoreRepository = {
 
 // 共通の SELECT 句（店プロフィール行。金額・残高カラムは一切含めない）
 const STORE_SELECT = sql`
-  id                                                                          AS "id",
-  name                                                                        AS "name",
-  description                                                                 AS "description",
-  industry                                                                    AS "industry",
-  logo_url                                                                    AS "logoUrl",
-  status                                                                      AS "status",
-  to_char(approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')       AS "approvedAt",
-  owner_auth_user_id                                                          AS "ownerAuthUserId"
+  id                                                                                AS "id",
+  name                                                                              AS "name",
+  description                                                                       AS "description",
+  industry                                                                          AS "industry",
+  logo_url                                                                          AS "logoUrl",
+  to_char(adoption_agreed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')      AS "adoptionAgreedAt",
+  owner_auth_user_id                                                                AS "ownerAuthUserId"
 `;
 
 /**
@@ -152,35 +158,25 @@ export function createStoreRepository(): StoreRepository {
       return rows[0] ?? null;
     },
 
-    // 未所有の店に所有者を紐付ける（導入セットアップ）。
-    // WHERE owner_auth_user_id IS NULL OR = 自分 のときだけ更新し、他者所有の横取りを防ぐ。
-    async setStoreOwner(storeId, authUserId) {
+    // 店舗をセルフサーブで新規作成する。作成者を所有者にし、導入承認の同意日時（now）を記録する。
+    async createStore(params) {
       const db = getDb();
       const rows = await db.execute<StoreRow>(sql`
-        UPDATE store
-        SET owner_auth_user_id = ${authUserId}
-        WHERE id = ${storeId}
-          AND (owner_auth_user_id IS NULL OR owner_auth_user_id = ${authUserId})
+        INSERT INTO store (name, description, industry, logo_url, owner_auth_user_id, adoption_agreed_at)
+        VALUES (
+          ${params.name},
+          ${params.description},
+          ${params.industry},
+          ${params.logoUrl},
+          ${params.ownerAuthUserId},
+          now()
+        )
         RETURNING ${STORE_SELECT}
       `);
-      return rows[0] ?? null;
+      return rows[0]!;
     },
 
-    // 店を承認する（pending→approved）。承認日時を設定する。
-    // 既に approved の場合は approved_at を据え置き（COALESCE）にして冪等にする。
-    async approveStore(storeId) {
-      const db = getDb();
-      const rows = await db.execute<StoreRow>(sql`
-        UPDATE store
-        SET status = 'approved',
-            approved_at = COALESCE(approved_at, now())
-        WHERE id = ${storeId}
-        RETURNING ${STORE_SELECT}
-      `);
-      return rows[0] ?? null;
-    },
-
-    // 店プロフィールを更新する（名前・紹介・業種・ロゴ）。ステータス・承認は変更しない
+    // 店プロフィールを更新する（名前・紹介・業種・ロゴ）。導入承認の同意は変更しない
     async updateStore(storeId, params) {
       const db = getDb();
       const rows = await db.execute<StoreRow>(sql`

@@ -2,16 +2,22 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import {
   UpdateStoreProfileInputSchema,
+  CreateStoreInputSchema,
   type StoreProfile,
   type StoreInviteCreated,
   type StoreInvitesResponse,
   type StoreStaffResponse,
   type StoreGratitude,
   type UpdateStoreProfileInput,
+  type CreateStoreInput,
 } from "@arigato/shared";
 import type { MiddlewareHandler } from "hono";
 import type { AuthVariables } from "../../middleware/auth.js";
-import { StoreNotFoundError, StoreForbiddenError } from "./store.service.js";
+import {
+  StoreNotFoundError,
+  StoreForbiddenError,
+  StoreAlreadyExistsError,
+} from "./store.service.js";
 
 /**
  * store feature の Route 層（HTTP 入口・薄く保つ）。
@@ -26,14 +32,12 @@ import { StoreNotFoundError, StoreForbiddenError } from "./store.service.js";
 type StoreDeps = {
   // 認証ミドルウェア（JWKS 検証）。全ルートに前置する
   authMiddleware: MiddlewareHandler;
-  // ログイン中の店アカウントが所有する店を取得（未所有なら null）
+  // ログイン中の店アカウントが所有する店を取得（未作成なら null）
   getMyStore: (authUserId: string) => Promise<StoreProfile | null>;
-  // 未所有の店を引き受ける（導入セットアップ）
-  claimStore: (authUserId: string, storeId: string) => Promise<StoreProfile>;
+  // 店舗をセルフサーブで新規作成（店名＋導入承認の同意。作成者＝所有者）
+  createStore: (authUserId: string, input: CreateStoreInput) => Promise<StoreProfile>;
   // 自店プロフィールの取得（店スコープ）
   getStore: (authUserId: string, storeId: string) => Promise<StoreProfile>;
-  // 導入承認（pending→approved・店スコープ）
-  approveStore: (authUserId: string, storeId: string) => Promise<StoreProfile>;
   // 自店プロフィールの更新（店スコープ）
   updateStore: (
     authUserId: string,
@@ -75,17 +79,18 @@ export function createStoreRoute(deps: StoreDeps) {
       }
       return c.json(store);
     })
-    // 未所有の店を引き受ける（導入セットアップ。店アカウントと store を紐付ける）
-    .post("/:storeId/claim", async (c) => {
+    // 店舗をセルフサーブで新規作成する（店名＋導入承認の同意。作成者＝所有者・adoption_agreed_at 記録）
+    .post("/", zValidator("json", CreateStoreInputSchema), async (c) => {
       const authUser = c.get("authUser");
-      const storeId = c.req.param("storeId");
+      const input = c.req.valid("json");
       try {
-        const store = await deps.claimStore(authUser.id, storeId);
-        return c.json(store);
+        const store = await deps.createStore(authUser.id, input);
+        return c.json(store, 201);
       } catch (err) {
-        // 店が無いか、既に他者が所有している（横取り不可）
-        const mapped = handleStoreScopeError(err);
-        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        // 1アカウント1店舗（既に作成済み）は 409 で返す
+        if (err instanceof StoreAlreadyExistsError) {
+          return c.json({ error: "store_already_exists" }, 409);
+        }
         throw err;
       }
     })
@@ -109,19 +114,6 @@ export function createStoreRoute(deps: StoreDeps) {
       const input = c.req.valid("json");
       try {
         const store = await deps.updateStore(authUser.id, storeId, input);
-        return c.json(store);
-      } catch (err) {
-        const mapped = handleStoreScopeError(err);
-        if (mapped) return c.json({ error: mapped.error }, mapped.status);
-        throw err;
-      }
-    })
-    // 導入承認（pending→approved・店スコープ）
-    .post("/:storeId/approve", async (c) => {
-      const authUser = c.get("authUser");
-      const storeId = c.req.param("storeId");
-      try {
-        const store = await deps.approveStore(authUser.id, storeId);
         return c.json(store);
       } catch (err) {
         const mapped = handleStoreScopeError(err);

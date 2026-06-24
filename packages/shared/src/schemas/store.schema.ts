@@ -13,17 +13,14 @@ import { z } from "zod";
 export const STORE_NAME_MAX_LENGTH = 60;
 export const STORE_DESCRIPTION_MAX_LENGTH = 200;
 
-// 店の導入ステータス（pending: 承認待ち / approved: 承認済み）
-export const StoreStatusSchema = z.enum(["pending", "approved"]);
-export type StoreStatus = z.infer<typeof StoreStatusSchema>;
-
 // 招待ステータス（pending: 招待中 / accepted: 所属確定 / revoked: 失効）
 export const StoreInviteStatusSchema = z.enum(["pending", "accepted", "revoked"]);
 export type StoreInviteStatus = z.infer<typeof StoreInviteStatusSchema>;
 
 /**
- * GET /store/:storeId（店プロフィール・店ホームの基盤）の応答。
- * 名前・紹介・業種・ロゴ・導入ステータス・承認日時を返す。金額・残高は一切含めない。
+ * GET /store/me・GET /store/:storeId（店プロフィール・店ホームの基盤）の応答。
+ * 名前・紹介・業種・ロゴ・導入承認の同意日時を返す。金額・残高は一切含めない。
+ * 運営審査ゲート（status の pending→approved）は廃止し、店がセルフサーブで作成する。
  */
 export const StoreProfileSchema = z.object({
   id: z.string().uuid(),
@@ -31,11 +28,25 @@ export const StoreProfileSchema = z.object({
   description: z.string().nullable(),
   industry: z.string().nullable(),
   logoUrl: z.string().nullable(),
-  status: StoreStatusSchema,
-  // 承認日時（未承認は null。ISO 文字列）
-  approvedAt: z.string().nullable(),
+  // 導入承認に同意した日時（作成時に記録。未同意は null。ISO 文字列）
+  adoptionAgreedAt: z.string().nullable(),
 });
 export type StoreProfile = z.infer<typeof StoreProfileSchema>;
+
+/**
+ * POST /store（店舗のセルフサーブ新規作成）の入力。
+ * 店名（必須）と「導入承認の同意」（必須 true）。任意で紹介・業種・ロゴも受ける。
+ * 同意は店自身の一手間（就業規則との整合）として求め、作成時に adoption_agreed_at を記録する。
+ */
+export const CreateStoreInputSchema = z.object({
+  name: z.string().min(1).max(STORE_NAME_MAX_LENGTH),
+  // 導入承認の同意（true でなければ作成を受け付けない）
+  adoptionAgreed: z.literal(true),
+  description: z.string().max(STORE_DESCRIPTION_MAX_LENGTH).optional(),
+  industry: z.string().max(STORE_NAME_MAX_LENGTH).optional(),
+  logoUrl: z.string().url().optional(),
+});
+export type CreateStoreInput = z.infer<typeof CreateStoreInputSchema>;
 
 /**
  * PATCH /store/:storeId（店プロフィール編集）の入力。

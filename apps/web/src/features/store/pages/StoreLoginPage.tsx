@@ -62,7 +62,6 @@ export function StoreLoginPage() {
         {/* 見出し */}
         <div className="mt-8 text-center">
           <div className="text-token-3xl font-bold text-ink">{t("store.loginTitle")}</div>
-          <div className="mt-2 text-token-md text-ink-sub">{t("store.loginLead")}</div>
         </div>
 
         {/* マジックリンク送信後の案内 */}

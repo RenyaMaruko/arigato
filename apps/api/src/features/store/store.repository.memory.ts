@@ -22,7 +22,7 @@ export function createInMemoryStoreRepository(): StoreRepository {
   // スタッフの簡易ストア（store_id ごとに保持）
   const staffByStore = new Map<string, StoreStaffRow[]>();
 
-  // 開発用シード店（任意）。owner 未紐付けの pending 店を1件用意する
+  // 開発用シード店（任意）。owner 未紐付け・導入承認未同意の移行相当の店を1件用意する
   const seedStoreId = process.env.SEED_STORE_ID;
   if (seedStoreId) {
     stores.set(seedStoreId, {
@@ -31,8 +31,7 @@ export function createInMemoryStoreRepository(): StoreRepository {
       description: null,
       industry: null,
       logoUrl: null,
-      status: "pending",
-      approvedAt: null,
+      adoptionAgreedAt: null,
       ownerAuthUserId: null,
     });
   }
@@ -49,29 +48,20 @@ export function createInMemoryStoreRepository(): StoreRepository {
       return null;
     },
 
-    async setStoreOwner(storeId, authUserId) {
-      const store = stores.get(storeId);
-      if (!store) return null;
-      // 既に別の所有者がいれば横取りしない
-      if (store.ownerAuthUserId !== null && store.ownerAuthUserId !== authUserId) {
-        return null;
-      }
-      const updated = { ...store, ownerAuthUserId: authUserId };
-      stores.set(storeId, updated);
-      return updated;
-    },
-
-    async approveStore(storeId) {
-      const store = stores.get(storeId);
-      if (!store) return null;
-      const updated: StoreRow = {
-        ...store,
-        status: "approved",
-        // 既に承認済みなら据え置き（冪等）
-        approvedAt: store.approvedAt ?? new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+    async createStore(params) {
+      // セルフサーブ作成（作成者＝所有者・導入承認に同意済み）
+      const id = randomUUID();
+      const created: StoreRow = {
+        id,
+        name: params.name,
+        description: params.description,
+        industry: params.industry,
+        logoUrl: params.logoUrl,
+        adoptionAgreedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+        ownerAuthUserId: params.ownerAuthUserId,
       };
-      stores.set(storeId, updated);
-      return updated;
+      stores.set(id, created);
+      return created;
     },
 
     async updateStore(storeId, params) {

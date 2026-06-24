@@ -104,11 +104,13 @@ QR読取
 
 ### 店（store）
 ```
-ログイン → ホーム
-  ├ 導入承認
-  ├ スタッフ一覧管理（追加・QR発行窓口）
-  └ 感謝の可視化（件数・お客さまの声。金額は一切なし）
+ログイン（自己登録）
+  → 初回：店舗を自分で作成（店名等）＋導入承認に同意（就業規則整合の一手間）
+  → ホーム
+     ├ スタッフ招待（方式A）・スタッフ一覧管理
+     └ 感謝の可視化（件数・お客さまの声。金額は一切なし）
 ```
+> 店はセルフサーブで登録する（運営の事前発行・claim は廃止）。運営は事後に監視・必要なら停止するだけ（事前の関所にしない）。
 
 ### 運営（admin / PC）
 ```
@@ -122,8 +124,11 @@ QR読取
 > 物理スキーマ（Drizzle 定義・生SQL）は Generator が実装する。ここでは持ち方の方針を定義する。`auth.*` は Supabase 管理、本サービスは `public.*` を管理。
 
 ### store（店）
-- id, name, status（pending / approved）, approved_at, created_at
+- id, name, owner_auth_user_id（作成した店アカウント＝Supabase auth.users）, adoption_agreed_at（導入承認に同意した日時）, created_at, description/industry/logo_url（任意）
+- **店はセルフサーブで自分の店舗を作成**する（owner_auth_user_id ＝ 作成者）。運営の事前発行・claim は廃止。
+- 「導入承認」は店自身の一手間（同意）として `adoption_agreed_at` を記録する（status の pending→approved という運営審査ゲートは廃止）。
 - 店はお金に触れないため、決済・残高に関わるカラムを持たない。
+- 運営は事後に監視し、必要なら停止できる（suspended フラグ等は admin 実装時に追加）。
 
 ### staff_invite（スタッフ招待）— 追加方式A
 - id, store_id, code（一意・招待コード/リンク用トークン）, status（pending / accepted / revoked）, created_at, accepted_at, accepted_staff_id
@@ -217,7 +222,9 @@ verified（着金可能）
 ### store（認証必須・店スコープ）
 | メソッド | パス | 役割 |
 |---|---|---|
-| POST | `/store/:storeId/approve` | 導入承認（status を approved に） |
+| POST | `/store` | 店舗をセルフサーブで新規作成（店名等＋導入承認の同意。owner＝ログイン中のアカウント、adoption_agreed_at 記録）。claim は廃止 |
+| GET | `/store/me` | 自分が作成した店舗を取得（未作成なら作成画面へ） |
+| PATCH | `/store/:storeId` | 店舗プロフィール更新（店名・説明等） |
 | POST | `/store/:storeId/invites` | スタッフ招待の発行（招待リンク/コード生成）＝方式A |
 | GET | `/store/:storeId/invites` | 発行済み招待の一覧・状態（pending/accepted/revoked） |
 | GET | `/store/:storeId/staff` | 所属スタッフ一覧（在籍管理） |

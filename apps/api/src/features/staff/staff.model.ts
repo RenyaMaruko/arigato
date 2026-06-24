@@ -10,9 +10,6 @@ export type IdentityStatus = "none" | "pending" | "verified";
 // 招待のステータス（pending: 未消費 / accepted: 消費済み / revoked: 失効）
 export type InviteStatus = "pending" | "accepted" | "revoked";
 
-// 店の導入ステータス（pending: 承認待ち / approved: 承認済み）
-export type StoreStatus = "pending" | "approved";
-
 // 着金（精算）ステータス（held: 保留 / payable: 着金可能 / paid: 着金済）
 export type SettlementStatus = "held" | "payable" | "paid";
 
@@ -123,11 +120,11 @@ export function buildTaxReportCsv(rows: TaxReportRow[]): string {
 
 /**
  * 招待が「今すぐ所属確定に使えるか」を判定する純粋関数。
- * 招待が未消費（pending）かつ、発行元の店が承認済み（approved）のときのみ有効。
- * これにより「店承認」を招待で自然に担保する。
+ * 招待が未消費（pending）かつ、発行元の店が導入承認に同意済み（storeAdopted）のときのみ有効。
+ * 店はセルフサーブで作成時に導入承認へ同意するため、これにより「店承認」を招待で自然に担保する。
  */
-export function isInviteUsable(inviteStatus: InviteStatus, storeStatus: StoreStatus): boolean {
-  return inviteStatus === "pending" && storeStatus === "approved";
+export function isInviteUsable(inviteStatus: InviteStatus, storeAdopted: boolean): boolean {
+  return inviteStatus === "pending" && storeAdopted;
 }
 
 /**

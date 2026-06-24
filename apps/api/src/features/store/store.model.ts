@@ -3,30 +3,15 @@ import { randomBytes } from "node:crypto";
 /**
  * store feature の Model 層（純粋関数）。
  * 店はお金に触れないため、残高・着金・金額に関するルールは一切持たない。
- * 承認状態の判定・招待コードの生成・感謝集計の期間判定などの業務ルールを純粋関数で表す。
+ * 招待コードの生成・招待リンクの組み立て・感謝集計の期間判定などの業務ルールを純粋関数で表す。
+ *
+ * 店はセルフサーブで自分の店舗を作成する（運営の事前発行・claim・承認ゲートは廃止）。
+ * 「導入承認」は作成時の同意（adoption_agreed_at）として Service/Repository が記録する。
  * DB アクセスはしない。
  */
 
-// 店の導入ステータス（pending: 承認待ち / approved: 承認済み）
-export type StoreStatus = "pending" | "approved";
-
 // 招待ステータス（pending: 招待中 / accepted: 所属確定 / revoked: 失効）
 export type StoreInviteStatus = "pending" | "accepted" | "revoked";
-
-/**
- * 店が承認済みかを判定する純粋関数。
- */
-export function isApproved(status: StoreStatus): boolean {
-  return status === "approved";
-}
-
-/**
- * 承認リクエストに対して、次に遷移すべきステータスを返す純粋関数。
- * 承認は pending → approved の一方向のみ。既に approved でも approved に据え置く（冪等）。
- */
-export function nextStatusOnApprove(_current: StoreStatus): StoreStatus {
-  return "approved";
-}
 
 /**
  * スタッフ招待コード（リンク/コード用トークン）を生成する純粋関数。

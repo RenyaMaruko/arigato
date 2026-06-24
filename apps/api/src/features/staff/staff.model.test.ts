@@ -77,13 +77,13 @@ describe("staff.model", () => {
     expect(csv).toContain('2025-05-14,100,"居酒屋, 花"');
   });
 
-  it("isInviteUsable は pending かつ店 approved のときだけ true", () => {
-    expect(isInviteUsable("pending", "approved")).toBe(true);
-    // 店が未承認なら使えない（店承認を招待で担保）
-    expect(isInviteUsable("pending", "pending")).toBe(false);
+  it("isInviteUsable は pending かつ店が導入承認に同意済みのときだけ true", () => {
+    expect(isInviteUsable("pending", true)).toBe(true);
+    // 店が導入承認に同意していなければ使えない（店承認を招待で担保）
+    expect(isInviteUsable("pending", false)).toBe(false);
     // 招待が消費済み・失効なら使えない
-    expect(isInviteUsable("accepted", "approved")).toBe(false);
-    expect(isInviteUsable("revoked", "approved")).toBe(false);
+    expect(isInviteUsable("accepted", true)).toBe(false);
+    expect(isInviteUsable("revoked", true)).toBe(false);
   });
 
   it("buildTipUrl は /tip/:staffId の固定 URL を作る", () => {

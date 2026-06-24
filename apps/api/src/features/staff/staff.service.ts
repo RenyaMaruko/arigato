@@ -69,8 +69,8 @@ export async function getInviteInfo(
   const invite = await repo.findInviteByCode(code);
   if (!invite) return null;
 
-  // 招待が未消費かつ店が承認済みのときのみ valid（業務ルールは Model の純粋関数で判定）
-  const valid = isInviteUsable(invite.inviteStatus, invite.storeStatus);
+  // 招待が未消費かつ店が導入承認に同意済みのときのみ valid（業務ルールは Model の純粋関数で判定）
+  const valid = isInviteUsable(invite.inviteStatus, invite.storeAdopted);
   return {
     code: invite.code,
     storeId: invite.storeId,
@@ -114,7 +114,7 @@ export class StaffAlreadyExistsError extends Error {
  * （identity_status は DB 既定の none のまま）。
  *
  * - 既に自分の staff があれば多重作成を防ぐ（StaffAlreadyExistsError）。
- * - 招待が無効（消費済み・失効・店未承認）なら InviteNotUsableError。
+ * - 招待が無効（消費済み・失効・店が導入承認未同意）なら InviteNotUsableError。
  */
 export async function createStaffProfile(
   repo: StaffRepository,
@@ -130,7 +130,7 @@ export async function createStaffProfile(
 
   // 招待を検証（未消費かつ店承認済みのときのみ所属確定に使える）
   const invite = await repo.findInviteByCode(input.inviteCode);
-  if (!invite || !isInviteUsable(invite.inviteStatus, invite.storeStatus)) {
+  if (!invite || !isInviteUsable(invite.inviteStatus, invite.storeAdopted)) {
     throw new InviteNotUsableError();
   }
 

@@ -178,7 +178,6 @@ export const ja = {
       san: "さん",
       // ログイン
       loginTitle: "店舗ログイン",
-      loginLead: "お店に届く「ありがとう」を見守りましょう",
       continueWithGoogle: "Google で続ける",
       emailLabel: "メールアドレス",
       emailPlaceholder: "store@example.com",
@@ -189,14 +188,16 @@ export const ja = {
       loginError: "ログインに失敗しました。もう一度お試しください。",
       logout: "ログアウト",
       loading: "読み込み中…",
-      // 導入セットアップ（claim）
-      setupTitle: "お店を引き受ける",
-      setupLead: "運営から案内された店舗IDを入力して、\nこのアカウントにお店を紐付けます。",
-      setupStoreIdLabel: "店舗ID",
-      setupStoreIdPlaceholder: "運営から受け取った店舗ID",
-      setupSubmit: "このお店を引き受ける",
-      setupError: "お店を引き受けられませんでした。店舗IDをご確認ください。",
-      setupNotFound: "そのお店は見つからないか、既に別のアカウントが利用中です。",
+      // 店舗作成（セルフサーブ登録）
+      createTitle: "お店を作成する",
+      createLead: "あなたのお店の名前を入力して、\n導入承認に同意するとはじめられます。",
+      createNameLabel: "店名",
+      createNamePlaceholder: "例）カフェ Arigato",
+      createAgreeLabel:
+        "このお店で投げ銭を導入することに同意します（就業規則との整合は店舗側で確認します）。",
+      createSubmit: "このお店を作成する",
+      createError: "お店を作成できませんでした。もう一度お試しください。",
+      createAlreadyExists: "このアカウントには既にお店があります。",
       // ホーム（01）
       homeBell: "通知",
       homeHeroTitle: "お店全体に届いた\n「ありがとう」",
@@ -210,17 +211,13 @@ export const ja = {
       navStaff: "スタッフ",
       navGratitude: "感謝の可視化",
       navSettings: "設定",
-      // 導入・承認（08）
+      // 導入・承認（08）— 作成時に同意済みの記録を表示する読み取り専用画面
       approvalTitle: "導入・承認",
       approvalApprovedTitle: "導入済み",
       approvalApprovedSub: "この店舗ではサービスを\n利用中です",
-      approvalPendingTitle: "承認待ち",
-      approvalPendingSub: "導入を承認すると、\nスタッフの招待ができます",
       approvalCardTitle: "就業規則との整合確認",
-      approvalCardBody: "就業規則との整合のため、\n導入を承認してください。",
-      approvalButton: "導入を承認する",
-      approvalApproving: "承認中…",
-      approvalError: "承認に失敗しました。もう一度お試しください。",
+      approvalCardBody: "お店の作成時に、就業規則との整合のため\n導入承認に同意いただいています。",
+      approvalAgreedAt: "同意日：{{date}}",
       // スタッフ一覧（03）
       staffTitle: "スタッフ一覧",
       staffTabActive: "在籍中",

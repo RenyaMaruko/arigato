@@ -36,6 +36,13 @@
       "when": 1782143312170,
       "tag": "0004_married_starjammers",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1782271161514,
+      "tag": "0005_shocking_kitty_pryde",
+      "breakpoints": true
     }
   ]
 }

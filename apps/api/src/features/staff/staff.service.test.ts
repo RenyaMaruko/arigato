@@ -153,7 +153,7 @@ describe("staff.service", () => {
       storeId: "store-1",
       storeName: "カフェ Arigato",
       inviteStatus: "pending",
-      storeStatus: "approved",
+      storeAdopted: true,
     });
     // 店が未承認の招待（使えないはず）
     mock.invites.set("INV-STORE-PENDING", {
@@ -161,7 +161,7 @@ describe("staff.service", () => {
       storeId: "store-2",
       storeName: "未承認の店",
       inviteStatus: "pending",
-      storeStatus: "pending",
+      storeAdopted: false,
     });
   });
 
@@ -229,7 +229,7 @@ describe("staff.service", () => {
       storeId: "store-1",
       storeName: "カフェ Arigato",
       inviteStatus: "pending",
-      storeStatus: "approved",
+      storeAdopted: true,
     });
     await expect(
       createStaffProfile(mock.repo, buildUrl, "auth-user-1", {
@@ -288,7 +288,7 @@ describe("staff.service", () => {
       storeId: "store-1",
       storeName: "カフェ Arigato",
       inviteStatus: "pending",
-      storeStatus: "approved",
+      storeAdopted: true,
     });
     await createStaffProfile(mock.repo, buildUrl, "auth-B", {
       inviteCode: "INV-OK-B",

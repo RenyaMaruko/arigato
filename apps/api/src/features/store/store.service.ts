@@ -5,18 +5,14 @@ import type {
   StoreStaffResponse,
   StoreGratitude,
   UpdateStoreProfileInput,
+  CreateStoreInput,
 } from "@arigato/shared";
-import {
-  isApproved,
-  generateInviteCode,
-  summarizeGratitudeCounts,
-  type StoreStatus,
-} from "./store.model.js";
+import { generateInviteCode, summarizeGratitudeCounts } from "./store.model.js";
 import type { StoreRepository, StoreRow } from "./store.repository.js";
 
 /**
  * store feature の Service 層（ユースケースの指揮者・アクセス制御）。
- * Model（承認判定・招待コード生成・件数集計）と Repository（DB）を組み合わせて店のユースケースを実現する。
+ * Model（招待コード生成・件数集計）と Repository（DB）を組み合わせて店のユースケースを実現する。
  * Repository は引数で受け取り（注入）、feature から infrastructure を直接 import しない。
  *
  * アクセス制御はこの層で守る。店スコープの全 API は、認証済みの authUserId が「その店の所有者」である
@@ -28,13 +24,6 @@ import type { StoreRepository, StoreRow } from "./store.repository.js";
 
 // お客さまの声フィードの表示上限（件数。金額とは無関係）
 const GRATITUDE_VOICES_LIMIT = 30;
-
-/**
- * 店が承認済みかを返すユースケース（Sprint 1 から残す薄いラッパ）。
- */
-export function resolveApproval(status: StoreStatus): boolean {
-  return isApproved(status);
-}
 
 // 店スコープのアクセス制御で起こりうるエラー（Route で HTTP ステータスに変換する）
 // 店が存在しない／自分の所有でない場合に投げる。情報秘匿のため両方を区別なく 404 扱いにできる。
@@ -59,8 +48,7 @@ function toStoreProfile(row: StoreRow): StoreProfile {
     description: row.description,
     industry: row.industry,
     logoUrl: row.logoUrl,
-    status: row.status,
-    approvedAt: row.approvedAt,
+    adoptionAgreedAt: row.adoptionAgreedAt,
   };
 }
 
@@ -89,8 +77,8 @@ async function requireOwnedStore(
 
 /**
  * 自分（ログイン中の店アカウント）が所有する店を取得する（GET /store/me）。
- * 店ホーム・設定の起点。未紐付け（どの店も所有していない）なら null を返し、
- * フロントは導入承認（claim）導線へ誘導する。
+ * 店ホーム・設定の起点。未作成（どの店も所有していない）なら null を返し、
+ * フロントは店舗作成（セルフサーブ）導線へ誘導する。
  */
 export async function getMyStore(
   repo: StoreRepository,
@@ -101,36 +89,48 @@ export async function getMyStore(
   return toStoreProfile(store);
 }
 
+// 店舗の重複作成（1アカウント1店舗）を防ぐためのエラー（Route で 409 に変換する）
+export class StoreAlreadyExistsError extends Error {
+  constructor() {
+    super("store_already_exists");
+    this.name = "StoreAlreadyExistsError";
+  }
+}
+
 /**
- * 店アカウントが未所有の店を引き受ける（導入のセットアップ・POST /store/:storeId/claim）。
- * 運営が用意した（pending の）店に、ログイン中の店アカウントを所有者として紐付ける。
- * これにより店アカウントの Supabase ユーザーと store が結びつき、以降は店スコープで操作できる。
- * - 店が無ければ StoreNotFoundError。
- * - 既に別の所有者がいる場合は StoreForbiddenError（横取りを防ぐ）。自分が所有者なら冪等に成功。
+ * 店舗をセルフサーブで新規作成する（POST /store）。
+ * ログイン中の店アカウントを所有者にし、店名等と「導入承認の同意」を受けて作成する。
+ * 同意（adoption_agreed_at）は Repository が作成時刻で記録する（店自身の一手間）。
+ * 運営の事前発行・claim・承認ゲートは廃止し、ここで自己登録を完結させる。
+ *
+ * - 既に自分の店があれば多重作成を防ぐ（StoreAlreadyExistsError・1アカウント1店舗）。
  */
-export async function claimStore(
+export async function createStore(
   repo: StoreRepository,
   authUserId: string,
-  storeId: string,
+  input: CreateStoreInput,
 ): Promise<StoreProfile> {
-  const store = await repo.findStoreById(storeId);
-  if (!store) {
-    throw new StoreNotFoundError();
+  // 多重作成の防止（同じ auth ユーザーは1つの店のみ所有する）
+  const existing = await repo.findStoreByOwner(authUserId);
+  if (existing) {
+    throw new StoreAlreadyExistsError();
   }
-  // 既に所有者がいて自分でなければ拒否（他人の店は引き受けられない）
-  if (store.ownerAuthUserId !== null && store.ownerAuthUserId !== authUserId) {
-    throw new StoreForbiddenError();
-  }
-  // 自分が所有者なら据え置き（冪等）。未所有なら紐付ける
-  if (store.ownerAuthUserId === authUserId) {
-    return toStoreProfile(store);
-  }
-  const claimed = await repo.setStoreOwner(storeId, authUserId);
-  if (!claimed) {
-    // 紐付け直前に他者が所有した場合の競合
-    throw new StoreForbiddenError();
-  }
-  return toStoreProfile(claimed);
+
+  // 空文字の任意項目は未入力（null）に正規化して保存する
+  const normalize = (v: string | undefined): string | null => {
+    if (v == null) return null;
+    const trimmed = v.trim();
+    return trimmed === "" ? null : trimmed;
+  };
+
+  const created = await repo.createStore({
+    ownerAuthUserId: authUserId,
+    name: input.name.trim(),
+    description: normalize(input.description),
+    industry: normalize(input.industry),
+    logoUrl: input.logoUrl ?? null,
+  });
+  return toStoreProfile(created);
 }
 
 /**
@@ -147,26 +147,8 @@ export async function getStore(
 }
 
 /**
- * 導入を承認する（POST /store/:storeId/approve）。店スコープ。
- * 自店の status を pending→approved に遷移し、承認日時を設定する（既に approved なら冪等に据え置く）。
- */
-export async function approveStore(
-  repo: StoreRepository,
-  authUserId: string,
-  storeId: string,
-): Promise<StoreProfile> {
-  // 所有確認（自店のみ承認できる）
-  await requireOwnedStore(repo, authUserId, storeId);
-  const approved = await repo.approveStore(storeId);
-  if (!approved) {
-    throw new StoreNotFoundError();
-  }
-  return toStoreProfile(approved);
-}
-
-/**
  * 店プロフィールを更新する（PATCH /store/:storeId）。店スコープ。
- * 名前・紹介・業種・ロゴのみ更新する。ステータス・承認・金額は変更しない。
+ * 名前・紹介・業種・ロゴのみ更新する。導入承認の同意・金額は変更しない。
  */
 export async function updateStore(
   repo: StoreRepository,
