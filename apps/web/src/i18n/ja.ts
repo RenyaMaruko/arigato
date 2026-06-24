@@ -236,6 +236,7 @@ export const ja = {
       identityCompletePendingNote: "完了が反映されると、この画面が切り替わります。",
       identityCompleteSeeBalance: "残高を確認する",
       identityCompleteSeeHistory: "履歴を見る",
+      identityCompleteGoHome: "ホームに戻る",
       // 申告データ出力（08）
       exportTitle: "データ出力",
       exportLead: "受取記録をCSVで出力できます\n確定申告にご利用いただけます",
