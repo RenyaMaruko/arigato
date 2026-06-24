@@ -106,26 +106,29 @@ export function StaffPayoutPage() {
           </div>
         ) : (
           <>
-            {/* 着金可能額（送金できる全額・手取り）を主役に大きく見せる */}
-            <section className="rounded-[18px] border border-line-soft bg-page px-[22px] py-[22px]">
+            {/* 着金可能額（送金できる全額・手取り）を主役に大きくローズで見せる。
+                残高モック（05/01）の保留残高カードのトーン（淡ローズ面＋ローズ濃の数字＋丸アイコン）に寄せる。 */}
+            <section className="rounded-[18px] border border-rose-spark/50 bg-rose-soft px-[22px] py-[22px]">
               <div className="flex items-start justify-between">
                 <div>
-                  <div className="text-token-md font-bold text-ink">
+                  <div className="text-token-md font-bold text-rose">
                     {t("staff.payoutAvailableLabel")}
                   </div>
-                  <div className="mt-0.5 text-token-sm text-muted-soft">
+                  <div className="mt-0.5 text-token-sm text-rose/60">
                     {t("staff.payoutAvailableSub")}
                   </div>
                 </div>
-                <span className="text-muted-soft">
+                {/* ローズ淡色の丸に銀行アイコン（着金口座のしるし） */}
+                <span className="flex h-[42px] w-[42px] flex-none items-center justify-center rounded-full bg-rose-spark/40 text-rose">
                   <BankIcon />
                 </span>
               </div>
-              <div className="mt-3.5 text-[34px] font-bold leading-none text-ink">
+              {/* 手取り全額をローズで大きく（このページの主役） */}
+              <div className="mt-3.5 text-[34px] font-bold leading-none text-rose">
                 ¥{payableAmount.toLocaleString()}
               </div>
               {/* 着金タイミングを明示（数営業日） */}
-              <div className="mt-3 text-token-xs leading-relaxed text-muted">
+              <div className="mt-3 text-token-xs leading-relaxed text-rose/70">
                 {t("staff.payoutArrivalNote")}
               </div>
             </section>
@@ -152,8 +155,14 @@ export function StaffPayoutPage() {
                 verified でも残高0/最低額未満なら無効化＋理由。それ以外は送金ボタン。 */}
             {!verified ? (
               <div className="mt-6 flex flex-col gap-3">
-                <div className="rounded-xl border border-line bg-surface-subtle px-4 py-4 text-center text-token-sm leading-relaxed text-ink-sub">
-                  {t("staff.payoutNeedVerify")}
+                {/* 本人確認・口座登録が必要な案内（淡ローズ面＋丸アイコンで「要対応」を分かりやすく） */}
+                <div className="flex items-start gap-3 rounded-xl border border-rose-spark/50 bg-rose-soft px-4 py-4">
+                  <span className="mt-0.5 flex h-7 w-7 flex-none items-center justify-center rounded-full bg-rose-spark/40 text-rose">
+                    <ShieldIcon />
+                  </span>
+                  <p className="text-token-sm leading-relaxed text-rose/90">
+                    {t("staff.payoutNeedVerify")}
+                  </p>
                 </div>
                 <button
                   type="button"
@@ -225,10 +234,20 @@ export function StaffPayoutPage() {
             <div className="mb-4 flex justify-center">
               <span className="h-1 w-[38px] rounded-pill bg-handle" />
             </div>
+            {/* 送金先（口座）のしるしをローズ淡色の丸で添える */}
+            <div className="mb-3.5 flex justify-center">
+              <span className="flex h-14 w-14 items-center justify-center rounded-full bg-rose-soft text-rose">
+                <BankIcon />
+              </span>
+            </div>
             <div className="text-center text-token-xl font-bold text-ink">
               {t("staff.payoutConfirmTitle")}
             </div>
-            {/* 送金する金額と着金タイミングを明示してから実行する */}
+            {/* 送金する金額をローズで強調して見せる */}
+            <div className="mt-2 text-center text-token-4xl font-bold leading-none text-rose">
+              ¥{payableAmount.toLocaleString()}
+            </div>
+            {/* 着金タイミングを明示してから実行する */}
             <p className="mt-3 text-center text-token-md leading-relaxed text-ink-sub">
               {t("staff.payoutConfirmBody", {
                 amount: `¥${payableAmount.toLocaleString()}`,
@@ -270,9 +289,13 @@ function PayoutRow({ item, showDivider }: { item: PayoutItem; showDivider: boole
 
   return (
     <div
-      className={`flex items-center justify-between px-4 py-3.5 ${showDivider ? "border-t border-line-soft" : ""}`}
+      className={`flex items-center gap-3 px-4 py-3.5 ${showDivider ? "border-t border-line-soft" : ""}`}
     >
-      <div className="flex flex-col gap-0.5">
+      {/* 送金のしるし（ローズ淡色の丸＋上向き矢印＝口座へ送金） */}
+      <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-rose">
+        <PayoutMarkIcon />
+      </span>
+      <div className="flex min-w-0 flex-1 flex-col gap-0.5">
         <span className="text-token-md font-bold text-ink">
           ¥{item.amount.toLocaleString()}
         </span>
@@ -334,12 +357,52 @@ function BackIcon() {
   );
 }
 
-/** 銀行（着金口座）アイコン。 */
+/** 盾（本人確認・口座登録が要る、の含意）アイコン。要対応の案内に添える。 */
+function ShieldIcon() {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 3 5 6v5c0 4 3 7 7 9 4-2 7-5 7-9V6z" />
+      <path d="m9 12 2 2 4-4" />
+    </svg>
+  );
+}
+
+/** 送金履歴の行頭マーク（口座へ送金＝上向き矢印）アイコン。 */
+function PayoutMarkIcon() {
+  return (
+    <svg
+      width="17"
+      height="17"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.9"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M12 19V6" />
+      <path d="m6 11 6-6 6 6" />
+    </svg>
+  );
+}
+
+/** 銀行（着金口座）アイコン。残高カードの丸バッジ（42px）の中に収まるサイズ。 */
 function BankIcon() {
   return (
     <svg
-      width="30"
-      height="30"
+      width="22"
+      height="22"
       viewBox="0 0 24 24"
       fill="none"
       stroke="currentColor"
