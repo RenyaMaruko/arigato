@@ -78,13 +78,15 @@ export function createInMemoryStoreRepository(): StoreRepository {
       return updated;
     },
 
-    async createInvite(storeId, code) {
+    async createInvite(storeId, code, label) {
       const invite: StoreInviteRow = {
         code,
         status: "pending",
         createdAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
         acceptedStaffName: null,
         acceptedAt: null,
+        // 誰宛かの任意メモ（未入力は null）
+        label: label ?? null,
       };
       const list = invitesByStore.get(storeId) ?? [];
       // 新しい順に保つため先頭に積む

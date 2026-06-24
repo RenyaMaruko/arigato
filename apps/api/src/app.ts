@@ -158,8 +158,8 @@ export function createApp() {
     getStore: (authUserId, storeId) => getStore(storeRepo, authUserId, storeId),
     updateStore: (authUserId, storeId, input) =>
       updateStore(storeRepo, authUserId, storeId, input),
-    createStoreInvite: (authUserId, storeId) =>
-      createStoreInvite(storeRepo, buildStoreInviteUrl, authUserId, storeId),
+    createStoreInvite: (authUserId, storeId, input) =>
+      createStoreInvite(storeRepo, buildStoreInviteUrl, authUserId, storeId, input),
     listStoreInvites: (authUserId, storeId) =>
       listStoreInvites(storeRepo, buildStoreInviteUrl, authUserId, storeId),
     listStoreStaff: (authUserId, storeId) => listStoreStaff(storeRepo, authUserId, storeId),

@@ -3,6 +3,7 @@ import { zValidator } from "@hono/zod-validator";
 import {
   UpdateStoreProfileInputSchema,
   CreateStoreInputSchema,
+  CreateStoreInviteInputSchema,
   type StoreProfile,
   type StoreInviteCreated,
   type StoreInvitesResponse,
@@ -10,6 +11,7 @@ import {
   type StoreGratitude,
   type UpdateStoreProfileInput,
   type CreateStoreInput,
+  type CreateStoreInviteInput,
 } from "@arigato/shared";
 import type { MiddlewareHandler } from "hono";
 import type { AuthVariables } from "../../middleware/auth.js";
@@ -44,8 +46,12 @@ type StoreDeps = {
     storeId: string,
     input: UpdateStoreProfileInput,
   ) => Promise<StoreProfile>;
-  // スタッフ招待の発行（方式A・店スコープ）
-  createStoreInvite: (authUserId: string, storeId: string) => Promise<StoreInviteCreated>;
+  // スタッフ招待の発行（方式A・店スコープ）。input.label は誰宛かの任意メモ
+  createStoreInvite: (
+    authUserId: string,
+    storeId: string,
+    input: CreateStoreInviteInput,
+  ) => Promise<StoreInviteCreated>;
   // 発行済み招待の一覧（店スコープ）
   listStoreInvites: (authUserId: string, storeId: string) => Promise<StoreInvitesResponse>;
   // 所属スタッフ一覧（在籍管理・店スコープ）
@@ -121,12 +127,13 @@ export function createStoreRoute(deps: StoreDeps) {
         throw err;
       }
     })
-    // スタッフ招待の発行（方式A・店スコープ）
-    .post("/:storeId/invites", async (c) => {
+    // スタッフ招待の発行（方式A・店スコープ）。body の任意 label（誰宛かのメモ）を受ける
+    .post("/:storeId/invites", zValidator("json", CreateStoreInviteInputSchema), async (c) => {
       const authUser = c.get("authUser");
       const storeId = c.req.param("storeId");
+      const input = c.req.valid("json");
       try {
-        const invite = await deps.createStoreInvite(authUser.id, storeId);
+        const invite = await deps.createStoreInvite(authUser.id, storeId, input);
         return c.json(invite, 201);
       } catch (err) {
         const mapped = handleStoreScopeError(err);

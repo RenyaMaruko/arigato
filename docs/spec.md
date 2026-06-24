@@ -131,8 +131,9 @@ QR読取
 - 運営は事後に監視し、必要なら停止できる（suspended フラグ等は admin 実装時に追加）。
 
 ### staff_invite（スタッフ招待）— 追加方式A
-- id, store_id, code（一意・招待コード/リンク用トークン）, status（pending / accepted / revoked）, created_at, accepted_at, accepted_staff_id
+- id, store_id, code（一意・招待コード/リンク用トークン）, label（任意メモ＝誰宛か。例「佐藤さん」「ホール担当」）, status（pending / accepted / revoked）, created_at, accepted_at, accepted_staff_id
 - **スタッフ追加は店が招待を発行 → 店員が招待経由でアカウント作成し所属確定**。これにより「店承認」が招待で自然に担保される。
+- **label（任意メモ）**で「誰宛の招待か」を店が識別できる。招待中リストに label を表示し、所属確定後は店員の実名（display_name）を優先表示。空でも可（その場合は「招待中」とだけ表示）。
 - 店員は自分のアカウント作成時に code を消費して staff.store_id が確定する。
 
 ### staff（店員さん）
@@ -225,7 +226,7 @@ verified（着金可能）
 | POST | `/store` | 店舗をセルフサーブで新規作成（店名等＋導入承認の同意。owner＝ログイン中のアカウント、adoption_agreed_at 記録）。claim は廃止 |
 | GET | `/store/me` | 自分が作成した店舗を取得（未作成なら作成画面へ） |
 | PATCH | `/store/:storeId` | 店舗プロフィール更新（店名・説明等） |
-| POST | `/store/:storeId/invites` | スタッフ招待の発行（招待リンク/コード生成）＝方式A |
+| POST | `/store/:storeId/invites` | スタッフ招待の発行（招待リンク/コード生成。任意の label＝誰宛メモを受ける）＝方式A |
 | GET | `/store/:storeId/invites` | 発行済み招待の一覧・状態（pending/accepted/revoked） |
 | GET | `/store/:storeId/staff` | 所属スタッフ一覧（在籍管理） |
 | GET | `/store/:storeId/gratitude` | 感謝の可視化（店全体の件数・お客さまの声フィード・スタッフ別件数。**金額は返さない／件数で並べ替え・順位付けしない**） |

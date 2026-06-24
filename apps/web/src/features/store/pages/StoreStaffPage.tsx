@@ -208,18 +208,23 @@ function InviteRow({ invite }: { invite: StoreInviteItem }) {
         ? "bg-surface-subtle text-muted-soft"
         : "bg-rose-soft text-rose";
 
+  // 名前位置の表示優先順位：所属確定＆実名 → label（誰宛かのメモ） → 状態ラベル（「招待中」等）。
+  // これにより未確定でも、発行時にメモを入れていれば「誰宛の招待か」が一目で分かる。
+  const primaryName =
+    invite.status === "accepted" && invite.acceptedStaffName
+      ? invite.acceptedStaffName
+      : invite.label && invite.label.trim() !== ""
+        ? invite.label
+        : statusLabel;
+
   return (
     <div className="flex items-center gap-3.5 px-1 py-4">
       <div className="flex h-[46px] w-[46px] flex-none items-center justify-center rounded-full bg-rose-soft text-token-sm text-muted">
         員
       </div>
       <div className="flex-1">
-        {/* 所属確定なら所属した店員名、未確定なら状態ラベル */}
-        <div className="text-token-lg font-bold text-ink">
-          {invite.status === "accepted" && invite.acceptedStaffName
-            ? invite.acceptedStaffName
-            : statusLabel}
-        </div>
+        {/* 名前位置：所属確定＆実名 → label（誰宛かのメモ） → 状態ラベル の優先順 */}
+        <div className="text-token-lg font-bold text-ink">{primaryName}</div>
         <div className="mt-0.5 text-token-sm text-muted">
           {t("store.invitesIssuedAt", { date: formatDate(invite.createdAt) })}
         </div>

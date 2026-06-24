@@ -76,12 +76,13 @@ export function useStoreInvites(storeId: string | undefined) {
 
 /**
  * スタッフ招待リンクの発行（POST /store/:storeId/invites）。
+ * 引数 label は「誰宛か」の任意メモ（未指定なら無記名の招待）。
  * 成功時は招待一覧を無効化して最新を取り直す。
  */
 export function useCreateStoreInvite(storeId: string | undefined) {
   const qc = useQueryClient();
   return useMutation({
-    mutationFn: () => createStoreInvite(storeId!),
+    mutationFn: (label?: string) => createStoreInvite(storeId!, label),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["store", "invites", storeId] });
     },

@@ -73,13 +73,14 @@ function createMockRepo() {
       stores.set(storeId, updated);
       return updated;
     },
-    async createInvite(storeId, code) {
+    async createInvite(storeId, code, label) {
       const invite: StoreInviteRow = {
         code,
         status: "pending",
         createdAt: "2026-06-23T00:00:00Z",
         acceptedStaffName: null,
         acceptedAt: null,
+        label: label ?? null,
       };
       const list = invitesByStore.get(storeId) ?? [];
       list.unshift(invite);
@@ -179,6 +180,27 @@ describe("store.service", () => {
     expect(a.status).toBe("pending");
     expect(a.inviteUrl).toBe(`http://localhost:5173/invite/${a.code}`);
     expect(a.code).not.toBe(b.code);
+  });
+
+  it("createStoreInvite: label（誰宛かのメモ）を受けて保存し、応答に返す", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    const withLabel = await createStoreInvite(m.repo, buildUrl, "owner-1", "store-1", {
+      label: "  佐藤さん ",
+    });
+    // 前後の空白は除いて保存・返却する
+    expect(withLabel.label).toBe("佐藤さん");
+    // 空白のみ・未入力は無記名（null）に正規化する
+    const blank = await createStoreInvite(m.repo, buildUrl, "owner-1", "store-1", { label: "   " });
+    expect(blank.label).toBeNull();
+    const omitted = await createStoreInvite(m.repo, buildUrl, "owner-1", "store-1");
+    expect(omitted.label).toBeNull();
+  });
+
+  it("listStoreInvites: 各 item に label を含めて返す", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    await createStoreInvite(m.repo, buildUrl, "owner-1", "store-1", { label: "ホール担当" });
+    const list = await listStoreInvites(m.repo, buildUrl, "owner-1", "store-1");
+    expect(list.items[0]!.label).toBe("ホール担当");
   });
 
   it("listStoreInvites: 発行済み招待を新しい順・pending件数つきで返す", async () => {

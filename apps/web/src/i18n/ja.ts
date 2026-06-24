@@ -231,6 +231,10 @@ export const ja = {
       inviteStep3: "完了",
       inviteHeading: "スタッフを招待するための\nリンクを発行します",
       inviteLead: "このリンクから新規登録したスタッフは、\n自動でこのお店に所属します。",
+      // 招待ラベル（誰宛かの任意メモ）
+      inviteLabelLabel: "この招待は誰用？（任意メモ）",
+      inviteLabelPlaceholder: "例：佐藤さん／ホール担当",
+      inviteLabelHelp: "招待中の一覧で、誰宛の招待かを見分けるためのメモです。空欄でも発行できます。",
       inviteIssue: "招待リンクを発行",
       inviteIssuing: "発行中…",
       inviteError: "招待リンクの発行に失敗しました。もう一度お試しください。",

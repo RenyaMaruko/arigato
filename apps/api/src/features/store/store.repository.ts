@@ -47,6 +47,8 @@ export type StoreInviteRow = {
   acceptedStaffName: string | null;
   // 消費（所属確定）日時（未消費は null。ISO 文字列）
   acceptedAt: string | null;
+  // 誰宛かの任意メモ（発行時に入れた識別用ラベル。未入力は null）
+  label: string | null;
 };
 
 // 所属スタッフ行（在籍管理。金額・件数のランキングは持たない）
@@ -102,8 +104,8 @@ export type StoreRepository = {
   createStore: (params: CreateStoreParams) => Promise<StoreRow>;
   // 店プロフィールを更新する。更新後の行を返す
   updateStore: (storeId: string, params: UpdateStoreParams) => Promise<StoreRow | null>;
-  // 招待を発行する（pending で新規作成）。発行した招待行を返す
-  createInvite: (storeId: string, code: string) => Promise<StoreInviteRow>;
+  // 招待を発行する（pending で新規作成）。label は誰宛かの任意メモ（未入力は null）。発行した招待行を返す
+  createInvite: (storeId: string, code: string, label: string | null) => Promise<StoreInviteRow>;
   // 自店の招待を新しい順に取得する（招待中一覧）
   listInvites: (storeId: string) => Promise<StoreInviteRow[]>;
   // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（在籍管理。中立な並び）
@@ -191,18 +193,20 @@ export function createStoreRepository(): StoreRepository {
       return rows[0] ?? null;
     },
 
-    // 招待を発行する（pending で新規作成）。code は Service/Model で生成済みの一意トークン
-    async createInvite(storeId, code) {
+    // 招待を発行する（pending で新規作成）。code は Service/Model で生成済みの一意トークン。
+    // label は誰宛かの任意メモ（未入力は null で保存する）
+    async createInvite(storeId, code, label) {
       const db = getDb();
       const rows = await db.execute<StoreInviteRow>(sql`
-        INSERT INTO staff_invite (store_id, code, status)
-        VALUES (${storeId}, ${code}, 'pending')
+        INSERT INTO staff_invite (store_id, code, status, label)
+        VALUES (${storeId}, ${code}, 'pending', ${label})
         RETURNING
           code      AS "code",
           status    AS "status",
           to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')   AS "createdAt",
           NULL      AS "acceptedStaffName",
-          NULL      AS "acceptedAt"
+          NULL      AS "acceptedAt",
+          label     AS "label"
       `);
       return rows[0]!;
     },
@@ -216,7 +220,8 @@ export function createStoreRepository(): StoreRepository {
           i.status      AS "status",
           to_char(i.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')   AS "createdAt",
           s.display_name AS "acceptedStaffName",
-          to_char(i.accepted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')  AS "acceptedAt"
+          to_char(i.accepted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')  AS "acceptedAt",
+          i.label        AS "label"
         FROM staff_invite i
         LEFT JOIN staff s ON s.id = i.accepted_staff_id
         WHERE i.store_id = ${storeId}

@@ -6,6 +6,7 @@ import type {
   StoreGratitude,
   UpdateStoreProfileInput,
   CreateStoreInput,
+  CreateStoreInviteInput,
 } from "@arigato/shared";
 import { generateInviteCode, summarizeGratitudeCounts } from "./store.model.js";
 import type { StoreRepository, StoreRow } from "./store.repository.js";
@@ -182,22 +183,30 @@ export type BuildInviteUrl = (code: string) => string;
  * スタッフ招待を発行する（POST /store/:storeId/invites・方式A）。店スコープ。
  * 一意の招待コードを生成して保存し、店員さんに渡す招待リンク URL（/invite/:code）を返す。
  * この招待リンクから登録した店員さんは自動で自店に所属する（招待で店承認を担保）。
+ *
+ * input.label は「誰宛か」の任意メモ（招待中一覧での識別に使う）。空・未入力は null に正規化し、
+ * 無記名の招待として発行する（手軽さを壊さない）。
  */
 export async function createStoreInvite(
   repo: StoreRepository,
   buildInviteUrl: BuildInviteUrl,
   authUserId: string,
   storeId: string,
+  input?: CreateStoreInviteInput,
 ): Promise<StoreInviteCreated> {
   await requireOwnedStore(repo, authUserId, storeId);
+  // ラベル（誰宛かの任意メモ）を正規化する。空白のみ・未入力は無記名（null）にする
+  const rawLabel = input?.label;
+  const label = rawLabel != null && rawLabel.trim() !== "" ? rawLabel.trim() : null;
   // 一意の招待コードを生成する（Model の純粋関数）
   const code = generateInviteCode();
-  const invite = await repo.createInvite(storeId, code);
+  const invite = await repo.createInvite(storeId, code, label);
   return {
     code: invite.code,
     inviteUrl: buildInviteUrl(invite.code),
     status: invite.status,
     createdAt: invite.createdAt,
+    label: invite.label,
   };
 }
 
@@ -221,6 +230,7 @@ export async function listStoreInvites(
       inviteUrl: buildInviteUrl(i.code),
       acceptedStaffName: i.acceptedStaffName,
       acceptedAt: i.acceptedAt,
+      label: i.label,
     })),
     // 招待中（pending）の件数
     pendingCount: invites.filter((i) => i.status === "pending").length,

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
+import { STORE_INVITE_LABEL_MAX_LENGTH } from "@arigato/shared";
 import type { StoreProfile, StoreInviteCreated } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StoreBottomNav } from "../components/StoreBottomNav.js";
@@ -24,11 +25,14 @@ function StoreInviteCreateContent({ store }: { store: StoreProfile }) {
   const [issued, setIssued] = useState<StoreInviteCreated | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // 誰宛かの任意メモ（label）。空欄でも発行できる（無記名の招待）
+  const [label, setLabel] = useState("");
 
-  // 招待リンクを発行する
+  // 招待リンクを発行する（メモがあれば label として送る。空欄は無記名）
   const handleIssue = () => {
     setError(null);
-    createMutation.mutate(undefined, {
+    const trimmed = label.trim();
+    createMutation.mutate(trimmed === "" ? undefined : trimmed, {
       onSuccess: (invite) => setIssued(invite),
       onError: () => setError(t("store.inviteError")),
     });
@@ -122,6 +126,25 @@ function StoreInviteCreateContent({ store }: { store: StoreProfile }) {
             </div>
             <div className="mt-3.5 whitespace-pre-line text-center text-token-base leading-relaxed text-ink-sub">
               {t("store.inviteLead")}
+            </div>
+
+            {/* 誰宛かの任意メモ（label）。招待中一覧で誰宛か見分けるためのメモ。空欄でも発行可 */}
+            <div className="mt-7">
+              <label htmlFor="invite-label" className="block text-token-base font-bold text-ink-label">
+                {t("store.inviteLabelLabel")}
+              </label>
+              <input
+                id="invite-label"
+                type="text"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                maxLength={STORE_INVITE_LABEL_MAX_LENGTH}
+                placeholder={t("store.inviteLabelPlaceholder")}
+                className="mt-2 w-full rounded-lg border-[1.5px] border-line bg-page px-3.5 py-3 text-token-md text-ink placeholder:text-muted-soft focus:border-rose focus:outline-none"
+              />
+              <div className="mt-2 text-token-xs leading-relaxed text-muted">
+                {t("store.inviteLabelHelp")}
+              </div>
             </div>
 
             <div className="mt-auto flex flex-col gap-3 pt-9">

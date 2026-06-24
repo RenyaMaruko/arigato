@@ -87,9 +87,16 @@ export async function updateStore(
 
 /**
  * POST /store/:storeId/invites — スタッフ招待リンクを発行する（方式A）。
+ * label は「誰宛か」の任意メモ。未入力なら無記名の招待として発行する。
  */
-export async function createStoreInvite(storeId: string): Promise<StoreInviteCreated> {
-  const res = await apiClient.store[":storeId"].invites.$post({ param: { storeId } });
+export async function createStoreInvite(
+  storeId: string,
+  label?: string,
+): Promise<StoreInviteCreated> {
+  const res = await apiClient.store[":storeId"].invites.$post({
+    param: { storeId },
+    json: { label },
+  });
   if (!res.ok) {
     throw new Error(`store invite create failed: ${res.status}`);
   }

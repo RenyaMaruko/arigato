@@ -12,6 +12,8 @@ import { z } from "zod";
 // 店名・紹介の文字数上限（フォームの体験上の上限）
 export const STORE_NAME_MAX_LENGTH = 60;
 export const STORE_DESCRIPTION_MAX_LENGTH = 200;
+// 招待ラベル（誰宛かの任意メモ）の文字数上限
+export const STORE_INVITE_LABEL_MAX_LENGTH = 60;
 
 // 招待ステータス（pending: 招待中 / accepted: 所属確定 / revoked: 失効）
 export const StoreInviteStatusSchema = z.enum(["pending", "accepted", "revoked"]);
@@ -61,6 +63,17 @@ export const UpdateStoreProfileInputSchema = z.object({
 export type UpdateStoreProfileInput = z.infer<typeof UpdateStoreProfileInputSchema>;
 
 /**
+ * POST /store/:storeId/invites（スタッフ招待の発行・方式A）の入力。
+ * label（誰宛かの任意メモ）だけを受ける。無記名リンクの手軽さを壊さないため任意とし、
+ * 未入力なら従来どおり無記名の招待として発行する。
+ */
+export const CreateStoreInviteInputSchema = z.object({
+  // 誰宛かの任意メモ（例「佐藤さん」「ホール担当」）。空・未入力は無記名扱い。
+  label: z.string().max(STORE_INVITE_LABEL_MAX_LENGTH).optional(),
+});
+export type CreateStoreInviteInput = z.infer<typeof CreateStoreInviteInputSchema>;
+
+/**
  * POST /store/:storeId/invites（スタッフ招待の発行・方式A）の応答。
  * 発行した招待コードと、店員さんが登録に使う招待リンク URL（/invite/:code）を返す。
  */
@@ -71,6 +84,8 @@ export const StoreInviteCreatedSchema = z.object({
   status: StoreInviteStatusSchema,
   // 発行日時（ISO 文字列）
   createdAt: z.string(),
+  // 誰宛かの任意メモ（未入力は null）
+  label: z.string().nullable(),
 });
 export type StoreInviteCreated = z.infer<typeof StoreInviteCreatedSchema>;
 
@@ -89,6 +104,8 @@ export const StoreInviteItemSchema = z.object({
   acceptedStaffName: z.string().nullable(),
   // 消費（所属確定）日時（未消費は null。ISO 文字列）
   acceptedAt: z.string().nullable(),
+  // 誰宛かの任意メモ（発行時に入れた識別用ラベル。未入力は null）
+  label: z.string().nullable(),
 });
 export type StoreInviteItem = z.infer<typeof StoreInviteItemSchema>;
 
