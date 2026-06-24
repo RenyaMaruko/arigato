@@ -30,8 +30,9 @@ type Props = {
   hasError?: boolean;
   // ✕・スクリムで閉じる
   onClose: () => void;
-  // 決済が（アプリ内で）成立したときに呼ぶ（完了画面への遷移を親が行う）
-  onPaid: () => void;
+  // 決済が（アプリ内で）成立したときに呼ぶ。confirm 結果の確定区分（succeeded＝即完了 /
+  // processing＝結果は後ほど）を渡し、完了画面への遷移は親が行う
+  onPaid: (status: "succeeded" | "processing") => void;
   // 決済処理中フラグの変化を親へ通知する
   onProcessingChange: (processing: boolean) => void;
 };

@@ -52,6 +52,11 @@ export const ja = {
       completeDelivered: "を届けました",
       sendAgain: "もう一度送る",
       close: "閉じる",
+      // 後日確定手段（PayPay 等）で受け付けたとき（confirm が processing を返したとき）。
+      // 完了表示はせず「受け付けました（結果は後ほど）」として後続の確定を待つ
+      paymentProcessing: "お支払いを受け付けました",
+      paymentProcessingNote:
+        "決済の確定までしばらくお待ちください。結果が確定するとこの画面が完了表示に切り替わります。",
       // 決済確定（Webhook を正とするため、確定待ち・失敗の状態を持つ）
       confirming: "決済を確認しています…",
       confirmingNote: "決済が成立すると、この画面が完了表示に切り替わります。",

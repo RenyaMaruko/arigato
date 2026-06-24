@@ -61,14 +61,33 @@ const tipRoute = createRoute({
   component: TipPage,
 });
 
-// "/tip/$membershipId/complete" に完了画面を割り当てる。?tipId= を検証して受け取る
+// "/tip/$membershipId/complete" に完了画面を割り当てる。?tipId= と ?status= を検証して受け取る
 const tipCompleteRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/tip/$membershipId/complete",
   component: TipCompletePage,
-  // 完了画面は tipId クエリで当該 tip を引く（文字列・任意）
-  validateSearch: (search: Record<string, unknown>): { tipId: string } => ({
+  // 完了画面は tipId クエリで当該 tip を引く（文字列・任意）。
+  // status は confirmPayment の即時結果（succeeded＝即完了 / processing＝結果は後ほど）。
+  // redirectStatus / paymentIntentParam は PayPay 等リダイレクト型の戻りで Stripe が付ける
+  // クエリ（redirect_status / payment_intent）を受けるためのもの（完了画面で即完了判定に使う）。
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): {
+    tipId: string;
+    status?: "succeeded" | "processing";
+    redirect_status?: string;
+    payment_intent?: string;
+  } => ({
     tipId: typeof search.tipId === "string" ? search.tipId : "",
+    status:
+      search.status === "succeeded"
+        ? "succeeded"
+        : search.status === "processing"
+          ? "processing"
+          : undefined,
+    redirect_status:
+      typeof search.redirect_status === "string" ? search.redirect_status : undefined,
+    payment_intent: typeof search.payment_intent === "string" ? search.payment_intent : undefined,
   }),
 });
 

@@ -17,7 +17,8 @@ import { PaymentSheet } from "../components/PaymentSheet.js";
  * シート内にアプリ内決済 UI（Express Checkout Element ＋ Payment Element）を埋め込む。
  * Apple Pay / Google Pay はワンタップのネイティブ決済シート、カードは埋め込み入力で
  * アプリ内のまま決済を確定する（別ページにリダイレクトしない）。
- * 決済成立の確定は Webhook を正とし、完了画面は succeeded を待ってから表示する。
+ * お客さま向けの完了/失敗表示は confirmPayment が返す PaymentIntent ステータスで即時に出す
+ * （Webhook 到着を待たない）。残高・着金などサーバー側の確定は引き続き Webhook を正とする。
  * お客さま向けのため認証は不要（ログイン/登録なしで完結）。
  */
 export function TipPage() {
@@ -58,9 +59,11 @@ export function TipPage() {
     });
   };
 
-  // 決済が（アプリ内で）成立したとき: 完了画面へ遷移する（succeeded の確定は Webhook を正とし、
-  // 完了画面側で status をポーリングして待つ）。tipId は intent 作成結果から取得する。
-  const handlePaid = () => {
+  // 決済が（アプリ内で）成立したとき: 完了画面へ遷移する。
+  // confirm の確定区分（succeeded＝即完了 / processing＝結果は後ほど）を search param で完了画面へ渡し、
+  // succeeded はその場で完了表示する（Webhook を待たない）。processing のみ後続の確定を待つ。
+  // tipId は intent 作成結果から取得する。
+  const handlePaid = (status: "succeeded" | "processing") => {
     const tipId = createIntent.data?.tipId;
     if (!tipId) return;
     closeSheet();
@@ -68,7 +71,7 @@ export function TipPage() {
     navigate({
       to: "/tip/$membershipId/complete",
       params: { membershipId },
-      search: { tipId },
+      search: { tipId, status },
     });
   };
 
@@ -78,10 +81,12 @@ export function TipPage() {
     setPaying(false);
   };
 
-  // 決済確定後の戻り先 URL（PayPay 等リダイレクト必須手段でのみ使われる。完了画面で succeeded を待つ）
+  // 決済確定後の戻り先 URL（PayPay 等リダイレクト必須手段でのみ使われる）。
+  // リダイレクト型は基本「後日確定」のため status=processing を初期値として渡し、完了画面側で
+  // Stripe が付ける redirect_status / payment_intent を見て succeeded なら即完了に切り替える。
   const tipId = createIntent.data?.tipId;
   const returnUrl = tipId
-    ? `${window.location.origin}/tip/${membershipId}/complete?tipId=${tipId}`
+    ? `${window.location.origin}/tip/${membershipId}/complete?tipId=${tipId}&status=processing`
     : `${window.location.origin}/tip/${membershipId}`;
 
   return (

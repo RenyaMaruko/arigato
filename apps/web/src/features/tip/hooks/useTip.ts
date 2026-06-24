@@ -44,16 +44,20 @@ export function useCreateTipIntent(membershipId: string) {
 
 /**
  * 完了画面の表示情報（誰に・¥◯◯・メッセージ・決済ステータス）を取得するフック。
- * 決済の確定は Webhook を正とするため、status が pending の間はポーリングして
- * succeeded（または failed）に確定するのを待つ（ブラウザの戻り値では確定しない）。
+ *
+ * 表示の再掲情報（名前・金額・メッセージ）はサーバーから1回取れば足りる。
+ * ただし「後日確定手段（processing）」や「status 無しの直接アクセス」では、サーバー側の
+ * tip.status が Webhook で succeeded/failed に確定するのをポーリングで待つ（poll=true のとき）。
+ * confirmPayment の即時結果で succeeded が分かっている場合（poll=false）はポーリングしない
+ * （永久スピナーを作らない）。残高・着金の確定は引き続き Webhook を正とする。
  */
-export function useTipComplete(membershipId: string, tipId: string) {
+export function useTipComplete(membershipId: string, tipId: string, poll = true) {
   return useQuery({
     queryKey: tipKeys.complete(membershipId, tipId),
     queryFn: () => fetchTipComplete(membershipId, tipId),
     enabled: Boolean(membershipId) && Boolean(tipId),
-    // pending の間は2秒ごとに再取得（Webhook 確定を待つ）。確定したら止める。
+    // poll=true かつ pending の間だけ2秒ごとに再取得（Webhook 確定を待つ）。確定したら止める。
     refetchInterval: (query) =>
-      query.state.data?.status === "pending" ? 2000 : false,
+      poll && query.state.data?.status === "pending" ? 2000 : false,
   });
 }

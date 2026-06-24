@@ -209,8 +209,13 @@ verified（着金可能）
                                                             └─(Stripe payout)─▶ paid
          ※ 本人確認済の状態で成立した分は succeeded 時に payable から開始
 ```
-- 決済成立はブラウザでなく **Webhook を正**として確定する。
-- Webhook 取りこぼし対策に夜間 Cron で Stripe 突合（`stripe-reconcile.job.ts`）。
+- **「正」を2段構えにする**:
+  - **お客さま向けの完了/失敗表示**は、ブラウザの決済処理結果（Stripe.js `confirmPayment` が返す PaymentIntent ステータス）で**即時に出す**。Webhook 到着を待たない（待たせない・永久ロードを作らない）。
+    - `succeeded` → 完了表示（誰に・¥◯◯・メッセージは作成済み tip 記録から表示）
+    - 失敗（confirm エラー）→ 決済シート内でその場でエラー表示（完了画面へ進めない）
+    - `processing`（PayPay 等の後日確定手段）→「受け付けました（結果は後ほど）」表示。ここだけ後続の状態変化を待つ（フォールバックでポーリング/タイムアウト案内）
+  - **店員さんの残高・受取履歴・着金（settlement）は引き続き Webhook を正**としてサーバー側で確定する（お客さまのブラウザ・画面に依存しない）。画面を閉じても Webhook が tip.status / settlement_status を更新する。
+- Webhook 取りこぼし対策に夜間 Cron で Stripe 突合（`stripe-reconcile.job.ts`）＝二重の安全網。
 
 ---
 

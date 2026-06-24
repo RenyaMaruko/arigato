@@ -6,7 +6,7 @@ import {
   useStripe,
   useElements,
 } from "@stripe/react-stripe-js";
-import type { StripeError } from "@stripe/stripe-js";
+import type { PaymentIntent, StripeError } from "@stripe/stripe-js";
 
 /**
  * アプリ内に埋め込む決済フォーム（2段構成）。
@@ -27,16 +27,24 @@ import type { StripeError } from "@stripe/stripe-js";
  *
  * 確定は stripe.confirmPayment（redirect: "if_required"）で行い、ウォレット・カードは極力
  * アプリ内で完結させ、PayPay 等リダイレクト必須の手段のときだけ return_url へ遷移させる。
- * 成功確定の正は Webhook（payment_intent.succeeded）であり、ここでの成功は「完了画面へ進む合図」。
- * 完了画面は tip.status が succeeded になるまでポーリングして待つ（既存踏襲）。
+ *
+ * お客さま向けの完了/失敗表示は「ブラウザの決済処理結果（confirmPayment が返す PaymentIntent
+ * ステータス）」で即時に出す（Webhook 到着を待たない＝永久ロードを作らない）:
+ *   - paymentIntent.status === "succeeded" → onPaid("succeeded")（即・完了表示）
+ *   - paymentIntent.status === "processing"（PayPay 等の後日確定手段）→ onPaid("processing")
+ *     （「受け付けました（結果は後ほど）」表示。後続の確定だけを完了画面側で待つ）
+ *   - error 返却 → このシート内でその場でエラー表示（完了画面へ進めない）
+ * なお店員さんの残高・受取履歴・着金の確定は引き続き Webhook を正としてサーバー側で行う
+ * （お客さまの画面に依存しない）。ここでの即時表示はあくまでお客さま向けの体験。
  *
  * このコンポーネントは必ず <Elements>（client_secret 注入済み）の内側で使う。
  */
 type Props = {
   // 決済確定後にお客さまを戻す URL（PayPay 等リダイレクト必須手段でのみ使われる）
   returnUrl: string;
-  // 決済が（アプリ内で）成立したときに呼ぶ。完了画面への遷移は呼び出し側が行う
-  onPaid: () => void;
+  // 決済が（アプリ内で）成立したときに呼ぶ。confirm 結果の確定区分（即完了 / 結果は後ほど）を渡す。
+  // 完了画面への遷移は呼び出し側が行う
+  onPaid: (status: "succeeded" | "processing") => void;
   // 決済処理中フラグの変化を親へ通知する（送るボタンの無効化・スピナー表示に使う）
   onProcessingChange: (processing: boolean) => void;
 };
@@ -63,20 +71,35 @@ export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
     onProcessingChange(busy);
   };
 
-  // confirmPayment の結果を共通処理する（成功＝onPaid、失敗＝エラー表示）
-  const handleConfirmResult = (error: StripeError | undefined) => {
-    // エラーが無ければアプリ内で成立（または redirect 必須手段で遷移済み）→ 完了画面へ
-    if (!error) {
-      onPaid();
+  // confirmPayment の結果を共通処理する。
+  // ブラウザの即時結果（PaymentIntent ステータス）で完了/失敗を出し分ける（Webhook を待たない）:
+  //   - error 返却 → そのままシート内でエラー表示（完了画面へ進めない）
+  //   - succeeded → onPaid("succeeded")（即・完了表示）
+  //   - processing → onPaid("processing")（受け付けました。後続の確定だけ完了画面で待つ）
+  //   - requires_action 等のリダイレクト必須手段で遷移済みのケースは error も paymentIntent も
+  //     返らない（ページ遷移する）ため、ここには来ない
+  const handleConfirmResult = (
+    error: StripeError | undefined,
+    paymentIntent: PaymentIntent | undefined,
+  ) => {
+    // 失敗（confirm エラー）→ その場でエラー表示
+    if (error) {
+      // validation / card_error はお客さま起因の表示用メッセージ。それ以外は汎用文言。
+      if (error.type === "card_error" || error.type === "validation_error") {
+        setErrorMessage(error.message ?? t("tip.payConfirmError"));
+      } else {
+        setErrorMessage(t("tip.payConfirmError"));
+      }
+      setBusy(false);
       return;
     }
-    // validation / card_error はお客さま起因の表示用メッセージ。それ以外は汎用文言。
-    if (error.type === "card_error" || error.type === "validation_error") {
-      setErrorMessage(error.message ?? t("tip.payConfirmError"));
-    } else {
-      setErrorMessage(t("tip.payConfirmError"));
+    // 後日確定手段（PayPay 等）→「受け付けました（結果は後ほど）」表示へ
+    if (paymentIntent?.status === "processing") {
+      onPaid("processing");
+      return;
     }
-    setBusy(false);
+    // それ以外（succeeded、または requires_capture 等で実質成立）→ 即・完了表示
+    onPaid("succeeded");
   };
 
   // ウォレット（Apple Pay / Google Pay 等）をタップして決済シートで確定したとき
@@ -85,12 +108,12 @@ export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
     setBusy(true);
     setErrorMessage(null);
     // ネイティブ決済シートで承認された支払いを確定する。リダイレクト必須手段のみ遷移する。
-    const { error } = await stripe.confirmPayment({
+    const { error, paymentIntent } = await stripe.confirmPayment({
       elements,
       confirmParams: { return_url: returnUrl },
       redirect: "if_required",
     });
-    handleConfirmResult(error ?? undefined);
+    handleConfirmResult(error ?? undefined, paymentIntent ?? undefined);
   };
 
   // カード等（Payment Element）の送るボタンを押して確定したとき
@@ -110,7 +133,7 @@ export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
     // Stripe の仕様上、その分の billing_details を confirm 時に明示して渡す必要がある（渡さないと
     // IntegrationError になる）。投げ銭では請求先の本人情報は不要なので空（null）で渡す。
     // 国だけは Payment Element 側で収集しているので、ここでは渡さない（二重指定の競合を避ける）。
-    const { error } = await stripe.confirmPayment({
+    const { error, paymentIntent } = await stripe.confirmPayment({
       elements,
       confirmParams: {
         return_url: returnUrl,
@@ -131,7 +154,7 @@ export function PaymentForm({ returnUrl, onPaid, onProcessingChange }: Props) {
       },
       redirect: "if_required",
     });
-    handleConfirmResult(error ?? undefined);
+    handleConfirmResult(error ?? undefined, paymentIntent ?? undefined);
   };
 
   // 「カードで支払う」→ カード入力ステップへ。エラー表示はリセットする。
