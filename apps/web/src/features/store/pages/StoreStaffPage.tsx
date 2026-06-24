@@ -1,30 +1,38 @@
+import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import type { StoreProfile } from "@arigato/shared";
+import type { StoreProfile, StoreInviteItem } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StoreBottomNav } from "../components/StoreBottomNav.js";
 import { StoreGuard } from "../components/StoreGuard.js";
 import { useStoreStaff, useStoreInvites } from "../hooks/useStore.js";
+import { formatDate } from "../utils/format.js";
 
 /**
  * スタッフ一覧画面（/store/staff）。モック03に対応。
- * 在籍中のスタッフを名簿順で表示し、「招待中」タブで招待一覧へ移動できる。
- * QR は店員さん本人が発行する主体のため、店側はここで発行しない（在籍管理のみ）。
+ * 「在籍中 / 招待中」タブを同一画面内で切り替え、タブ下のリスト部分だけが入れ替わる
+ * （画面遷移はしない）。QR は店員さん本人が発行する主体のため、店側はここで発行しない。
  * 金額・受取件数のランキングは表示しない。
  */
 export function StoreStaffPage() {
   return <StoreGuard>{(store) => <StoreStaffContent store={store} />}</StoreGuard>;
 }
 
+// 表示中のタブ（在籍中 / 招待中）
+type StaffTab = "active" | "invited";
+
 function StoreStaffContent({ store }: { store: StoreProfile }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const staffQuery = useStoreStaff(store.id);
-  // 招待中（pending）の件数をタブに出すため招待一覧も取得する
   const invitesQuery = useStoreInvites(store.id);
+
+  // どちらのタブを表示しているか（同一画面でリストだけ差し替える）
+  const [tab, setTab] = useState<StaffTab>("active");
 
   const staff = staffQuery.data?.items ?? [];
   const activeCount = staffQuery.data?.count ?? 0;
+  const invites = invitesQuery.data?.items ?? [];
   const pendingCount = invitesQuery.data?.pendingCount ?? 0;
 
   return (
@@ -54,71 +62,117 @@ function StoreStaffContent({ store }: { store: StoreProfile }) {
         <span className="text-token-2xl font-bold text-ink">{t("store.staffTitle")}</span>
       </div>
 
-      {/* タブ（在籍中 / 招待中） */}
+      {/* タブ（在籍中 / 招待中）。押しても画面遷移せず、下のリストだけ切り替える */}
       <div className="flex flex-none gap-7 px-6 pt-1.5">
-        <div className="border-b-[2.5px] border-rose pb-2.5">
-          <span className="text-token-md font-bold text-rose">
-            {t("store.staffTabActive")} ({activeCount})
-          </span>
-        </div>
         <button
           type="button"
-          onClick={() => navigate({ to: "/store/invites" })}
-          className="border-b-[2.5px] border-transparent pb-2.5"
+          onClick={() => setTab("active")}
+          className={
+            tab === "active"
+              ? "border-b-[2.5px] border-rose pb-2.5"
+              : "border-b-[2.5px] border-transparent pb-2.5"
+          }
         >
-          <span className="text-token-md font-semibold text-muted">
+          <span
+            className={
+              tab === "active"
+                ? "text-token-md font-bold text-rose"
+                : "text-token-md font-semibold text-muted"
+            }
+          >
+            {t("store.staffTabActive")} ({activeCount})
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setTab("invited")}
+          className={
+            tab === "invited"
+              ? "border-b-[2.5px] border-rose pb-2.5"
+              : "border-b-[2.5px] border-transparent pb-2.5"
+          }
+        >
+          <span
+            className={
+              tab === "invited"
+                ? "text-token-md font-bold text-rose"
+                : "text-token-md font-semibold text-muted"
+            }
+          >
             {t("store.staffTabInvited")} ({pendingCount})
           </span>
         </button>
       </div>
       <div className="h-px flex-none bg-line-soft" />
 
+      {/* タブ下の中身（在籍中 or 招待中）だけが切り替わる */}
       <div className="flex-1 overflow-y-auto px-5 pb-6 pt-1.5">
-        {staff.length === 0 ? (
-          <div className="mt-8 text-center text-token-sm text-muted">{t("store.staffEmpty")}</div>
-        ) : (
-          staff.map((s, i) => (
-            <div key={s.id}>
-              <div className="flex items-center gap-3.5 px-1 py-4">
-                <div className="flex h-[46px] w-[46px] flex-none items-center justify-center overflow-hidden rounded-full bg-rose-soft text-token-sm text-muted">
-                  {s.avatarUrl ? (
-                    <img
-                      src={s.avatarUrl}
-                      alt={s.displayName}
-                      className="h-[46px] w-[46px] rounded-full object-cover"
-                    />
-                  ) : (
-                    "員"
-                  )}
-                </div>
-                <div className="flex-1">
-                  <div className="text-token-lg font-bold text-ink">{s.displayName}</div>
-                  {s.headline && (
-                    <div className="mt-0.5 text-token-sm text-muted">{s.headline}</div>
-                  )}
-                </div>
-                {/* 右端の山括弧（モック03のリスト行）。装飾的なので淡色 */}
-                <span className="flex-none text-muted-soft" aria-hidden="true">
-                  <svg
-                    width="20"
-                    height="20"
-                    viewBox="0 0 24 24"
-                    fill="none"
-                    stroke="currentColor"
-                    strokeWidth="2"
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                  >
-                    <path d="M9 6l6 6-6 6" />
-                  </svg>
-                </span>
+        {tab === "active" ? (
+          <>
+            {staff.length === 0 ? (
+              <div className="mt-8 text-center text-token-sm text-muted">
+                {t("store.staffEmpty")}
               </div>
-              {i < staff.length - 1 && <div className="h-px bg-line-soft" />}
-            </div>
-          ))
+            ) : (
+              staff.map((s, i) => (
+                <div key={s.id}>
+                  <div className="flex items-center gap-3.5 px-1 py-4">
+                    <div className="flex h-[46px] w-[46px] flex-none items-center justify-center overflow-hidden rounded-full bg-rose-soft text-token-sm text-muted">
+                      {s.avatarUrl ? (
+                        <img
+                          src={s.avatarUrl}
+                          alt={s.displayName}
+                          className="h-[46px] w-[46px] rounded-full object-cover"
+                        />
+                      ) : (
+                        "員"
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <div className="text-token-lg font-bold text-ink">{s.displayName}</div>
+                      {s.headline && (
+                        <div className="mt-0.5 text-token-sm text-muted">{s.headline}</div>
+                      )}
+                    </div>
+                    {/* 右端の山括弧（モック03のリスト行）。装飾的なので淡色 */}
+                    <span className="flex-none text-muted-soft" aria-hidden="true">
+                      <svg
+                        width="20"
+                        height="20"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        stroke="currentColor"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                      >
+                        <path d="M9 6l6 6-6 6" />
+                      </svg>
+                    </span>
+                  </div>
+                  {i < staff.length - 1 && <div className="h-px bg-line-soft" />}
+                </div>
+              ))
+            )}
+          </>
+        ) : (
+          <>
+            {invites.length === 0 ? (
+              <div className="mt-8 text-center text-token-sm text-muted">
+                {t("store.invitesEmpty")}
+              </div>
+            ) : (
+              invites.map((inv, i) => (
+                <div key={inv.code}>
+                  <InviteRow invite={inv} />
+                  {i < invites.length - 1 && <div className="h-px bg-line-soft" />}
+                </div>
+              ))
+            )}
+          </>
         )}
 
-        {/* スタッフを招待する */}
+        {/* スタッフを招待する（招待発行画面へ） */}
         <button
           type="button"
           onClick={() => navigate({ to: "/store/invites/new" })}
@@ -130,5 +184,49 @@ function StoreStaffContent({ store }: { store: StoreProfile }) {
 
       <StoreBottomNav active="staff" />
     </PhoneFrame>
+  );
+}
+
+/**
+ * 招待1件の行（アバター・状態・発行日 or 所属確定）。
+ */
+function InviteRow({ invite }: { invite: StoreInviteItem }) {
+  const { t } = useTranslation();
+
+  // 状態ラベル（招待中 / 所属確定 / 失効）
+  const statusLabel =
+    invite.status === "accepted"
+      ? t("store.inviteStatusAccepted")
+      : invite.status === "revoked"
+        ? t("store.inviteStatusRevoked")
+        : t("store.inviteStatusPending");
+  // 状態バッジの配色（招待中=ローズ塗り / 所属確定=淡グレー枠 / 失効=最も淡い）
+  const statusBadge =
+    invite.status === "accepted"
+      ? "bg-line-soft text-ink-label"
+      : invite.status === "revoked"
+        ? "bg-surface-subtle text-muted-soft"
+        : "bg-rose-soft text-rose";
+
+  return (
+    <div className="flex items-center gap-3.5 px-1 py-4">
+      <div className="flex h-[46px] w-[46px] flex-none items-center justify-center rounded-full bg-rose-soft text-token-sm text-muted">
+        員
+      </div>
+      <div className="flex-1">
+        {/* 所属確定なら所属した店員名、未確定なら状態ラベル */}
+        <div className="text-token-lg font-bold text-ink">
+          {invite.status === "accepted" && invite.acceptedStaffName
+            ? invite.acceptedStaffName
+            : statusLabel}
+        </div>
+        <div className="mt-0.5 text-token-sm text-muted">
+          {t("store.invitesIssuedAt", { date: formatDate(invite.createdAt) })}
+        </div>
+      </div>
+      <span className={`flex-none rounded-pill px-2.5 py-1 text-token-xs font-bold ${statusBadge}`}>
+        {statusLabel}
+      </span>
+    </div>
   );
 }
