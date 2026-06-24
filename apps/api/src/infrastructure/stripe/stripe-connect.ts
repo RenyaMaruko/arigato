@@ -42,10 +42,12 @@ export async function createDirectChargePaymentIntent(
   // automatic_payment_methods で動的決済手段を明示的に有効化する（API 2023-08-16+ の既定だが明示する）。
   const intent = await stripe.paymentIntents.create(
     {
-      // お客さま支払額（満額 + 上乗せ手数料）。JPY は最小単位＝1円のため整数をそのまま渡す
+      // お客さま支払額＝額面（上乗せ廃止のため customer_total = amount）。JPY は最小単位＝1円のため整数をそのまま渡す
       amount: params.customerTotal,
       currency: params.currency,
-      // 運営の取り分（application_fee）。これだけが運営に入り、満額は店員さんへ届く
+      // 運営の取り分（application_fee ≈ 11.4% ＝ 15% − Stripe決済料3.6%）。
+      // Direct charge では Stripe 料が店員側から引かれるため、これを 15% 丸ごとにせず差し引いた率にし、
+      // 店員手取り約85%を成立させる
       application_fee_amount: params.applicationFeeAmount,
       // 動的決済手段を有効化（payment_method_types は渡さない）
       automatic_payment_methods: { enabled: true },

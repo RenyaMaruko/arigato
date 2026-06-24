@@ -165,7 +165,7 @@ QR読取（QR は membership＝人×店 を指す）
 
 ### tip（投げ銭）— 構造化された感謝データの中核
 - id, staff_id, store_id（QR=membership の店を送信時点で固定保存）, membership_id（任意・追跡用）
-- amount（店員さんに届く満額・円）, platform_fee（運営手数料・円）, customer_total（お客さま支払額・円）
+- amount（投げ銭の額面＝お客さま支払額・円）, platform_fee（運営手数料・円。application_fee）, customer_total（お客さま支払額・円。上乗せ廃止のため = amount）。店員手取りは amount × 約85%
 - message（任意・最大80文字）
 - stripe_payment_intent_id, status（pending / succeeded / failed）
 - settlement_status（保留 held / 着金可能 payable / 着金済 paid）
@@ -275,9 +275,15 @@ verified（着金可能）
 - Apple Pay は HTTPS＋Apple ドメイン登録（Stripe 経由）が必要なため、ローカルでは Google Pay/カードで確認し、Apple Pay は本番ドメイン登録後に有効。PayPay は Stripe 審査後の後追い有効化。
 
 ### 金額計算（Model 層・純粋関数・Vitest 対象）
-- `calculateCustomerTotal()`: 投げ銭額 + 上乗せ手数料 = お客さま支払額（上乗せはお客さま側に乗せ、店員さんからは引かない＝満額が届く）。
-- `calculatePlatformFee()`: 運営の取り分（application_fee）。
-- `calculateStaffAmount()`: 店員さんに届く満額。
+**料率モデル（手取り型）**: お客さまは投げ銭額を**そのまま**支払い（上乗せなし＝高く見せない）、手数料は**店員側から差し引く**。
+- **お客さま支払額 = 投げ銭額（額面）**（上乗せ廃止。`customer_total = amount`）。
+- **店員手取り ≈ 85%**（`STAFF_TAKE_RATE = 0.85`）。手数料は合計15%＝**決済料（Stripe 約3.6%）＋ 運営手数料**で構成し、店員側から引く。
+- **運営手数料（application_fee）≈ 11.4%**＝ 15% − Stripe約3.6%。Direct charge では Stripe 処理手数料が Connected Account 側から引かれるため、店員手取り85%を成立させるよう application_fee を「15% − Stripe率」で算出する。
+  - 例: ¥1,000 → お客さま ¥1,000 / Stripe 約¥36 / 運営 約¥114 / 店員 ¥850。
+- Stripe率は日本のカードで一律3.6%前提。他決済で異なる場合、店員手取りは「約85%」と表現（実料率は本番のStripe設定で最終確認）。
+- `calculatePlatformFee()`: 運営の取り分（application_fee）＝ 額面 × (0.15 − STRIPE_FEE_RATE)。
+- `calculateStaffAmount()`: 店員さんの手取り ＝ 額面 × STAFF_TAKE_RATE（約85%）。
+- `calculateCustomerTotal()`: お客さま支払額 ＝ 額面（上乗せなし）。後方互換のため関数は残すが上乗せ0。
 - `canPayout()`: identity_status から着金可否を判定。
 
 ### Webhook

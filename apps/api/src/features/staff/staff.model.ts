@@ -1,8 +1,24 @@
+import { STAFF_TAKE_RATE } from "@arigato/shared";
+
 /**
  * staff feature の Model 層（純粋関数）。
  * 着金可否判定に加え、Sprint 4 で「招待が有効か」「QR用URLの組み立て」などの
  * 業務ルールを純粋関数として持つ。DB アクセスはしない。
+ *
+ * 料率モデル（手取り型）の注意:
+ *  - tip.amount は「額面（お客さま支払額）」を表す。店員さんに届くのはこの約85%（手数料15%・決済料込み）。
+ *  - 店員さんに見せる金額（受取履歴・残高・申告データ）は、この Model で額面から手取り（約85%）へ変換する。
+ *    変換は calculateStaffTakeAmount に集約し、表示・集計の整合を1か所で担保する。
  */
+
+/**
+ * 額面（お客さま支払額）から店員さんの手取り額（約85%）を計算する純粋関数。
+ * 手数料合計15%（決済料込み）を引いた残りで、円未満は切り捨てる（店員に過剰計上しない）。
+ * 受取履歴・残高・申告データなど、店員さんに金額を見せる経路はすべてこれを通す。
+ */
+export function calculateStaffTakeAmount(faceAmount: number): number {
+  return Math.floor(faceAmount * STAFF_TAKE_RATE);
+}
 
 // 本人確認の状態（none: 未着手 / pending: 審査中 / verified: 着金可能）
 export type IdentityStatus = "none" | "pending" | "verified";
@@ -48,7 +64,7 @@ export function nextSettlementOnVerified(current: SettlementStatus): SettlementS
   return current === "held" ? "payable" : current;
 }
 
-// 受取履歴1件分（金額集計・CSV 生成に使う最小情報）
+// 受取履歴1件分（金額集計・CSV 生成に使う最小情報）。amount は額面（お客さま支払額）。
 export type SettledTip = {
   amount: number;
   settlementStatus: SettlementStatus;
@@ -64,22 +80,27 @@ export type BalanceSummary = {
 /**
  * 成立済みの投げ銭から、保留残高（held）・着金可能額（payable）・着金済（paid）の合計を集計する純粋関数。
  * 残高は tip の settlement_status を真実の源泉とし、合算はこの Model で行う（DB アクセスなし）。
+ *
+ * 手取り型: tip.amount は額面のため、店員さんに見せる残高は手取り（約85%）に変換してから合算する。
+ * 1件ごとに手取りへ変換（floor）して足すことで、受取履歴の各行表示（手取り）と合計が整合する。
  */
 export function summarizeBalance(tips: SettledTip[]): BalanceSummary {
   const summary: BalanceSummary = { heldAmount: 0, payableAmount: 0, paidAmount: 0 };
   for (const tip of tips) {
-    if (tip.settlementStatus === "held") summary.heldAmount += tip.amount;
-    else if (tip.settlementStatus === "payable") summary.payableAmount += tip.amount;
-    else if (tip.settlementStatus === "paid") summary.paidAmount += tip.amount;
+    // 額面 → 店員手取り（約85%）へ変換してから残高に積む
+    const take = calculateStaffTakeAmount(tip.amount);
+    if (tip.settlementStatus === "held") summary.heldAmount += take;
+    else if (tip.settlementStatus === "payable") summary.payableAmount += take;
+    else if (tip.settlementStatus === "paid") summary.paidAmount += take;
   }
   return summary;
 }
 
-// 申告データ CSV の1行分（受取記録）
+// 申告データ CSV の1行分（受取記録）。amount は額面（お客さま支払額）で受け取り、CSV では手取りへ変換する。
 export type TaxReportRow = {
   // 受取日（YYYY-MM-DD）
   receivedDate: string;
-  // 受取金額（円）
+  // 受取金額（額面・円）。CSV 出力時に店員手取り（約85%）へ変換する
   amount: number;
   // 受取時の店名
   storeName: string;
@@ -99,6 +120,7 @@ export function escapeCsvCell(value: string): string {
 /**
  * 受取記録から申告用 CSV 文字列を組み立てる純粋関数。
  * 少なくとも「受取日 / 金額 / 店名」の列を含む。確定申告に使える素直な形にする。
+ * 金額は店員さんが実際に受け取る手取り（約85%）で出力する（額面ではなく手取りが申告対象）。
  * Excel 等での文字化けを避けるため UTF-8 BOM を先頭に付ける。
  */
 export function buildTaxReportCsv(rows: TaxReportRow[]): string {
@@ -108,8 +130,8 @@ export function buildTaxReportCsv(rows: TaxReportRow[]): string {
     lines.push(
       [
         escapeCsvCell(row.receivedDate),
-        // 金額は数値だが念のためセル化（カンマ無しの整数）
-        escapeCsvCell(String(row.amount)),
+        // 額面 → 店員手取り（約85%）へ変換してセル化（カンマ無しの整数）
+        escapeCsvCell(String(calculateStaffTakeAmount(row.amount))),
         escapeCsvCell(row.storeName),
       ].join(","),
     );

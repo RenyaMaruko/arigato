@@ -38,16 +38,17 @@ describe("staff.model", () => {
     expect(nextSettlementOnVerified("paid")).toBe("paid");
   });
 
-  it("summarizeBalance: settlement 別に金額を合算する（保留 / 着金可能 / 着金済）", () => {
+  it("summarizeBalance: settlement 別に金額を合算する（手取り型: 額面→手取り約85%へ変換して合算）", () => {
+    // amount は額面。店員さんに見せる残高は手取り（floor(額面×0.85)）へ変換してから合算する
     const summary = summarizeBalance([
-      { amount: 300, settlementStatus: "held" },
-      { amount: 500, settlementStatus: "held" },
-      { amount: 100, settlementStatus: "payable" },
-      { amount: 1000, settlementStatus: "paid" },
+      { amount: 300, settlementStatus: "held" }, // floor(255)=255
+      { amount: 500, settlementStatus: "held" }, // floor(425)=425
+      { amount: 100, settlementStatus: "payable" }, // floor(85)=85
+      { amount: 1000, settlementStatus: "paid" }, // floor(850)=850
     ]);
-    expect(summary.heldAmount).toBe(800);
-    expect(summary.payableAmount).toBe(100);
-    expect(summary.paidAmount).toBe(1000);
+    expect(summary.heldAmount).toBe(255 + 425);
+    expect(summary.payableAmount).toBe(85);
+    expect(summary.paidAmount).toBe(850);
   });
 
   it("summarizeBalance: 空配列はすべて 0", () => {
@@ -64,17 +65,18 @@ describe("staff.model", () => {
     expect(escapeCsvCell('say "hi"')).toBe('"say ""hi"""');
   });
 
-  it("buildTaxReportCsv: 受取日 / 金額 / 店名 の列を含み、行を持つ", () => {
+  it("buildTaxReportCsv: 受取日 / 金額 / 店名 の列を含み、金額は手取り（約85%）で出力する", () => {
+    // amount は額面で受け取り、CSV では店員手取り（floor(額面×0.85)）へ変換して出力する
     const csv = buildTaxReportCsv([
-      { receivedDate: "2025-05-15", amount: 300, storeName: "カフェ Arigato" },
-      { receivedDate: "2025-05-14", amount: 100, storeName: "居酒屋, 花" },
+      { receivedDate: "2025-05-15", amount: 300, storeName: "カフェ Arigato" }, // floor(255)=255
+      { receivedDate: "2025-05-14", amount: 100, storeName: "居酒屋, 花" }, // floor(85)=85
     ]);
     // ヘッダに3列がある
     expect(csv).toContain("受取日,金額,店名");
-    // 受取記録の行が含まれる
-    expect(csv).toContain("2025-05-15,300,カフェ Arigato");
-    // カンマを含む店名はクオートで囲まれる
-    expect(csv).toContain('2025-05-14,100,"居酒屋, 花"');
+    // 受取記録の行が含まれる（金額は手取り）
+    expect(csv).toContain("2025-05-15,255,カフェ Arigato");
+    // カンマを含む店名はクオートで囲まれる（金額は手取り）
+    expect(csv).toContain('2025-05-14,85,"居酒屋, 花"');
   });
 
   it("isInviteUsable は pending かつ店が導入承認に同意済みのときだけ true", () => {

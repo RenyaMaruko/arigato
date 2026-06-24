@@ -432,9 +432,10 @@ describe("staff.service", () => {
     const tips = await getStaffTips(mock.repo, "auth-A");
     expect(tips).not.toBeNull();
     expect(tips!.items).toHaveLength(2);
-    expect(tips!.totalAmount).toBe(800);
-    // 金額・メッセージ・受取日時・店ラベルを含む
-    expect(tips!.items[0]!.amount).toBe(300);
+    // 手取り型: 額面300/500 → 手取り floor(255)/floor(425)=255/425、合計680（手数料15%・決済料込み）
+    expect(tips!.totalAmount).toBe(255 + 425);
+    // 金額（手取り）・メッセージ・受取日時・店ラベルを含む
+    expect(tips!.items[0]!.amount).toBe(255);
     expect(tips!.items[0]!.message).toBe("ありがとう");
     expect(tips!.items[0]!.receivedAt).toBe("2025-05-15T10:32:00Z");
     expect(tips!.items[0]!.storeName).toBe("カフェ Arigato");
@@ -444,11 +445,11 @@ describe("staff.service", () => {
     await seedTwoStaffWithTips();
     const a = await getStaffTips(mock.repo, "auth-A");
     const b = await getStaffTips(mock.repo, "auth-B");
-    // A は自分の2件・合計800のみ。B の100は混ざらない
-    expect(a!.totalAmount).toBe(800);
+    // A は自分の2件・合計680（手取り）のみ。B の分は混ざらない
+    expect(a!.totalAmount).toBe(255 + 425);
     expect(a!.items.map((i) => i.id)).not.toContain("33333333-3333-3333-3333-333333333333");
-    // B は自分の1件・合計100のみ
-    expect(b!.totalAmount).toBe(100);
+    // B は自分の1件・額面100 → 手取り floor(85)=85 のみ
+    expect(b!.totalAmount).toBe(85);
     expect(b!.items).toHaveLength(1);
   });
 
@@ -460,8 +461,8 @@ describe("staff.service", () => {
     await seedTwoStaffWithTips();
     const balance = await getStaffBalance(mock.repo, "auth-A");
     expect(balance).not.toBeNull();
-    // 本人確認前のため held=800 / payable=0、canPayout=false
-    expect(balance!.heldAmount).toBe(800);
+    // 手取り型: 本人確認前のため held=手取り合計680（255+425） / payable=0、canPayout=false
+    expect(balance!.heldAmount).toBe(255 + 425);
     expect(balance!.payableAmount).toBe(0);
     expect(balance!.canPayout).toBe(false);
     expect(balance!.identityStatus).toBe("none");
@@ -470,8 +471,8 @@ describe("staff.service", () => {
   it("getStaffBalance: 本人スコープ — 他人の残高は見えない", async () => {
     await seedTwoStaffWithTips();
     const b = await getStaffBalance(mock.repo, "auth-B");
-    // B の保留残高は自分の100のみ（A の800は混ざらない）
-    expect(b!.heldAmount).toBe(100);
+    // B の保留残高は自分の額面100 → 手取り floor(85)=85 のみ（A の分は混ざらない）
+    expect(b!.heldAmount).toBe(85);
   });
 
   it("getStaffTaxReport: 受取日 / 金額 / 店名 を含む CSV を返す", async () => {
@@ -479,7 +480,8 @@ describe("staff.service", () => {
     const csv = await getStaffTaxReport(mock.repo, "auth-A", 2025);
     expect(csv).not.toBeNull();
     expect(csv!).toContain("受取日,金額,店名");
-    expect(csv!).toContain("2025-05-15,300,カフェ Arigato");
+    // 手取り型: CSV の金額は店員手取り（額面300 → floor(255)=255）
+    expect(csv!).toContain("2025-05-15,255,カフェ Arigato");
   });
 
   // --- Connect オンボーディング ---
@@ -543,10 +545,10 @@ describe("staff.service", () => {
     // A の held 2件が payable へ昇格する
     expect(result.promotedTips).toBe(2);
 
-    // 残高は held=0 / payable=800、本人確認は verified になる
+    // 残高は held=0 / payable=手取り合計680（255+425）、本人確認は verified になる
     const balance = await getStaffBalance(mock.repo, "auth-A");
     expect(balance!.heldAmount).toBe(0);
-    expect(balance!.payableAmount).toBe(800);
+    expect(balance!.payableAmount).toBe(255 + 425);
     expect(balance!.canPayout).toBe(true);
     expect(balance!.identityStatus).toBe("verified");
   });
@@ -569,9 +571,9 @@ describe("staff.service", () => {
     // 既に verified のため二重遷移しない
     expect(second.verified).toBe(true);
     expect(second.promotedTips).toBe(0);
-    // payable は800のまま（二重加算されない）
+    // payable は手取り合計680のまま（二重加算されない）
     const balance = await getStaffBalance(mock.repo, "auth-A");
-    expect(balance!.payableAmount).toBe(800);
+    expect(balance!.payableAmount).toBe(255 + 425);
   });
 
   it("applyConnectAccountUpdate: 該当口座が無ければ found=false", async () => {

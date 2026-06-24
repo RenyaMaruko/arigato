@@ -21,11 +21,11 @@ export const tip = pgTable("tip", {
     .references(() => store.id),
   // 送信元の所属（membership＝人×店）。追跡用（退店で所属が外れても tip は残るため任意）。
   membershipId: uuid("membership_id").references(() => staffStore.id),
-  // 店員さんに届く満額（円）
+  // 投げ銭の額面＝お客さま支払額（円）。店員手取りはこの約85%（手数料15%・決済料込み）
   amount: integer("amount").notNull(),
-  // 運営手数料（application_fee・円）
+  // 運営手数料（application_fee ≈ 11.4% ＝ 15% − Stripe決済料3.6%・円）
   platformFee: integer("platform_fee").notNull(),
-  // お客さま支払額（満額 + 上乗せ手数料・円）
+  // お客さま支払額（額面・円。上乗せ廃止のため = amount）
   customerTotal: integer("customer_total").notNull(),
   // 任意の一言メッセージ（最大80文字。検証は shared の Zod で担保）
   message: text("message"),

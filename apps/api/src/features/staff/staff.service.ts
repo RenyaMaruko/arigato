@@ -15,6 +15,7 @@ import {
   normalizeHeadline,
   summarizeBalance,
   buildTaxReportCsv,
+  calculateStaffTakeAmount,
   type IdentityStatus,
 } from "./staff.model.js";
 import type {
@@ -244,17 +245,21 @@ export async function getStaffTips(
 
   // 本人の受取履歴を取得（Repository が auth_user_id で本人に限定する）
   const rows = await repo.listTipsByAuthUserId(authUserId);
-  // 受取総額を合算する（本人のみに見せる）
-  const totalAmount = rows.reduce((sum, t) => sum + t.amount, 0);
+  // 手取り型: DB の amount は額面のため、店員さんに見せる金額は手取り（約85%）へ変換する。
+  // 1件ごとに手取りへ変換し、合計も変換後の金額で合算する（行表示と合計の整合）。
+  const items = rows.map((t) => ({
+    id: t.id,
+    // 額面 → 店員手取り（約85%）
+    amount: calculateStaffTakeAmount(t.amount),
+    message: t.message,
+    receivedAt: t.receivedAt,
+    storeName: t.storeName,
+    settlementStatus: t.settlementStatus,
+  }));
+  // 受取総額（手取りベース・本人のみに見せる）
+  const totalAmount = items.reduce((sum, t) => sum + t.amount, 0);
   return {
-    items: rows.map((t) => ({
-      id: t.id,
-      amount: t.amount,
-      message: t.message,
-      receivedAt: t.receivedAt,
-      storeName: t.storeName,
-      settlementStatus: t.settlementStatus,
-    })),
+    items,
     totalAmount,
   };
 }

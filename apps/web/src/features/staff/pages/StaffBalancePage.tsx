@@ -104,6 +104,11 @@ export function StaffBalancePage() {
               </div>
             </section>
 
+            {/* 手取り型の補足: 表示金額は手取り（投げ銭の約85%・手数料15%・決済料込み） */}
+            <p className="mt-3 px-1 text-token-xs leading-relaxed text-muted">
+              {t("staff.balanceTakeNote")}
+            </p>
+
             {/* 導線: 本人確認前は口座登録、完了後は補足を表示する */}
             {verified ? (
               <div className="mt-6 rounded-xl border border-line bg-surface-subtle px-4 py-4 text-center text-token-sm text-ink-sub">

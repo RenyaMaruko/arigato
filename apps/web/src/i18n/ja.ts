@@ -178,6 +178,8 @@ export const ja = {
       balanceRegisterAccount: "口座を登録する",
       balanceSeeFlow: "本人確認の流れを見る",
       balanceVerifiedNote: "本人確認が完了しています。着金可能額をご確認ください。",
+      // 手取り型の補足（店員さんに届くのは受取の約85%。手数料15%・決済料込み）
+      balanceTakeNote: "表示金額は手取り額です（投げ銭の約85%。手数料15%・決済料込み）",
       // 本人確認の流れ（06）
       identityTitle: "本人確認・口座登録",
       identityStep1Title: "1. 基本情報の入力",

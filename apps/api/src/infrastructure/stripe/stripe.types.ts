@@ -8,11 +8,11 @@
 export type CreateDirectChargeParams = {
   // 課金先となる店員さんの Connected Account（Direct charge の課金先）
   connectedAccountId: string;
-  // 店員さんに届く満額（円）。お客さま支払額に含まれる
+  // 投げ銭の額面（円）。お客さま支払額そのもの（手取り型のため上乗せなし）
   amount: number;
-  // 運営の取り分（application_fee・円）。運営はこの手数料だけを受領する
+  // 運営の取り分（application_fee ≈ 11.4% ＝ 15% − Stripe決済料3.6%・円）。運営はこの手数料だけを受領する
   applicationFeeAmount: number;
-  // お客さま支払額（満額 + 上乗せ手数料・円）。PaymentIntent の請求総額（amount）
+  // お客さま支払額（額面・円。上乗せ廃止のため = amount）。PaymentIntent の請求総額（amount）
   customerTotal: number;
   // 通貨コード（jpy）
   currency: string;
