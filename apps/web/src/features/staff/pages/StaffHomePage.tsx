@@ -34,81 +34,43 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
 
   return (
     <PhoneFrame>
-      <div className="flex flex-1 flex-col overflow-y-auto px-6 pb-7 pt-3">
-        {/* アバター（ローズの淡いリングで包む。モック01の中央アバター） */}
-        <div className="flex justify-center">
-          <div className="rounded-full bg-rose-soft p-1">
-            <div className="flex h-[92px] w-[92px] items-center justify-center overflow-hidden rounded-full bg-stamp-bg text-token-sm text-muted ring-2 ring-page">
-              {me.avatarUrl ? (
-                <img
-                  src={me.avatarUrl}
-                  alt={me.displayName}
-                  className="h-[92px] w-[92px] rounded-full object-cover"
-                />
-              ) : (
-                "顔写真"
-              )}
-            </div>
+      <div className="flex flex-1 flex-col overflow-y-auto px-6 pb-7 pt-4">
+        {/* 残高カード。受け取った投げ銭の残高（保留＋着金可能の合計）を1つの「残高」として表示する。
+            着金（銀行送金）には本人確認が要るため、未確認なら一言＋本人確認ボタンを残高のすぐ下に置く。
+            金額は本人のみ表示（横断ルール）。本人の画面なのでアバター・名前・一言は出さない。 */}
+        <div className="w-full rounded-2xl border border-rose-spark/50 bg-rose-soft px-5 py-[18px]">
+          {/* 残高（保留 held ＋ 着金可能 payable の合計）を主役に大きく見せる */}
+          <div className="text-token-sm font-semibold text-rose/80">
+            {t("staff.homeBalanceLabel")}
           </div>
-        </div>
-
-        {/* 名前・「さん」（モック01の中央タイトル） */}
-        <div className="mt-3.5 text-center">
-          <span className="text-token-3xl font-bold text-ink">{me.displayName} </span>
-          <span className="text-token-md text-ink">{t("staff.san")}</span>
-        </div>
-        {me.headline && (
-          <div className="mt-1 text-center text-token-md text-ink-sub">{me.headline}</div>
-        )}
-
-        {/* 残高カード（モック01）。保留残高（held）を主役にローズで大きく見せ、着金可能額（payable）を併記する。
-            カードタップで残高・ステータス画面（/staff/balance・モック05）へ。金額は本人のみ表示 */}
-        <button
-          type="button"
-          onClick={() => navigate({ to: "/staff/balance" })}
-          className="mt-[22px] w-full rounded-2xl border border-rose-spark/50 bg-rose-soft px-4 py-0.5 text-left"
-        >
-          {/* 保留残高（held 合計・主役）。本人確認の有無に関係なく溜まる金額を本人に表示する */}
-          <div className="flex items-center justify-between py-3.5">
-            <div className="min-w-0">
-              <div className="text-token-xs text-rose/80">
-                {t("staff.homeHeldLabel")}{" "}
-                <span className="text-rose/50">{t("staff.homeHeldSub")}</span>
-              </div>
-              <div className="mt-0.5 text-[26px] font-bold leading-none text-rose">
-                ¥{heldAmount.toLocaleString()}
-              </div>
-            </div>
-            <span className="flex h-[38px] w-[38px] flex-none items-center justify-center rounded-full bg-rose-spark/40 text-rose">
-              <ClockIcon />
-            </span>
+          <div className="mt-1 text-[30px] font-bold leading-none text-rose">
+            ¥{(heldAmount + payableAmount).toLocaleString()}
+          </div>
+          {/* 送金できる条件の一言（未確認＝本人確認で送金可能に／確認済＝送金できる） */}
+          <div className="mt-2 text-token-xs text-rose/70">
+            {verified ? t("staff.homeBalanceVerifiedNote") : t("staff.homeBalanceToSendNote")}
           </div>
 
-          {/* 区切り線（モック01のローズ淡色） */}
-          <div className="h-px bg-rose-spark/60" />
-
-          {/* 着金可能額（payable 合計・併記）。着金には本人確認が要る関係を補足で示す */}
-          <div className="flex items-center justify-between py-3.5">
-            <div className="min-w-0">
-              <div className="text-token-xs text-ink-sub">
-                {t("staff.homePayableLabel")}{" "}
-                <span className="text-muted-soft">{t("staff.homePayableSub")}</span>
-              </div>
-              <div className="mt-0.5 text-token-2xl font-bold leading-none text-ink">
-                ¥{payableAmount.toLocaleString()}
-              </div>
-              {/* 本人確認前は「口座登録で着金できる」、完了後は「着金可能」を一言で示す */}
-              <div className="mt-1.5 text-token-xs text-rose/70">
-                {verified
-                  ? t("staff.homeBalanceVerifiedNote")
-                  : t("staff.homeBalanceRegisterNote")}
-              </div>
-            </div>
-            <span className="flex h-[34px] w-[34px] flex-none items-center justify-center rounded-full border-[1.5px] border-rose-spark/70 text-rose/70">
+          {/* 残高のすぐ下のアクション。未確認なら本人確認へ、確認済なら残高・着金の詳細へ */}
+          {verified ? (
+            <button
+              type="button"
+              onClick={() => navigate({ to: "/staff/balance" })}
+              className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-rose-spark bg-page py-3 text-token-md font-bold text-rose"
+            >
+              {t("staff.homeBalanceDetailCta")}
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => navigate({ to: "/staff/identity" })}
+              className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-xl bg-rose py-3 text-token-md font-bold text-page"
+            >
+              {t("staff.homeVerifyCta")}
               <ChevronIcon />
-            </span>
-          </div>
-        </button>
+            </button>
+          )}
+        </div>
 
         {/* 所属しているお店（複数可・掛け持ち）。各店ごとに別QR（/tip/:membershipId）へ導く */}
         <div className="mt-7">
@@ -210,27 +172,7 @@ function FeatureTile({
   );
 }
 
-/** 時計アイコン（保留＝時間で着金可能になる、の含意）。 */
-function ClockIcon() {
-  return (
-    <svg
-      width="20"
-      height="20"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7.5V12l3 2" />
-    </svg>
-  );
-}
-
-/** 右シェブロン（残高画面へ進む含意）。モック01の着金可能額の右端アイコン。 */
+/** 右シェブロン（次へ進む含意）。 */
 function ChevronIcon() {
   return (
     <svg

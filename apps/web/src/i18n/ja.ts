@@ -129,18 +129,15 @@ export const ja = {
       homeStoreQr: "QRを表示",
       homeNoStores: "まだお店に所属していません。招待リンクから参加してください。",
       homeAccount: "口座登録",
-      // ホーム上部のステータスカード（本人確認の状態を見せ、残高画面へ導く）
-      homeStatusLabel: "残高・ステータス",
-      homeStatusNote: "口座を登録すると着金できます",
-      // ホームの残高カード（モック01・保留残高を主役に、着金可能額を併記）
-      homeHeldLabel: "保留残高",
-      homeHeldSub: "（本人確認前）",
-      homePayableLabel: "着金可能額",
-      homePayableSub: "（本人確認完了後）",
-      // 本人確認前: 口座登録で着金できる、という一言（着金には本人確認が要る関係を示す）
-      homeBalanceRegisterNote: "口座を登録すると着金できます",
-      // 本人確認済み: 着金可能の見せ方
-      homeBalanceVerifiedNote: "着金可能です",
+      // ホームの残高カード（残高を1つにまとめて表示し、すぐ下に本人確認の導線を置く）
+      homeBalanceLabel: "残高",
+      // 未確認: 本人確認すれば送金できる、という一言
+      homeBalanceToSendNote: "本人確認を済ませると送金できます",
+      // 確認済み: 送金できる状態
+      homeBalanceVerifiedNote: "送金できます",
+      // 残高のすぐ下のアクション（未確認＝本人確認へ／確認済＝残高の詳細へ）
+      homeVerifyCta: "本人確認をする",
+      homeBalanceDetailCta: "残高の詳細を見る",
       identityNone: "本人確認はまだです（後でOK）",
       identityPending: "本人確認を確認中です",
       identityVerified: "本人確認済み",
