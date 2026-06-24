@@ -128,6 +128,10 @@ export const ja = {
       homeStoresLabel: "所属しているお店",
       homeStoreQr: "QRを表示",
       homeNoStores: "まだお店に所属していません。招待リンクから参加してください。",
+      homeAccount: "口座登録",
+      // ホーム上部のステータスカード（本人確認の状態を見せ、残高画面へ導く）
+      homeStatusLabel: "残高・ステータス",
+      homeStatusNote: "口座を登録すると着金できます",
       identityNone: "本人確認はまだです（後でOK）",
       identityPending: "本人確認を確認中です",
       identityVerified: "本人確認済み",
