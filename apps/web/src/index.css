@@ -1,3 +1,15 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+
+@layer base {
+  /*
+   * スクロールバー分の隙間を常に確保する。
+   * これが無いと、内容が縦に長くスクロールバーが出るページ（QR画面など）だけ
+   * 中央寄せ（PhoneFrame の justify-center）がバー幅ぶん左にズレてしまう。
+   * 常に隙間を確保することで、ページ間で中央位置がブレないようにする。
+   */
+  html {
+    scrollbar-gutter: stable;
+  }
+}
