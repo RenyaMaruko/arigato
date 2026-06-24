@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { QRCodeSVG } from "qrcode.react";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe } from "../hooks/useStaff.js";
 
@@ -159,6 +160,11 @@ export function StaffQrPage() {
             {t("staff.qrPrint")}
           </button>
         </div>
+      </div>
+
+      {/* 下部ボトムナビ（現在地＝QR。印刷時は隠す） */}
+      <div className="print:hidden">
+        <StaffBottomNav active="qr" />
       </div>
     </PhoneFrame>
   );

@@ -201,6 +201,16 @@ export const ja = {
       exportDownloading: "出力中…",
       exportError: "出力に失敗しました。もう一度お試しください。",
       exportLink: "申告データ（CSV）",
+      // ボトムナビ（モック01）。ホーム / 履歴 / QR / 設定
+      navHome: "ホーム",
+      navHistory: "履歴",
+      navQr: "QR",
+      navSettings: "設定",
+      // 設定画面（10）。プロフィール・本人確認/口座・申告データ・ログアウトへの導線
+      settingsTitle: "設定",
+      settingsProfile: "プロフィール編集",
+      settingsIdentity: "本人確認・口座登録",
+      settingsExport: "申告データ（CSV）",
       // 共通
       loading: "読み込み中…",
     },

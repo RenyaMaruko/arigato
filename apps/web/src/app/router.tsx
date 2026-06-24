@@ -19,6 +19,7 @@ import { StaffBalancePage } from "../features/staff/pages/StaffBalancePage.js";
 import { StaffIdentityFlowPage } from "../features/staff/pages/StaffIdentityFlowPage.js";
 import { StaffIdentityCompletePage } from "../features/staff/pages/StaffIdentityCompletePage.js";
 import { StaffTaxExportPage } from "../features/staff/pages/StaffTaxExportPage.js";
+import { StaffSettingsPage } from "../features/staff/pages/StaffSettingsPage.js";
 import { StorePage } from "../features/store/pages/StorePage.js";
 import { StoreLoginPage } from "../features/store/pages/StoreLoginPage.js";
 import { StoreApprovalPage } from "../features/store/pages/StoreApprovalPage.js";
@@ -179,6 +180,13 @@ const staffExportRoute = createRoute({
   component: StaffTaxExportPage,
 });
 
+// "/staff/settings" 設定（プロフィール・本人確認/口座・申告データ・ログアウトへの導線）
+const staffSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/settings",
+  component: StaffSettingsPage,
+});
+
 // "/staff/joined" 参加完了画面。?store= 店名・?status= 結果区分（joined / already）を受け取る
 const staffJoinedRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -282,6 +290,7 @@ const routeTree = rootRoute.addChildren([
   staffIdentityRoute,
   staffIdentityCompleteRoute,
   staffExportRoute,
+  staffSettingsRoute,
   staffJoinedRoute,
   inviteRoute,
   storeRoute,

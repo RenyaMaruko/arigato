@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import type { StaffTipItem, SettlementStatus } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe, useStaffTips } from "../hooks/useStaff.js";
 
@@ -87,6 +88,9 @@ export function StaffTipsHistoryPage() {
           </>
         )}
       </div>
+
+      {/* 下部ボトムナビ（現在地＝履歴） */}
+      <StaffBottomNav active="history" />
     </PhoneFrame>
   );
 }

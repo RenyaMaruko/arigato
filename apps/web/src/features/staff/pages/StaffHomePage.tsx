@@ -3,16 +3,17 @@ import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import type { StaffMe } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
-import { signOut } from "../../../lib/auth.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 
 /**
  * 店員さんホーム（ログイン後の起点・/staff）。
- * モック01のトーン（中央アバター・ローズ淡色のステータスカード・機能アイコングリッド）を踏襲しつつ、
- * 多対多モデル（掛け持ち）に合わせて「所属しているお店」を一覧で見せ、店ごとの別QRへ導く。
+ * モック01のトーン（中央アバター・ローズ淡色のステータスカード・機能アイコングリッド・下部ボトムナビ）を
+ * 踏襲しつつ、多対多モデル（掛け持ち）に合わせて「所属しているお店」を一覧で見せ、店ごとの別QRへ導く。
  *
  * 多対多モデル: 所属（membership）は複数持てる。各店ごとに別QR（/tip/:membershipId）を貼るため、
  * 店ごとにQRボタンを並べ、?m= で対象 membership を QR 画面に渡す。
  * ホームでは残高金額は持たないため、ステータスカードは「本人確認の状態」を見せて残高画面へ導く。
+ * ログアウトは設定画面（/staff/settings）へ移設したため、ホーム上部の操作行は持たない（モック01に準拠）。
  */
 export function StaffHomePage({ me }: { me: StaffMe }) {
   const { t } = useTranslation();
@@ -27,28 +28,11 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
       ? t("staff.identityPending")
       : t("staff.identityNone");
 
-  // ログアウトしてログイン画面（同じ /staff のログイン前状態）へ戻す
-  const handleLogout = async () => {
-    await signOut();
-    navigate({ to: "/staff" });
-  };
-
   return (
     <PhoneFrame>
-      <div className="flex flex-1 flex-col overflow-y-auto px-6 pb-7 pt-2.5">
-        {/* 上部の行（モック01）: 左にメニュー風アイコン・中央アバター・右に状態ベルと通知ドット */}
-        <div className="flex items-start justify-between">
-          {/* 左: ログアウト（モックのハンバーガー位置に置く控えめなアクション） */}
-          <button
-            type="button"
-            onClick={handleLogout}
-            aria-label={t("staff.logout")}
-            className="pt-1 text-ink"
-          >
-            <MenuIcon />
-          </button>
-
-          {/* 中央: アバター（ローズの淡いリングで包む） */}
+      <div className="flex flex-1 flex-col overflow-y-auto px-6 pb-7 pt-3">
+        {/* アバター（ローズの淡いリングで包む。モック01の中央アバター） */}
+        <div className="flex justify-center">
           <div className="rounded-full bg-rose-soft p-1">
             <div className="flex h-[92px] w-[92px] items-center justify-center overflow-hidden rounded-full bg-stamp-bg text-token-sm text-muted ring-2 ring-page">
               {me.avatarUrl ? (
@@ -62,19 +46,6 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
               )}
             </div>
           </div>
-
-          {/* 右: 本人確認の状態を示すベル（未確認のときローズのドットで注意を促す） */}
-          <button
-            type="button"
-            onClick={() => navigate({ to: "/staff/balance" })}
-            aria-label={identityLabel}
-            className="relative pt-1 text-ink"
-          >
-            <BellIcon />
-            {!verified && (
-              <span className="absolute right-0.5 top-0.5 h-2 w-2 rounded-full border-[1.5px] border-page bg-rose" />
-            )}
-          </button>
         </div>
 
         {/* 名前・「さん」（モック01の中央タイトル） */}
@@ -193,6 +164,9 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           />
         </div>
       </div>
+
+      {/* 下部ボトムナビ（モック01・現在地＝ホーム） */}
+      <StaffBottomNav active="home" />
     </PhoneFrame>
   );
 }
@@ -219,44 +193,6 @@ function FeatureTile({
       {icon}
       <span className="text-token-sm text-ink-label">{label}</span>
     </button>
-  );
-}
-
-/** メニュー（三本線）アイコン。モックのハンバーガー位置。 */
-function MenuIcon() {
-  return (
-    <svg
-      width="26"
-      height="26"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      aria-hidden="true"
-    >
-      <path d="M4 7h16M4 12h16M4 17h16" />
-    </svg>
-  );
-}
-
-/** ベル（通知・状態）アイコン。 */
-function BellIcon() {
-  return (
-    <svg
-      width="24"
-      height="24"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.8"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9" />
-      <path d="M13.7 21a2 2 0 0 1-3.4 0" />
-    </svg>
   );
 }
 
