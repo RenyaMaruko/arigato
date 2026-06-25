@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearch } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
@@ -44,14 +44,23 @@ export function StaffProfileCreatePage() {
   const [error, setError] = useState<string | null>(null);
   // 既存プロフィールの自動参加を1度だけ走らせるためのフラグ
   const [autoJoinStarted, setAutoJoinStarted] = useState(false);
+  // 参加（join）を二重に撃たないための同期ガード。
+  // 「作成→参加」フローでは作成成功時に hook 側 onSuccess（setQueryData）が先に走り、
+  // それで hasProfile が true になって自動参加 useEffect が join を撃ってしまう一方、
+  // handleSubmit 側 onSuccess も join を撃つため、単発招待が 2 回目で 409 になり「参加処理中」のまま固まる。
+  // ref は再レンダーを待たず同期で読めるので、どちらの経路から来ても join は 1 回だけにできる。
+  const joinClaimedRef = useRef(false);
 
   // 参加完了画面へ遷移する（status で「参加しました」/「既に所属」を出し分ける）
   const goJoined = (store: string, status: "joined" | "already") => {
     navigate({ to: "/staff/joined", search: { store, status } });
   };
 
-  // 招待コードで参加（join）を実行し、結果に応じて遷移する共通処理
+  // 招待コードで参加（join）を実行し、結果に応じて遷移する共通処理。
+  // 既に参加を開始済みなら二重実行しない（同期ガード）。
   const runJoin = (storeNameFallback: string) => {
+    if (joinClaimedRef.current) return;
+    joinClaimedRef.current = true;
     joinMutation.mutate(invite.trim(), {
       onSuccess: (result) => {
         goJoined(
@@ -119,7 +128,9 @@ export function StaffProfileCreatePage() {
       },
       {
         onSuccess: () => {
-          // 招待があればその店へ参加（join）→ 参加完了画面。無ければホームへ
+          // 招待があればその店へ参加（join）→ 参加完了画面。無ければホームへ。
+          // runJoin は同期ガード（joinClaimedRef）で二重実行を防ぐため、
+          // 作成成功で発火する自動参加 useEffect 側の join とは重複しない。
           if (inviteProvided) {
             runJoin(inviteQuery.data?.storeName ?? "");
           } else {
@@ -134,6 +145,14 @@ export function StaffProfileCreatePage() {
       },
     );
   };
+
+  // プロフィール作成済みで参加が失敗したら、ローディングのまま固まらせずホームへ送る。
+  // プロフィールは作成済み＝ログイン済み店員なので、ホームから招待リンクで参加を再試行できる。
+  useEffect(() => {
+    if (hasProfile && joinMutation.isError) {
+      navigate({ to: "/staff" });
+    }
+  }, [hasProfile, joinMutation.isError, navigate]);
 
   // ガード判定中・未ログイン（ログインへ送る前）・既存ユーザーの自動参加中はローディング（作成画面のちらつき防止）
   if (authLoading || !isAuthenticated || meQuery.isLoading || hasProfile) {

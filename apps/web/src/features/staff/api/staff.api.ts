@@ -202,7 +202,8 @@ export async function fetchPayouts(): Promise<PayoutList | null> {
  */
 export async function downloadTaxReport(year: number): Promise<void> {
   const apiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
-  const token = await getAccessToken();
+  // トークンはメモリ保持のセッションから同期取得する
+  const token = getAccessToken();
   const headers = new Headers();
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);

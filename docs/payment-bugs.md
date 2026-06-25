@@ -106,6 +106,26 @@
 
 ---
 
+## 10. [修正済] 認証で画面が固まる（無限ローディング・「参加処理中」固まり）★重大
+
+- **症状**：ログイン後の `/staff`・`/store` が無限ローディングになる／店員参加（join）が「参加処理中」のまま固まる／リロードで固まる。お客さま投げ銭（/tip・認証不要）には影響なし。
+- **原因**（2系統）：
+  1. **auth-js の Web Locks 孤立ロック（恒久対応の本丸）**：`supabase.auth.getSession()/getUser()` は navigator Web Locks（`lock:sb-…-auth-token`）を取りに行くが、孤立ロックでデッドロックし**永久ハング**する既知不具合（supabase issue #1594/#2111/#1517/#762、discussions/19058）。トリガは React StrictMode の dev 二重マウント・abort・`onAuthStateChange` 内の async 呼び出し・毎時のトークン更新など（マルチタブが主因ではない）。**API クライアントが毎リクエスト `getSession()` を呼んでいた**ため、ロック競合の入口が多かった。
+  2. **参加（join）の二重発火**：プロフィール作成成功時、`useStaffMe` の `setQueryData` が先に走って `hasProfile=true` になり自動参加 `useEffect` が join を撃つ一方、作成の `onSuccess` でも join を撃つ。**単発招待のため2回目が 409（invite_not_usable）**になり、ガードがローディング表示のまま固まった（メモリ保持化で token 取得が同期になりタイミングが変わって顕在化）。
+- **修正**：
+  1. **セッションをモジュールレベルでメモリ保持**（`apps/web/src/lib/auth.ts`）。`onAuthStateChange` で **INITIAL_SESSION / SIGNED_IN / TOKEN_REFRESHED / SIGNED_OUT** を**同期的に**反映（コールバック内で await する Supabase 呼び出しはしない＝デッドロック回避）。`getAccessToken()` はメモリの `access_token` を**同期返却**し、API クライアント（`api-client.ts`）・CSV ダウンロード（`staff.api.ts`）はこれを使う。`useAuthSession` も同じメモリセッションを購読し、`getSession()` の直接呼び出しは初回ブートストラップのみに最小化。
+  2. **navigator.locks をバイパス**：`createClient(..., { auth: { lock: noOpLock } })` で Web Locks を無効化（`const noOpLock = async (_name, _timeout, fn) => fn();`）。ロックのデッドロックを構造的に根絶する。トレードオフ＝複数タブ同時刷新で片方がサインアウトし得る点はコード内コメントに明記。
+  3. **初回ブートストラップにタイムアウト保険**（3秒）：`getSession()` が返らなくても loading を必ず解除（最悪ログイン画面へ）。固まり耐性を担保。
+  4. **鮮度維持（自動ログイン不変）**：`persistSession`/`autoRefreshToken`/`detectSessionInUrl` は維持。`autoRefreshToken` が裏で更新し `TOKEN_REFRESHED` でメモリセッションを差し替えるため、再ログイン不要のまま常に新鮮なトークンを使う。
+  5. **join の単発化**：`StaffProfileCreatePage` の `runJoin` に**同期ガード（`useRef`）**を入れ、自動参加 `useEffect` と作成 `onSuccess` のどちらから来ても join は1回だけ。参加が失敗したときはローディングのまま固まらせず**ホームへ送る**（プロフィールは作成済み＝後から招待リンクで再参加可能）。
+- **教訓**：
+  - **認証セッションはメモリ保持を正にし、毎リクエスト `getSession()` を呼ばない**（公式ベストプラクティス。ロック競合の入口を増やさない）。トークンの鮮度は `autoRefreshToken`＋`TOKEN_REFRESHED` で保つ。
+  - **`onAuthStateChange` のコールバックは同期で state 更新のみ**にする（await する Supabase 呼び出しでデッドロックを誘発しない）。
+  - **起動時セッション取得は必ずタイムアウトで loading を解除**できるようにする（外部要因で返らなくても固まらせない）。
+  - **冪等でない確定操作（単発招待の join 等）は同期ガードで二重発火を防ぐ**。非同期の `setState` フラグはレンダー前の二重実行を防げない（`useRef` で同期に弾く）。
+
+---
+
 ## まとめ：再発防止の原則
 
 1. **お客さま表示＝決済の即時結果／お金の確定＝Webhook**（2段の正）。表示をWebhook待ちにしない。
@@ -113,4 +133,5 @@
 3. **お金のRepositoryは実DBでE2E検証**（メモリ実装のテストだけに頼らない。特に配列・日時バインド）。
 4. **送金可能額は Stripe の実 available 残高を正**にする（DBのpayableと混同しない）。← 5番は要対応。
 5. **手数料は誰の残高から引かれるかを数値で検算**（Direct charge の Stripe手数料は店員側）。
+6. **認証セッションはメモリ保持＋no-opロック＋initタイムアウト**で固まりを構造的に防ぐ。毎リクエスト `getSession()` を呼ばず、`onAuthStateChange` は同期 state 更新のみ。自動ログイン（持続性）は `persistSession`/`autoRefreshToken` 維持で不変。
 6. **Stripe操作は対象アカウントを常に確認**（サンドボックスは .env 鍵）。
