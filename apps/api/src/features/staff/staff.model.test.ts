@@ -11,6 +11,7 @@ import {
   buildTaxReportCsv,
   escapeCsvCell,
   evaluatePayoutEligibility,
+  selectPayoutTipsWithinAvailable,
 } from "./staff.model.js";
 
 /**
@@ -91,6 +92,38 @@ describe("staff.model", () => {
     expect(csv).toContain("2025-05-15,255,カフェ Arigato");
     // カンマを含む店名はクオートで囲まれる（金額は手取り）
     expect(csv).toContain('2025-05-14,85,"居酒屋, 花"');
+  });
+
+  it("selectPayoutTipsWithinAvailable は available に収まる範囲（FIFO）の手取り合計だけを選ぶ（#5）", () => {
+    // 額面 1000(手取り850) / 500(手取り425) / 300(手取り255) の 3件（古い順）。手取り合計は 1530。
+    const tips = [
+      { tipId: "t1", amount: 1000 },
+      { tipId: "t2", amount: 500 },
+      { tipId: "t3", amount: 300 },
+    ];
+
+    // available=1530 → 全件選ぶ（DB payable 全額が available 以下）
+    const all = selectPayoutTipsWithinAvailable(tips, 1530);
+    expect(all.amount).toBe(1530);
+    expect(all.tipIds).toEqual(["t1", "t2", "t3"]);
+
+    // available=850 → 先頭(850)だけ。次(425)を足すと 1275>850 のため打ち切る（古い分を優先）
+    const capped = selectPayoutTipsWithinAvailable(tips, 850);
+    expect(capped.amount).toBe(850);
+    expect(capped.tipIds).toEqual(["t1"]);
+
+    // available=1300 → 850+425=1275 まで（+255=1530 は超過のため打ち切る）。必ず available 以下
+    const partial = selectPayoutTipsWithinAvailable(tips, 1300);
+    expect(partial.amount).toBe(1275);
+    expect(partial.tipIds).toEqual(["t1", "t2"]);
+
+    // available=0 → 何も選ばない（送金額 0・残高不足を構造的に回避）
+    const none = selectPayoutTipsWithinAvailable(tips, 0);
+    expect(none.amount).toBe(0);
+    expect(none.tipIds).toEqual([]);
+
+    // payable が空（held しか無い等）→ 何も選ばない
+    expect(selectPayoutTipsWithinAvailable([], 1000)).toEqual({ tipIds: [], amount: 0 });
   });
 
   it("isInviteUsable は pending かつ店が導入承認に同意済みのときだけ true", () => {

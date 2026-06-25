@@ -185,12 +185,18 @@ QR読取（QR は membership＝人×店 を指す）
 
 ### payout（送金＝振込申請）
 - id, staff_id, amount（送金額＝店員が銀行で受け取る額・円）, status（pending / paid / failed）, stripe_payout_id, created_at, arrived_at（着金日・nullable）, failure_reason（nullable）
-- **手動送金（メルカリ型）**：verified（口座登録済＝payouts_enabled）な店員が、着金可能額（payable な tip の手取り合計）を自分のタイミングで銀行へ送金申請する。
+- **手動送金（メルカリ型）**：verified（口座登録済＝payouts_enabled）な店員が、自分のタイミングで銀行へ送金申請する。
 - **最低送金額 ¥100**（`MIN_PAYOUT_AMOUNT = 100`）。
-- **送金額は着金可能額の全額**（v1。部分送金は将来）。
-- 申請時：対象の payable な tip を **paid** に更新し、その手取り合計を payout.amount として Stripe payout を実行（Connected Account の残高→銀行）。
+- **送金可能額は「Stripe の実 available 残高」を正とする**（DB の payable 合計ではない）。受け取ったばかりの資金は Stripe 内で数日 **pending**（確定待ち）になり、available になって初めて送金できるため。日本の Stripe は Instant Payouts 非対応・日次自動入金不可なので、この pending→available の遅延は構造的に避けられない。
+  - **送金額は available 残高の全額**（v1。部分送金は将来）。
+  - 申請時：Stripe payout を Connected Account の available 残高に対して実行（残高→銀行）。対象 tip を **paid** に更新。available を超える送金はしない（残高不足エラーを防ぐ）。
+- **残高表示は3段に分ける**（受取総額は隠さない）：
+  - **送金できる**＝本人確認済み かつ Stripe available（＝「送金する」の対象）
+  - **準備中（pending）**＝受け取ったが Stripe 確定待ち（「◯日後に送金できます」と available_on を表示）
+  - **本人確認待ち（held）**＝未確認（まず本人確認へ）
 - 確定は Webhook を正とする：`payout.paid`→status=paid・arrived_at 記録／`payout.failed`→status=failed・該当 tip を payable へ戻す。
 - 送金手数料は店員から取らない（日本の payout は無料前提）。着金は申請から数営業日。
+- 参考：受取直後に残高反映・銀行送金は数日、はメルカリ等と同じ業界標準。即時銀行着金は日本の Stripe では提供しない。
 
 ### 通知（任意・中優先）
 - notification: id, staff_id, tip_id, read_at, created_at（「〇〇さんからありがとうが届きました」）。初期はメール送信でも可。

@@ -151,13 +151,21 @@ export type StaffTipsResponse = z.infer<typeof StaffTipsResponseSchema>;
 
 /**
  * GET /staff/me/balance の応答（保留残高サマリ・本人のみ）。
- * 保留残高（held 合計）と着金可能額（payable 合計）を本人に返す。
+ *
+ * 残高は「3段」に分けて本人に返す（受取総額は隠さない）:
+ *  - **送金できる額（sendableAmount）**＝本人確認済み かつ Stripe の実 available 残高。「送金する」の対象額・payout 上限。
+ *    DB の payable 合計ではなく Stripe の実 available を正とする（#5: 残高不足の構造的回避）。
+ *  - **準備中（pendingStripeAmount）**＝受け取ったが Stripe 確定待ち。available になるまで送金できない。
+ *    nextAvailableOn（◯月◯日から送金できる）を併記する。
+ *  - **本人確認待ち（held）＝heldAmount**＝未確認分（まず本人確認へ）。
+ *
+ * 旧フィールド（heldAmount / payableAmount / paidAmount / canPayout / identityStatus）は受取総額・互換のため維持する。
  * 金額を含むのは本人スコープのこの経路だけ（店・他スタッフには返さない）。
  */
 export const StaffBalanceSchema = z.object({
-  // 保留残高（本人確認前に成立した held の合計・円）
+  // 保留残高（本人確認前に成立した held の合計・円）。＝「本人確認待ち額」
   heldAmount: z.number().int(),
-  // 着金可能額（本人確認後の payable の合計・円）
+  // 着金可能額（本人確認後の DB payable の合計・円。受取総額・参考表示。送金可否は sendableAmount を正とする）
   payableAmount: z.number().int(),
   // 着金済（paid の合計・円。参考表示）
   paidAmount: z.number().int(),
@@ -165,6 +173,14 @@ export const StaffBalanceSchema = z.object({
   canPayout: z.boolean(),
   // 本人確認の状態（none / pending / verified）
   identityStatus: IdentityStatusSchema,
+  // 【送金できる額】本人確認済み かつ Stripe の実 available 残高（円）。「送金する」の対象額。
+  // 未確認・連結アカウント未作成・残高取得失敗時は 0。
+  sendableAmount: z.number().int(),
+  // 【準備中（pending）額】Stripe 確定待ちの残高（円）。available になるまで送金できない
+  pendingStripeAmount: z.number().int(),
+  // 準備中の資金が最も早く available になる日時（ISO 文字列・「◯月◯日から送金できます」表示用）。
+  // 準備中が無い／available_on を拾えない場合は null
+  nextAvailableOn: z.string().nullable(),
 });
 export type StaffBalance = z.infer<typeof StaffBalanceSchema>;
 

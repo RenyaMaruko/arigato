@@ -110,3 +110,16 @@ export type CreateConnectedAccountResult = {
   // 受け取り（Direct charge）が可能か（true なら本人確認前でも held で受け取れる）
   chargesEnabled: boolean;
 };
+
+// Connected Account の残高スナップショット（送金可能額・準備中額の「正」＝ Stripe 実残高）。
+// DB の payable 合計ではなく、この available を送金可能額の正とする（残高不足の構造的回避）。
+// 金額は JPY の最小単位＝1円のため整数（円）でそのまま扱う。
+export type ConnectBalance = {
+  // 送金可能（available）残高（円）。「送金する」の対象額・payout の上限となる
+  availableAmount: number;
+  // 準備中（pending・Stripe 確定待ち）残高（円）。available になるまで送金できない
+  pendingAmount: number;
+  // 準備中の資金が最も早く available になる日時（ISO 文字列・「◯月◯日から送金できます」表示用）。
+  // pending が無い／available_on を拾えない場合は null
+  nextAvailableOn: string | null;
+};

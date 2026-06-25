@@ -57,18 +57,20 @@
 
 ---
 
-## 5. [要対応] DBの「着金可能額」と Stripe の「実際に送金できる残高」がズレる
+## 5. [修正済] DBの「着金可能額」と Stripe の「実際に送金できる残高」がズレる
 
 - **症状**：送金画面の着金可能額（例 ¥117,582）に対し、Stripe の利用可能(available)残高は少額（例 ¥4,980）しか無く、送金が残高不足で失敗し得る。
 - **原因**：
   - DB は「verified になったら payable」と**即マーク**するため着金可能額が大きく出る。
   - 一方 Stripe は、受け取った資金を**数日 pending→available に確定**させる。直近の投げ銭はまだ送金可能になっていない。
   - アプリは **DBのpayable合計**を送金しようとするため、Stripe実残高を超えると失敗する。
-- **現状**：未対応（本番で実際に起こり得る）。
-- **対応案**：
-  - 「着金可能額」「送金額」を **Stripe の実 available 残高ベース**にする（または available を上限にキャップ）。
-  - 「◯日後に送金可能になります」等の pending 表示を入れる。
-- **教訓**：受取（DB上の権利）と、実際に**払い出せる残高（Stripe側の settlement）**は別物。送金可能額は Stripe 残高を正にする。
+- **修正**：
+  - **送金可能額・送金額の「正」を Stripe の実 available 残高にした**（DB の payable 合計ではない）。infrastructure に `retrieveConnectBalance`（`balance.retrieve({ stripeAccount })` の available[jpy]／pending[jpy]／pending の最早 `available_on`）を追加し、Service へ注入（4層分離）。
+  - **残高API（`GET /staff/me/balance`）を3段**に：送金できる額（verified かつ Stripe available）／準備中（Stripe pending・`available_on` から「◯月◯日から送金できます」）／本人確認待ち（held）。受取総額（DB held+payable+paid）は引き続き見せる（隠さない）。Stripe 取得失敗時は DB 集計で代替し画面を壊さない。
+  - **送金実行（`POST /staff/me/payouts`）は申請時点の Stripe available を再取得（TOCTOU 回避）**し、payable な tip を**古い順（FIFO）に available へ収まる範囲だけ**選んで送金（`selectPayoutTipsWithinAvailable`）。送金額は必ず available 以下＝**残高不足を構造的に回避**。available に収まらない pending 分の tip は payable のまま残し、available になってから次回送金。
+  - **前回の送金整合性対策（#2）は後退させない**：DB 先行（pending 行作成＋選んだ tip を paid 化）→ Stripe payout（idempotency_key・metadata.payout_id）→ 成功で stripe_payout_id 補完／失敗で revert。確定は payout.paid/failed Webhook を正とする。
+- **検証**：実 DB + 実 Stripe で E2E。available（即時着金カード）と pending（通常カード）を混在させた verified 店員で、残高が「送金できる(available 4430)／準備中(pending 7088・◯月◯日)／本人確認待ち(held)」に分かれ、**送金は available 分だけ成功**（payout.paid Webhook で paid 確定）、pending 分は payable のまま残ることを確認。テストデータ・連結アカウントは検証後に削除。
+- **教訓**：受取（DB上の権利）と、実際に**払い出せる残高（Stripe側の settlement）**は別物。送金可能額は Stripe 残高を正にし、送金額は available を上限にキャップする。
 
 ---
 
@@ -137,7 +139,7 @@
 1. **お客さま表示＝決済の即時結果／お金の確定＝Webhook**（2段の正）。表示をWebhook待ちにしない。
 2. **外部送金の前にDBを確定**し、外部呼び出しは idempotency 化、失敗時は revert。「外部成功×DB失敗」を構造的に作らない。
 3. **お金のRepositoryは実DBでE2E検証**（メモリ実装のテストだけに頼らない。特に配列・日時バインド）。
-4. **送金可能額は Stripe の実 available 残高を正**にする（DBのpayableと混同しない）。← 5番は要対応。
+4. **送金可能額は Stripe の実 available 残高を正**にする（DBのpayableと混同しない）。送金額は available を上限にキャップし、残高不足を構造的に回避する（5番＝対応済み）。
 5. **手数料は誰の残高から引かれるかを数値で検算**（Direct charge の Stripe手数料は店員側）。
 6. **認証セッションはメモリ保持＋no-opロック＋initタイムアウト**で固まりを構造的に防ぐ。毎リクエスト `getSession()` を呼ばず、`onAuthStateChange` は同期 state 更新のみ。自動ログイン（持続性）は `persistSession`/`autoRefreshToken` 維持で不変。
 6. **Stripe操作は対象アカウントを常に確認**（サンドボックスは .env 鍵）。

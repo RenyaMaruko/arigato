@@ -554,6 +554,8 @@ export function createStaffRepository(): StaffRepository {
 
     // 本人の着金可能（payable）な成立済み tip の id・額面を取得する（本人スコープ）。
     // 送金額（手取り合計）の算出と、paid 化する対象の特定にだけ使う。
+    // 古い受取から順に送る（FIFO）ため受取日時の昇順で返す。available を上限に
+    // 古い分から選定する（selectPayoutTipsWithinAvailable）ので並び順が意味を持つ。
     async listPayableTipsByAuthUserId(authUserId) {
       const db = getDb();
       const rows = await db.execute<PayableTipRow>(sql`
@@ -565,6 +567,7 @@ export function createStaffRepository(): StaffRepository {
         WHERE s.auth_user_id = ${authUserId}
           AND t.status = 'succeeded'
           AND t.settlement_status = 'payable'
+        ORDER BY COALESCE(t.succeeded_at, t.created_at) ASC
       `);
       return rows;
     },

@@ -135,6 +135,8 @@ export const ja = {
       homeBalanceToSendNote: "本人確認を済ませると送金できます",
       // 確認済み: 送金できる状態
       homeBalanceVerifiedNote: "送金できます",
+      // 確認済み: 今すぐ送金できる額（Stripe available）。{{amount}} に金額（残りは準備中＝数日後）
+      homeBalanceSendableNote: "いま送金できる額 {{amount}}（残りは準備中です）",
       // 残高のすぐ下のアクション（未確認＝本人確認へ／確認済＝残高の詳細へ）
       homeVerifyCta: "本人確認をする",
       homeBalanceDetailCta: "残高の詳細を見る",
@@ -184,10 +186,19 @@ export const ja = {
       balanceTakeNote: "表示金額は手取り額です（投げ銭の約85%。手数料15%・決済料込み）",
       // 送金（振込申請・手動送金）
       payoutTitle: "送金",
-      payoutAvailableLabel: "着金可能額",
-      payoutAvailableSub: "（登録口座へ送金できる金額）",
+      payoutAvailableLabel: "送金できる額",
+      payoutAvailableSub: "（いま登録口座へ送金できる金額）",
       // 着金タイミングの明示（数営業日）
       payoutArrivalNote: "送金すると、申請から数営業日で登録口座に着金します。",
+      // 3段残高: 準備中（Stripe 確定待ち）・本人確認待ち（held）
+      payoutPendingLabel: "準備中",
+      payoutPendingSub: "（受け取り後、数日で送金できるようになります）",
+      // {{date}} に available になる日付（例: 7月1日）。available_on が取れたときだけ出す
+      payoutPendingDate: "{{date}}から送金できます",
+      payoutHeldLabel: "本人確認待ち",
+      payoutHeldSub: "（本人確認を済ませると送金できるようになります）",
+      // 準備中で「送金できる額」が0のときの理由
+      payoutPendingOnly: "受け取った投げ銭は準備中です。数日後に送金できるようになります。",
       // 送金ボタン・確認シート
       payoutCta: "送金する",
       payoutConfirmTitle: "送金の確認",

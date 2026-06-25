@@ -55,14 +55,24 @@ export function StaffPayoutPage() {
   }
 
   const balance = balanceQuery.data;
-  // 着金可能額（payable 合計＝送金できる全額・手取り）
-  const payableAmount = balance?.payableAmount ?? 0;
+  // 【送金できる額】Stripe の実 available 残高（送金の対象額・手取り）。DB payable 合計ではない（#5）。
+  const sendableAmount = balance?.sendableAmount ?? 0;
+  // 【準備中】Stripe 確定待ち（数日で available になる）。送金対象外
+  const pendingAmount = balance?.pendingStripeAmount ?? 0;
+  // 【本人確認待ち】未確認で溜まった held。まず本人確認へ
+  const heldAmount = balance?.heldAmount ?? 0;
+  // 準備中の資金が available になる日付（取れたときだけ「◯月◯日から送金できます」を出す）
+  const nextAvailableOn = balance?.nextAvailableOn ?? null;
   // 本人確認済み（着金可能）かどうか。残高API の canPayout を正とする
   const verified = balance?.canPayout ?? false;
-  // 最低送金額に満たない／残高0 のとき送金不可
-  const belowMinimum = payableAmount < MIN_PAYOUT_AMOUNT;
-  // 送金できるか（verified かつ最低送金額以上）。送金中は二重送信を防ぐ
+  // 最低送金額に満たない／残高0 のとき送金不可（available 基準）
+  const belowMinimum = sendableAmount < MIN_PAYOUT_AMOUNT;
+  // 送金できるか（verified かつ available が最低送金額以上）。送金中は二重送信を防ぐ
   const canSend = verified && !belowMinimum && !createPayout.isPending;
+  // 準備中はあるが今すぐ送れる額が無い（available 0 / 最低額未満）状態か（理由表示の出し分け）
+  const pendingOnly = verified && belowMinimum && pendingAmount > 0;
+  // 準備中の available 日付を「M月D日」に整形する（nextAvailableOn があるときだけ）
+  const nextAvailableLabel = nextAvailableOn ? formatAvailableDate(nextAvailableOn) : null;
 
   const payouts = payoutsQuery.data?.items ?? [];
 
@@ -106,7 +116,7 @@ export function StaffPayoutPage() {
           </div>
         ) : (
           <>
-            {/* 着金可能額（送金できる全額・手取り）を主役に大きく見せる */}
+            {/* 送金できる額（＝Stripe の実 available・手取り）を主役に大きく見せる（#5: available を正とする） */}
             <section className="rounded-[18px] border border-line-soft bg-page px-[22px] py-[22px]">
               <div className="flex items-start justify-between">
                 <div>
@@ -122,13 +132,54 @@ export function StaffPayoutPage() {
                 </span>
               </div>
               <div className="mt-3.5 text-[34px] font-bold leading-none text-ink">
-                ¥{payableAmount.toLocaleString()}
+                ¥{sendableAmount.toLocaleString()}
               </div>
               {/* 着金タイミングを明示（数営業日） */}
               <div className="mt-3 text-token-xs leading-relaxed text-muted">
                 {t("staff.payoutArrivalNote")}
               </div>
             </section>
+
+            {/* 準備中・本人確認待ちの内訳（受取総額は隠さない・3段表示）。
+                準備中＝Stripe 確定待ち（available になるまで送金できない）。本人確認待ち＝未確認分。 */}
+            {(pendingAmount > 0 || heldAmount > 0) && (
+              <div className="mt-3 flex flex-col gap-2.5">
+                {/* 準備中（pending）。available になる期日が取れたら「◯月◯日から送金できます」を添える */}
+                {pendingAmount > 0 && (
+                  <div className="flex items-start justify-between rounded-xl border border-line bg-surface-subtle px-4 py-3">
+                    <div className="min-w-0">
+                      <div className="text-token-sm font-semibold text-ink-label">
+                        {t("staff.payoutPendingLabel")}
+                      </div>
+                      <div className="mt-0.5 text-token-xs leading-relaxed text-muted">
+                        {nextAvailableLabel
+                          ? t("staff.payoutPendingDate", { date: nextAvailableLabel })
+                          : t("staff.payoutPendingSub")}
+                      </div>
+                    </div>
+                    <span className="ml-3 flex-none text-token-md font-bold text-ink-sub">
+                      ¥{pendingAmount.toLocaleString()}
+                    </span>
+                  </div>
+                )}
+                {/* 本人確認待ち（held）。未確認で溜まっている分 */}
+                {heldAmount > 0 && (
+                  <div className="flex items-start justify-between rounded-xl border border-line bg-surface-subtle px-4 py-3">
+                    <div className="min-w-0">
+                      <div className="text-token-sm font-semibold text-ink-label">
+                        {t("staff.payoutHeldLabel")}
+                      </div>
+                      <div className="mt-0.5 text-token-xs leading-relaxed text-muted">
+                        {t("staff.payoutHeldSub")}
+                      </div>
+                    </div>
+                    <span className="ml-3 flex-none text-token-md font-bold text-ink-sub">
+                      ¥{heldAmount.toLocaleString()}
+                    </span>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* 送金エラー（最低額不足・本人確認未完了など）。API の error コードで案内を出し分ける */}
             {errorCode && (
@@ -173,14 +224,19 @@ export function StaffPayoutPage() {
                 >
                   {t("staff.payoutCta")}
                 </button>
-                {/* 送金できない理由（残高0/最低額未満）を控えめに添える */}
+                {/* 送金できない理由（available 0/最低額未満）を控えめに添える。
+                    準備中があるなら「数日後に送金できます」（available_on があれば日付）を出す。 */}
                 {belowMinimum && (
                   <p className="px-1 text-center text-token-xs leading-relaxed text-muted">
-                    {payableAmount === 0
-                      ? t("staff.payoutNoBalance")
-                      : t("staff.payoutBelowMinimum", {
-                          min: `¥${MIN_PAYOUT_AMOUNT.toLocaleString()}`,
-                        })}
+                    {pendingOnly
+                      ? nextAvailableLabel
+                        ? t("staff.payoutPendingDate", { date: nextAvailableLabel })
+                        : t("staff.payoutPendingOnly")
+                      : sendableAmount === 0
+                        ? t("staff.payoutNoBalance")
+                        : t("staff.payoutBelowMinimum", {
+                            min: `¥${MIN_PAYOUT_AMOUNT.toLocaleString()}`,
+                          })}
                   </p>
                 )}
               </div>
@@ -231,7 +287,7 @@ export function StaffPayoutPage() {
             {/* 送金する金額と着金タイミングを明示してから実行する */}
             <p className="mt-3 text-center text-token-md leading-relaxed text-ink-sub">
               {t("staff.payoutConfirmBody", {
-                amount: `¥${payableAmount.toLocaleString()}`,
+                amount: `¥${sendableAmount.toLocaleString()}`,
               })}
             </p>
             <div className="mt-6 flex flex-col gap-2.5">
@@ -313,6 +369,15 @@ function PayoutLoading({ label }: { label: string }) {
       </div>
     </PhoneFrame>
   );
+}
+
+/**
+ * Stripe の available_on（ISO 文字列）を「M月D日」へ整形する。
+ * 「◯月◯日から送金できます」の期日表示に使う（準備中の資金が available になる日）。
+ */
+function formatAvailableDate(iso: string): string {
+  const d = new Date(iso);
+  return `${d.getMonth() + 1}月${d.getDate()}日`;
 }
 
 /** 戻る矢印アイコン。 */

@@ -168,6 +168,55 @@ export function evaluatePayoutEligibility(
   return "ok";
 }
 
+// 送金対象に選んだ tip と、その手取り合計（＝実際に送金する額）。
+export type PayoutSelection = {
+  // 送金対象に選んだ tip の id 一覧（paid 化の対象）
+  tipIds: string[];
+  // 選んだ tip の手取り合計（＝Stripe へ送る payout 額・円）。必ず available 以下になる
+  amount: number;
+};
+
+// 送金対象 tip 選定に渡す、payable な tip 1件の最小情報（id と額面）。
+export type PayableTipForSelection = {
+  tipId: string;
+  // 額面（お客さま支払額・円）。手取りは calculateStaffTakeAmount で算出する
+  amount: number;
+};
+
+/**
+ * 「Stripe の実 available 残高」を上限に、送金する payable tip を選ぶ純粋関数（#5 の肝）。
+ *
+ * 送金可能額・送金額は DB の payable 合計ではなく Stripe available を正とするため、
+ * payable な tip を古い順（先入れ先出し）に手取り換算で積み、累計が available を超えない範囲だけを
+ * 送金対象（paid 化＋payout）に選ぶ。これにより:
+ *  - 送金額（手取り合計）は必ず available 以下になる → Stripe で残高不足にならない（構造的回避）。
+ *  - 選んだ tip だけを paid にする → paid にした分と実際に送った額が一致する（DB と送金の整合）。
+ *  - available に収まらない pending 分の tip は payable のまま残る（次回 available になってから送金）。
+ *
+ * tips は呼び出し側で受け取り順（古い順）に渡すこと（FIFO で古い受取から送る）。
+ */
+export function selectPayoutTipsWithinAvailable(
+  tips: PayableTipForSelection[],
+  availableAmount: number,
+): PayoutSelection {
+  const tipIds: string[] = [];
+  let amount = 0;
+  for (const tip of tips) {
+    // 額面 → 店員手取り（約85%・floor）。残高・受取履歴の表示と同じ換算で整合させる
+    const take = calculateStaffTakeAmount(tip.amount);
+    // この tip を足すと available を超えるなら選ばない（available 以下に収める）。
+    // 0円手取り（端数切り捨てで take=0）の tip はスキップしても累計に影響しないが、
+    // 念のため超過チェックの後に積む（take=0 は超過しないため自然に含まれる）。
+    if (amount + take > availableAmount) {
+      // FIFO の途中で超えたら以降は積まない（古い分を優先して送る）
+      break;
+    }
+    amount += take;
+    tipIds.push(tip.tipId);
+  }
+  return { tipIds, amount };
+}
+
 /**
  * 招待が「今すぐ所属確定に使えるか」を判定する純粋関数。
  * 招待が未消費（pending）かつ、発行元の店が導入承認に同意済み（storeAdopted）のときのみ有効。

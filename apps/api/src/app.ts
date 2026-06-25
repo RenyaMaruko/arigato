@@ -66,6 +66,7 @@ import {
   createConnectOnboardingLink,
   createPayout,
   createConnectedAccount,
+  retrieveConnectBalance,
 } from "./infrastructure/stripe/stripe-connect.js";
 import { verifyWebhookEvent } from "./infrastructure/stripe/stripe-webhook.js";
 // Supabase JWT の検証（JWKS / 非対称鍵）は infrastructure/auth に隔離する
@@ -147,7 +148,10 @@ export function createApp() {
       updateStaffProfile(staffRepo, buildStaffTipUrl, authUserId, input),
     // 受取履歴・保留残高・申告 CSV は本人スコープのユースケースを注入する
     getStaffTips: (authUserId) => getStaffTips(staffRepo, authUserId),
-    getStaffBalance: (authUserId) => getStaffBalance(staffRepo, authUserId),
+    // 残高3段（送金できる＝Stripe available / 準備中 pending / 本人確認待ち held）。
+    // 送金可能額の正は Stripe の実 available。infrastructure の残高取得を注入する（feature は Stripe を直接知らない）。
+    getStaffBalance: (authUserId) =>
+      getStaffBalance(staffRepo, retrieveConnectBalance, authUserId),
     getStaffTaxReport: (authUserId, year) => getStaffTaxReport(staffRepo, authUserId, year),
     // Connect オンボーディング（infrastructure のリンク発行を注入。feature は Stripe SDK を直接知らない）
     startConnectOnboarding: (authUserId) =>
@@ -157,10 +161,12 @@ export function createApp() {
         buildOnboardingUrls,
         authUserId,
       ),
-    // 送金（振込申請）。Stripe payout（infrastructure）を注入。着金可能額の全額を銀行へ。
-    // verified必須・最低額・全額算出のビジネスルールは Service（Model）に集約する。
+    // 送金（振込申請）。Stripe payout（infrastructure）を注入。送金可能額・送金額は Stripe の実 available を正とし、
+    // available に収まる範囲の payable 分だけを銀行へ（残高不足の構造的回避＝#5）。
+    // verified必須・最低額・available 上限の選定ロジックは Service（Model）に集約する。
+    // 申請時点の available 再取得（TOCTOU 回避）のため retrieveConnectBalance も注入する。
     createStaffPayout: (authUserId) =>
-      createStaffPayout(staffRepo, createPayout, authUserId),
+      createStaffPayout(staffRepo, createPayout, retrieveConnectBalance, authUserId),
     // 送金履歴（本人のみ）
     getStaffPayouts: (authUserId) => getStaffPayouts(staffRepo, authUserId),
   });

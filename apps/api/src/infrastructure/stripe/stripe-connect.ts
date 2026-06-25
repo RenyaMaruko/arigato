@@ -9,7 +9,9 @@ import type {
   CreatePayoutParams,
   CreatePayoutResult,
   CreateConnectedAccountResult,
+  ConnectBalance,
 } from "./stripe.types.js";
+import { CURRENCY } from "@arigato/shared";
 
 /**
  * Stripe Connect の分配処理（infrastructure 層・Direct charge）。
@@ -171,6 +173,88 @@ export async function createPayout(params: CreatePayoutParams): Promise<CreatePa
   );
 
   return { payoutId: payout.id };
+}
+
+/**
+ * Connected Account の「実残高」（送金可能 available・準備中 pending）を取得する（infrastructure 層）。
+ *
+ * 設計上の肝（#5 の対応＝残高不足の構造的回避）:
+ *  - 送金可能額・送金額は DB の payable 合計ではなく、ここで取得する Stripe の実 available を「正」とする。
+ *    受け取った資金は Stripe 内で数日 pending（確定待ち）→ available（送金可能）になるため、
+ *    DB の権利（payable）と実際に払い出せる残高（Stripe settlement）は別物。available を超える送金はしない。
+ *  - balance.retrieve を Connected Account のコンテキスト（stripeAccount）で呼び、その口座の残高を読む。
+ *  - JPY（通貨は1つ）の available / pending を整数（円）で取り出す。
+ *  - 準備中（pending）がある場合は、balance_transactions から available_on（pending が available になる日時）の
+ *    最も早いものを拾い、「◯月◯日から送金できます」の期日表示に使う（取れなければ null）。
+ *
+ * 送金可能額の表示にも、送金実行時の上限再取得（TOCTOU 回避）にも使う。
+ */
+export async function retrieveConnectBalance(
+  connectedAccountId: string,
+): Promise<ConnectBalance> {
+  const stripe = getStripe();
+
+  // Connected Account のコンテキストで残高を取得する（その口座の available / pending を読む）
+  const balance = await stripe.balance.retrieve({}, { stripeAccount: connectedAccountId });
+
+  // JPY の available / pending を取り出す（通貨ごとの配列から jpy を合算。通常は1要素）。
+  const availableAmount = sumBalanceForCurrency(balance.available, CURRENCY);
+  const pendingAmount = sumBalanceForCurrency(balance.pending, CURRENCY);
+
+  // 準備中（pending）があるときだけ、available になる最も早い日時を balance_transactions から拾う。
+  // pending が無ければ期日表示は不要（null）。
+  let nextAvailableOn: string | null = null;
+  if (pendingAmount > 0) {
+    nextAvailableOn = await findEarliestPendingAvailableOn(stripe, connectedAccountId);
+  }
+
+  return { availableAmount, pendingAmount, nextAvailableOn };
+}
+
+/**
+ * 残高（available / pending）の配列から、指定通貨の金額合計（円）を取り出す純粋ヘルパ。
+ * Stripe は通貨ごとに要素を分けるため、対象通貨のものだけを合算する（JPY は通常1要素）。
+ */
+function sumBalanceForCurrency(
+  funds: Array<{ amount: number; currency: string }>,
+  currency: string,
+): number {
+  return funds
+    .filter((f) => f.currency === currency)
+    .reduce((sum, f) => sum + f.amount, 0);
+}
+
+/**
+ * pending な資金が available になる「最も早い available_on」を ISO 文字列で返す（取れなければ null）。
+ *
+ * balance_transactions を新しい順に取得し、まだ available になっていない（available_on が未来）の
+ * 入金系トランザクションのうち最小の available_on を採用する（= 直近で送金可能になる日）。
+ * 期日表示「◯月◯日から送金できます」のためだけに使う（送金可否の判定には available 残高そのものを使う）。
+ */
+async function findEarliestPendingAvailableOn(
+  stripe: Stripe,
+  connectedAccountId: string,
+): Promise<string | null> {
+  // 直近のトランザクションを取得（pending→available の available_on を拾うには十分な件数に限定）
+  const txns = await stripe.balanceTransactions.list(
+    { limit: 100 },
+    { stripeAccount: connectedAccountId },
+  );
+
+  const nowSeconds = Math.floor(Date.now() / 1000);
+  // まだ available になっていない（available_on が未来）ものの中で最小の available_on を探す
+  let earliest: number | null = null;
+  for (const txn of txns.data) {
+    // status=pending かつ available_on が未来のものだけを対象にする（既に available のものは除外）
+    if (txn.status !== "pending") continue;
+    if (txn.available_on <= nowSeconds) continue;
+    if (earliest === null || txn.available_on < earliest) {
+      earliest = txn.available_on;
+    }
+  }
+
+  // Unix 秒 → ISO 文字列（拾えなければ null）
+  return earliest === null ? null : new Date(earliest * 1000).toISOString();
 }
 
 /**

@@ -29,6 +29,8 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
   // 未取得・ローディング時は 0 として控えめに扱い、レイアウトを崩さない
   const heldAmount = balance?.heldAmount ?? 0;
   const payableAmount = balance?.payableAmount ?? 0;
+  // 送金できる額＝Stripe の実 available（#5: 送金可能額の正）。未確認・残高取得前は 0
+  const sendableAmount = balance?.sendableAmount ?? 0;
   // 着金可能（本人確認済み）かどうかは残高API の canPayout を正とする（プロフィールの identityStatus と整合）
   const verified = balance?.canPayout ?? me.identityStatus === "verified";
 
@@ -46,9 +48,18 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           <div className="mt-1 text-[30px] font-bold leading-none text-rose">
             ¥{(heldAmount + payableAmount).toLocaleString()}
           </div>
-          {/* 送金できる条件の一言（未確認＝本人確認で送金可能に／確認済＝送金できる） */}
+          {/* 送金できる条件の一言。
+              未確認＝本人確認で送金可能に／確認済＝いま送金できる額（Stripe available）を示す。
+              残高（受取総額）は隠さず、そのうち今すぐ送れる額が available であることを伝える。 */}
           <div className="mt-2 text-token-xs text-rose/70">
-            {verified ? t("staff.homeBalanceVerifiedNote") : t("staff.homeBalanceToSendNote")}
+            {verified
+              ? sendableAmount < heldAmount + payableAmount
+                ? // 受取総額の一部だけが今すぐ送金できる（残りは準備中＝Stripe 確定待ち）
+                  t("staff.homeBalanceSendableNote", {
+                    amount: `¥${sendableAmount.toLocaleString()}`,
+                  })
+                : t("staff.homeBalanceVerifiedNote")
+              : t("staff.homeBalanceToSendNote")}
           </div>
 
           {/* 残高のすぐ下のアクション。未確認なら本人確認へ、確認済なら送金（送金画面）へ */}

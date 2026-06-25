@@ -665,7 +665,7 @@ describe("staff.service", () => {
 
   it("getStaffBalance: held 合計（保留残高）と着金可能額を本人に返す（人ごと集約）", async () => {
     await seedTwoStaffWithTips();
-    const balance = await getStaffBalance(mock.repo, "auth-A");
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
     expect(balance).not.toBeNull();
     // 手取り型: 本人確認前のため held=手取り合計680（255+425） / payable=0、canPayout=false
     expect(balance!.heldAmount).toBe(255 + 425);
@@ -676,7 +676,7 @@ describe("staff.service", () => {
 
   it("getStaffBalance: 本人スコープ — 他人の残高は見えない", async () => {
     await seedTwoStaffWithTips();
-    const b = await getStaffBalance(mock.repo, "auth-B");
+    const b = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-B");
     // B の保留残高は自分の額面100 → 手取り floor(85)=85 のみ（A の分は混ざらない）
     expect(b!.heldAmount).toBe(85);
   });
@@ -751,7 +751,7 @@ describe("staff.service", () => {
     expect(result.promotedTips).toBe(2);
 
     // 残高は held=0 / payable=手取り合計680（255+425）、本人確認は verified になる
-    const balance = await getStaffBalance(mock.repo, "auth-A");
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
     expect(balance!.heldAmount).toBe(0);
     expect(balance!.payableAmount).toBe(255 + 425);
     expect(balance!.canPayout).toBe(true);
@@ -771,7 +771,7 @@ describe("staff.service", () => {
     expect(second.verified).toBe(true);
     expect(second.promotedTips).toBe(0);
     // payable は手取り合計680のまま（二重加算されない）
-    const balance = await getStaffBalance(mock.repo, "auth-A");
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
     expect(balance!.payableAmount).toBe(255 + 425);
   });
 
@@ -820,6 +820,21 @@ describe("staff.service", () => {
     );
   }
 
+  // テスト用の Stripe 残高取得（送金可能額の正＝ Stripe available）。
+  // available を引数で指定でき、available 基準の送金可能額・送金上限の検証に使う。
+  // 既定は十分大きい（DB payable をすべて送れる）available にして「全額送金」の従来契約を保つ。
+  function makeGetConnectBalance(
+    available = 1_000_000,
+    pending = 0,
+    nextAvailableOn: string | null = null,
+  ) {
+    return vi.fn(async (_connectedAccountId: string) => ({
+      availableAmount: available,
+      pendingAmount: pending,
+      nextAvailableOn,
+    }));
+  }
+
   it("createStaffPayout: verified＋payable があれば全額（手取り合計）を送金し、tip を paid にする", async () => {
     await setupVerifiedWithPayable();
     // A の連結アカウント（プロフィール作成時に自動作成された実 ID）を送金先として検証する
@@ -827,7 +842,7 @@ describe("staff.service", () => {
     const acctA = connectA!.stripeAccountId!;
     const stripePayout = makeStripePayout();
 
-    const result = await createStaffPayout(mock.repo, stripePayout, "auth-A");
+    const result = await createStaffPayout(mock.repo, stripePayout, makeGetConnectBalance(), "auth-A");
     expect(result).not.toBeNull();
     // 送金額は payable な tip の手取り合計（255+425=680）。全額送金（部分送金なし）
     expect(result!.amount).toBe(680);
@@ -843,7 +858,7 @@ describe("staff.service", () => {
     });
 
     // 残高: payable→paid に移り、着金可能額は 0 になる（二重送金を防ぐ）
-    const balance = await getStaffBalance(mock.repo, "auth-A");
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
     expect(balance!.payableAmount).toBe(0);
     expect(balance!.paidAmount).toBe(680);
 
@@ -854,11 +869,93 @@ describe("staff.service", () => {
     expect(payouts!.items[0]!.status).toBe("pending");
   });
 
+  it("createStaffPayout: 送金額は Stripe available を上限にキャップする（available < DB payable のとき available 分だけ送る・#5）", async () => {
+    await setupVerifiedWithPayable();
+    // DB の payable 手取り合計は 680（255+425）。だが Stripe の実 available は 255 しか無い状況を作る。
+    // 残高不足を構造的に防ぐため、送金額は available（255）に収まる分だけになるはず。
+    const stripePayout = makeStripePayout("po_capped");
+    const getBalance = makeGetConnectBalance(255);
+
+    const result = await createStaffPayout(mock.repo, stripePayout, getBalance, "auth-A");
+    expect(result).not.toBeNull();
+    // 送金額は available 以下（255）。DB payable の 680 全額は送らない（available 超過を避ける）
+    expect(result!.amount).toBe(255);
+    // Stripe へ渡す amount も 255（残高不足にならない）
+    expect(stripePayout.mock.calls[0]![0].amount).toBe(255);
+
+    // available に収まらなかった分（425）は payable のまま残る（次回 available になってから送金）
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(255), "auth-A");
+    expect(balance!.payableAmount).toBe(425);
+    expect(balance!.paidAmount).toBe(255);
+  });
+
+  it("createStaffPayout: available 0（全額まだ pending）なら PayoutBelowMinimumError（DB payable があっても送らない）", async () => {
+    await setupVerifiedWithPayable();
+    // DB payable は 680 だが Stripe available は 0（受け取ったばかりで全額 pending）。
+    const stripePayout = makeStripePayout();
+    const getBalance = makeGetConnectBalance(0, 680);
+    await expect(
+      createStaffPayout(mock.repo, stripePayout, getBalance, "auth-A"),
+    ).rejects.toBeInstanceOf(PayoutBelowMinimumError);
+    // available 0 のため Stripe payout は実行されない（残高不足エラーを構造的に回避）
+    expect(stripePayout).not.toHaveBeenCalled();
+  });
+
+  it("createStaffPayout: 申請時点で available を再取得して上限にする（TOCTOU 回避）", async () => {
+    await setupVerifiedWithPayable();
+    const getBalance = makeGetConnectBalance(680);
+    await createStaffPayout(mock.repo, makeStripePayout(), getBalance, "auth-A");
+    // 送金実行のたびに Stripe 残高を取得している（表示時の値ではなく申請時点の available で判断する）
+    expect(getBalance).toHaveBeenCalledTimes(1);
+  });
+
+  it("getStaffBalance: 3段（送金できる＝Stripe available / 準備中 pending / 本人確認待ち held）を返す", async () => {
+    await setupVerifiedWithPayable();
+    // verified 済み。Stripe available=600 / pending=200 / 「7/1 から available」を返す状況
+    const getBalance = makeGetConnectBalance(600, 200, "2026-07-01T00:00:00Z");
+    const balance = await getStaffBalance(mock.repo, getBalance, "auth-A");
+    expect(balance).not.toBeNull();
+    // 送金できる額＝Stripe の実 available（DB payable ではない）
+    expect(balance!.sendableAmount).toBe(600);
+    // 準備中（pending）と available になる期日
+    expect(balance!.pendingStripeAmount).toBe(200);
+    expect(balance!.nextAvailableOn).toBe("2026-07-01T00:00:00Z");
+    // 本人確認待ち（held）。verified 済みなので held は 0、受取総額として payable(680) は引き続き見える
+    expect(balance!.heldAmount).toBe(0);
+    expect(balance!.payableAmount).toBe(680);
+  });
+
+  it("getStaffBalance: 未確認（verified でない）なら Stripe 残高は取得せず sendable/pending は 0（held は見える）", async () => {
+    await seedTwoStaffWithTips();
+    const getBalance = makeGetConnectBalance(600, 200);
+    const balance = await getStaffBalance(mock.repo, getBalance, "auth-A");
+    // 未確認のため Stripe 残高は引かない（送金対象が無い）
+    expect(getBalance).not.toHaveBeenCalled();
+    expect(balance!.sendableAmount).toBe(0);
+    expect(balance!.pendingStripeAmount).toBe(0);
+    // 本人確認待ち（held）は受取総額として見える（隠さない）
+    expect(balance!.heldAmount).toBe(255 + 425);
+    expect(balance!.canPayout).toBe(false);
+  });
+
+  it("getStaffBalance: Stripe 残高取得が失敗しても画面を壊さない（DB 集計で代替・sendable は 0）", async () => {
+    await setupVerifiedWithPayable();
+    // Stripe 残高取得が落ちるケース（ネットワーク等）。例外を投げる
+    const getBalance = vi.fn(async () => {
+      throw new Error("stripe_unavailable");
+    });
+    const balance = await getStaffBalance(mock.repo, getBalance, "auth-A");
+    // 例外を握りつぶし、DB 集計（payable 680）は返す。sendable は 0 にフォールバック
+    expect(balance).not.toBeNull();
+    expect(balance!.sendableAmount).toBe(0);
+    expect(balance!.payableAmount).toBe(680);
+  });
+
   it("createStaffPayout: verified でなければ PayoutNotVerifiedError（本人確認・口座登録が必要）", async () => {
     // verified にせず（held のまま）に送金を試みる
     await seedTwoStaffWithTips();
     const stripePayout = makeStripePayout();
-    await expect(createStaffPayout(mock.repo, stripePayout, "auth-A")).rejects.toBeInstanceOf(
+    await expect(createStaffPayout(mock.repo, stripePayout, makeGetConnectBalance(), "auth-A")).rejects.toBeInstanceOf(
       PayoutNotVerifiedError,
     );
     // Stripe payout は実行されない
@@ -873,7 +970,7 @@ describe("staff.service", () => {
     await applyConnectAccountUpdate(mock.repo, connectC!.stripeAccountId!, true);
 
     const stripePayout = makeStripePayout();
-    await expect(createStaffPayout(mock.repo, stripePayout, "auth-C")).rejects.toBeInstanceOf(
+    await expect(createStaffPayout(mock.repo, stripePayout, makeGetConnectBalance(), "auth-C")).rejects.toBeInstanceOf(
       PayoutBelowMinimumError,
     );
     expect(stripePayout).not.toHaveBeenCalled();
@@ -881,14 +978,14 @@ describe("staff.service", () => {
 
   it("createStaffPayout: プロフィール未作成なら null", async () => {
     const stripePayout = makeStripePayout();
-    const result = await createStaffPayout(mock.repo, stripePayout, "auth-unknown");
+    const result = await createStaffPayout(mock.repo, stripePayout, makeGetConnectBalance(), "auth-unknown");
     expect(result).toBeNull();
   });
 
   it("applyPayoutWebhookUpdate: payout.paid で着金済へ・payout.failed で paid→payable へ戻す", async () => {
     await setupVerifiedWithPayable();
     const stripePayout = makeStripePayout();
-    await createStaffPayout(mock.repo, stripePayout, "auth-A");
+    await createStaffPayout(mock.repo, stripePayout, makeGetConnectBalance(), "auth-A");
 
     // payout.failed → 送金失敗・対象 tip は payable へ戻る（着金可能額が復活する）
     const reverted = await applyPayoutWebhookUpdate(mock.repo, {
@@ -899,7 +996,7 @@ describe("staff.service", () => {
       failureReason: "account_closed",
     });
     expect(reverted).toBe(true);
-    const afterFail = await getStaffBalance(mock.repo, "auth-A");
+    const afterFail = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
     expect(afterFail!.payableAmount).toBe(680);
     expect(afterFail!.paidAmount).toBe(0);
     const failedHistory = await getStaffPayouts(mock.repo, "auth-A");
@@ -907,7 +1004,7 @@ describe("staff.service", () => {
     expect(failedHistory!.items[0]!.failureReason).toBe("account_closed");
 
     // 再送金して payout.paid → 着金済（arrived_at 記録）。payable は再び 0 になる
-    await createStaffPayout(mock.repo, makeStripePayout("po_test_2"), "auth-A");
+    await createStaffPayout(mock.repo, makeStripePayout("po_test_2"), makeGetConnectBalance(), "auth-A");
     const paid = await applyPayoutWebhookUpdate(mock.repo, {
       kind: "paid",
       stripePayoutId: "po_test_2",
@@ -939,7 +1036,7 @@ describe("staff.service", () => {
         payoutId: string;
       }) => {
         // この時点で着金可能額は 0（既に paid 化済み）であるべき
-        const balanceAtCall = await getStaffBalance(mock.repo, "auth-A");
+        const balanceAtCall = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
         expect(balanceAtCall!.payableAmount).toBe(0);
         expect(balanceAtCall!.paidAmount).toBe(680);
         // pending の payout 行も既に存在する
@@ -950,7 +1047,7 @@ describe("staff.service", () => {
       },
     );
 
-    const result = await createStaffPayout(mock.repo, stripePayout, "auth-A");
+    const result = await createStaffPayout(mock.repo, stripePayout, makeGetConnectBalance(), "auth-A");
     expect(result!.amount).toBe(680);
     expect(stripePayout).toHaveBeenCalledTimes(1);
   });
@@ -965,11 +1062,11 @@ describe("staff.service", () => {
 
     // 例外は呼び出し元へ伝播する（ユーザーにはエラー表示）
     await expect(
-      createStaffPayout(mock.repo, failingStripePayout, "auth-A"),
+      createStaffPayout(mock.repo, failingStripePayout, makeGetConnectBalance(), "auth-A"),
     ).rejects.toThrow("insufficient_funds");
 
     // revert により着金可能額が復活する（tip が payable へ戻る・二重送金の不整合を防ぐ）
-    const balance = await getStaffBalance(mock.repo, "auth-A");
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
     expect(balance!.payableAmount).toBe(680);
     expect(balance!.paidAmount).toBe(0);
 
@@ -980,9 +1077,9 @@ describe("staff.service", () => {
     expect(payouts!.items[0]!.failureReason).toBe("insufficient_funds");
 
     // revert 後は再度送金でき、正常に paid 化できる（残高が戻っているため）
-    const retry = await createStaffPayout(mock.repo, makeStripePayout("po_retry_1"), "auth-A");
+    const retry = await createStaffPayout(mock.repo, makeStripePayout("po_retry_1"), makeGetConnectBalance(), "auth-A");
     expect(retry!.amount).toBe(680);
-    const afterRetry = await getStaffBalance(mock.repo, "auth-A");
+    const afterRetry = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
     expect(afterRetry!.payableAmount).toBe(0);
   });
 
@@ -990,7 +1087,7 @@ describe("staff.service", () => {
     await setupVerifiedWithPayable();
     const stripePayout = makeStripePayout("po_idem_1");
 
-    const result = await createStaffPayout(mock.repo, stripePayout, "auth-A");
+    const result = await createStaffPayout(mock.repo, stripePayout, makeGetConnectBalance(), "auth-A");
     // idempotencyKey と metadata 用 payoutId はどちらも自前 payout 行の id（再試行で二重作成しない）
     const callArg = stripePayout.mock.calls[0]![0];
     expect(callArg.idempotencyKey).toBe(result!.id);

@@ -20,6 +20,7 @@ import {
   buildTaxReportCsv,
   calculateStaffTakeAmount,
   evaluatePayoutEligibility,
+  selectPayoutTipsWithinAvailable,
   type IdentityStatus,
 } from "./staff.model.js";
 import type {
@@ -31,7 +32,12 @@ import type {
 import type {
   CreateOnboardingLinkResult,
   CreatePayoutResult as StripeCreatePayoutResult,
+  ConnectBalance,
 } from "../../infrastructure/stripe/stripe.types.js";
+
+// Connected Account の実残高（available / pending / 直近の available_on）を取得する
+// infrastructure 関数の型（コンポジションルートで注入）。送金可能額の正＝ Stripe available。
+export type GetConnectBalance = (connectedAccountId: string) => Promise<ConnectBalance>;
 
 /**
  * staff feature の Service 層（ユースケースの指揮者・アクセス制御）。
@@ -303,28 +309,67 @@ export async function getStaffTips(
 }
 
 /**
- * 保留残高サマリを取得する（GET /staff/me/balance・本人スコープ）。
- * 本人の成立済み投げ銭から held 合計（保留残高）・payable 合計（着金可能額）・paid 合計を集計する。
+ * 残高サマリを取得する（GET /staff/me/balance・本人スコープ）。
+ *
+ * 残高を「3段」に分けて本人に返す（#5: 送金可能額は Stripe の実 available を正とする）:
+ *  - **送金できる額（sendableAmount）**＝本人確認済み かつ Stripe の実 available 残高。「送金する」の対象額。
+ *    DB の payable 合計ではなく、Stripe から実残高を取得して正とする（残高不足の構造的回避）。
+ *  - **準備中（pendingStripeAmount）**＝受け取ったが Stripe 確定待ち。nextAvailableOn（◯日後）を併記。
+ *  - **本人確認待ち（heldAmount）**＝未確認分（まず本人確認へ）。
+ *
+ * 受取総額（held + payable + paid）は引き続き見せる（隠さない・互換のため旧フィールドを維持）。
+ * Stripe 残高は connect 連携状態（stripeAccountId）があるときだけ取得する。未連携・取得失敗時は
+ * sendable / pending は 0 にフォールバックし、画面（残高表示）を壊さない（DB 側の集計は必ず返す）。
  * 残高・本人確認は人ごとに集約する（全所属店をまとめる）。金額を返すのは本人スコープのこの経路だけ。
  * プロフィール未作成なら null。
  */
 export async function getStaffBalance(
   repo: StaffRepository,
+  getConnectBalance: GetConnectBalance,
   authUserId: string,
 ): Promise<StaffBalance | null> {
   const me = await repo.findStaffByAuthUserId(authUserId);
   if (!me) return null;
 
-  // 成立済み tip の settlement 状態と金額を取得し、Model で合算する
+  // 成立済み tip の settlement 状態と金額を取得し、Model で合算する（受取総額・参考表示の正）
   const settlements = await repo.listSettlementsByAuthUserId(authUserId);
   const summary = summarizeBalance(settlements);
+
+  // 本人確認済み（verified）か（着金可否の判定。Model の純粋関数）
+  const verified = canPayout(me.identityStatus);
+
+  // Stripe の実残高（available / pending / available_on）を取得する。
+  // verified かつ Connected Account があるときだけ取得する（未確認は送金対象が無いため 0 のまま）。
+  let sendableAmount = 0;
+  let pendingStripeAmount = 0;
+  let nextAvailableOn: string | null = null;
+  const connect = await repo.findStaffConnect(authUserId);
+  if (verified && connect?.stripeAccountId) {
+    try {
+      const balance = await getConnectBalance(connect.stripeAccountId);
+      // 送金できる額＝Stripe の実 available（「送金する」の対象額）
+      sendableAmount = balance.availableAmount;
+      pendingStripeAmount = balance.pendingAmount;
+      nextAvailableOn = balance.nextAvailableOn;
+    } catch (err) {
+      // Stripe 残高取得に失敗しても画面を壊さない（DB 集計は返す）。0 にフォールバックしてログのみ。
+      console.error(
+        "[staff.service] Stripe 残高の取得に失敗しました（DB 集計で代替表示）:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   return {
     heldAmount: summary.heldAmount,
     payableAmount: summary.payableAmount,
     paidAmount: summary.paidAmount,
-    // 本人確認の状態から着金可否を判定（Model の純粋関数）
-    canPayout: canPayout(me.identityStatus),
+    canPayout: verified,
     identityStatus: me.identityStatus,
+    // 3段表示の送金できる額・準備中・期日（Stripe 実残高を正とする）
+    sendableAmount,
+    pendingStripeAmount,
+    nextAvailableOn,
   };
 }
 
@@ -433,46 +478,66 @@ export class PayoutBelowMinimumError extends Error {
 
 /**
  * 送金（振込申請）を実行する（POST /staff/me/payouts・本人スコープ）。
- * 手動送金（メルカリ型）。着金可能額（payable な tip の手取り合計）の「全額」を銀行へ送金申請する。
+ * 手動送金（メルカリ型）。送金可能額は DB の payable 合計ではなく「Stripe の実 available 残高」を正とし、
+ * available に収まる範囲（古い受取から FIFO）の payable tip 分だけを銀行へ送金申請する（#5）。
+ * これにより available を超える送金をせず、残高不足エラーを構造的に防ぐ。
  *
  * 業務ルール（Model に集約）:
  *  - verified（着金可能＝口座登録済）でなければ PayoutNotVerifiedError。
- *  - 着金可能額が最低送金額（¥100）未満／残高0なら PayoutBelowMinimumError。
+ *  - 送金額（available に収めた手取り合計）が最低送金額（¥100）未満／available 0 なら PayoutBelowMinimumError。
  *
- * 堅牢な流れ（「Stripe 送金成功なのに DB 未記録」を構造的に防ぐ・冪等）:
- *  1. 本人の Connect 連携状態と着金可能な tip を取得し、送金額＝payable な tip の手取り合計
- *     （floor(amount×0.85) の総和）を Model で算出する。可否判定（verified必須・最低¥100・全額）。
- *  2. ★先に DB トランザクションで★ payout 行を pending（stripe_payout_id は NULL）で作成し、
- *     対象 payable tip を paid＋payout_id 紐付けに更新する。ここで失敗したら Stripe を呼ばない
+ * 堅牢な流れ（「Stripe 送金成功なのに DB 未記録」を構造的に防ぐ・冪等。前回の整合性対策を維持）:
+ *  1. 本人の Connect 連携状態を取得。verified・Connected Account を確認（無ければ not_verified）。
+ *  2. ★申請時点の Stripe available を再取得★（TOCTOU 回避。表示時と送金時で残高がズレ得るため、
+ *     送金可否・上限は「今の Stripe available」で判断する）。
+ *  3. payable な tip を古い順（FIFO）に取得し、手取り換算の累計が available を超えない範囲だけを
+ *     送金対象に選ぶ（Model の純粋関数 selectPayoutTipsWithinAvailable）。送金額＝選んだ tip の手取り合計。
+ *     可否判定（verified必須・最低¥100）。選べる額が最低額未満／0 なら below_minimum。
+ *  4. ★先に DB トランザクションで★ payout 行を pending（stripe_payout_id は NULL）で作成し、
+ *     選んだ payable tip を paid＋payout_id 紐付けに更新する。ここで失敗したら Stripe を呼ばない
  *     （お金は動かない＝安全）。payout 行の id を取得する。
- *  3. Stripe payout を実行する。idempotency_key と metadata.payout_id に payout 行の id を使う
- *     （再試行で二重送金しない／Webhook 照合のバックアップ）。
- *  4. Stripe 成功 → payout 行に stripe_payout_id を更新する（status は pending のまま。
+ *  5. Stripe payout を実行する。amount は available 以下に収めた送金額。idempotency_key と
+ *     metadata.payout_id に payout 行の id を使う（再試行で二重送金しない／Webhook 照合のバックアップ）。
+ *  6. Stripe 成功 → payout 行に stripe_payout_id を更新する（status は pending のまま。
  *     確定は payout.paid Webhook を正とする）。
- *  5. Stripe 失敗（例外）→ DB を revert する（payout 行を status=failed＋failure_reason、
+ *  7. Stripe 失敗（例外）→ DB を revert する（payout 行を status=failed＋failure_reason、
  *     対象 tip を payable へ戻す・payout_id=NULL）。エラーは呼び出し元へ再送出する。
  *
  * 着金の確定は payout.paid / payout.failed Webhook を正とする（ここでは pending で記録するだけ）。
+ * available に収まらなかった payable 分（pending 由来）は payable のまま残り、available になってから次回送金できる。
  * プロフィール未作成なら null。
  */
 export async function createStaffPayout(
   repo: StaffRepository,
   createPayout: CreatePayout,
+  getConnectBalance: GetConnectBalance,
   authUserId: string,
 ): Promise<CreatePayoutResult | null> {
-  // 本人の Connect 連携状態を取得（未作成なら null → 404）
+  // 【手順1】本人の Connect 連携状態を取得（未作成なら null → 404）
   const ctx = await repo.findPayoutContext(authUserId);
   if (!ctx) return null;
 
-  // 着金可能（payable）な tip の id・額面を取得し、手取り合計を Model で算出する
-  const payableTips = await repo.listPayableTipsByAuthUserId(authUserId);
-  // 1件ごとに手取り（約85%・floor）へ変換して合算する（受取履歴・残高の表示と整合）
-  const payoutAmount = payableTips.reduce(
-    (sum, t) => sum + calculateStaffTakeAmount(t.amount),
-    0,
-  );
+  // verified でなければ送金できない（本人確認・口座登録が必要）。Model の純粋関数で判定する。
+  if (!canPayout(ctx.identityStatus)) {
+    throw new PayoutNotVerifiedError();
+  }
+  // verified なら Connected Account が必ずある想定だが、念のため確認（着金先が無ければ送金不可）
+  if (!ctx.stripeAccountId) {
+    throw new PayoutNotVerifiedError();
+  }
 
-  // 送金可否を判定（verified必須・最低¥100・全額）。Model の純粋関数に集約
+  // 【手順2】申請時点の Stripe available 残高を再取得する（TOCTOU 回避）。
+  // 送金可能額・送金上限は「今の Stripe available」を正とする（DB の payable 合計ではない）。
+  const balance = await getConnectBalance(ctx.stripeAccountId);
+  const availableAmount = balance.availableAmount;
+
+  // 【手順3】payable な tip を古い順（FIFO）に取得し、available に収まる範囲だけを送金対象に選ぶ。
+  // 送金額＝選んだ tip の手取り合計（必ず available 以下＝残高不足にならない）。
+  const payableTips = await repo.listPayableTipsByAuthUserId(authUserId);
+  const selection = selectPayoutTipsWithinAvailable(payableTips, availableAmount);
+  const payoutAmount = selection.amount;
+
+  // 送金可否を判定（verified は上で確認済み・ここでは最低¥100／残高0 を弾く）。Model の純粋関数に集約。
   const eligibility = evaluatePayoutEligibility(ctx.identityStatus, payoutAmount);
   if (eligibility === "not_verified") {
     throw new PayoutNotVerifiedError();
@@ -481,20 +546,16 @@ export async function createStaffPayout(
     throw new PayoutBelowMinimumError();
   }
 
-  // verified なら Connected Account が必ずある想定だが、念のため確認（着金先が無ければ送金不可）
-  if (!ctx.stripeAccountId) {
-    throw new PayoutNotVerifiedError();
-  }
-
-  // 【手順2】先に DB へ pending で記録し、対象 payable tip を paid＋紐付けへ（トランザクション）。
+  // 【手順4】先に DB へ pending で記録し、選んだ payable tip を paid＋紐付けへ（トランザクション）。
   // ここで失敗すれば例外が伝播して Stripe は呼ばれない（お金は動かない＝安全）。
   const payout = await repo.createPendingPayoutAndMarkTipsPaid({
     staffId: ctx.staffId,
     amount: payoutAmount,
-    tipIds: payableTips.map((t) => t.tipId),
+    tipIds: selection.tipIds,
   });
 
-  // 【手順3】Stripe payout を実行（Connected Account の残高→銀行。送金手数料は店員から取らない）。
+  // 【手順5】Stripe payout を実行（Connected Account の available 残高→銀行。送金手数料は店員から取らない）。
+  // amount は available 以下に収めた送金額（残高不足にならない）。
   // idempotency_key・metadata.payout_id に自前 payout 行の id を使う（二重送金防止／Webhook 照合のバックアップ）。
   let stripeResult: StripeCreatePayoutResult;
   try {
@@ -506,13 +567,13 @@ export async function createStaffPayout(
       payoutId: payout.id,
     });
   } catch (err) {
-    // 【手順5】Stripe 失敗 → DB を revert（payout=failed＋tip を payable へ戻す）。原因を記録して再送出する。
+    // 【手順7】Stripe 失敗 → DB を revert（payout=failed＋tip を payable へ戻す）。原因を記録して再送出する。
     const reason = err instanceof Error ? err.message : "stripe_payout_failed";
     await repo.revertPayoutByPayoutId(payout.id, reason);
     throw err;
   }
 
-  // 【手順4】Stripe 成功 → payout 行に stripe_payout_id を補完（status は pending のまま）。
+  // 【手順6】Stripe 成功 → payout 行に stripe_payout_id を補完（status は pending のまま）。
   await repo.attachStripePayoutId(payout.id, stripeResult.payoutId);
 
   return {
