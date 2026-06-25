@@ -153,7 +153,9 @@ QR読取（QR は membership＝人×店 を指す）
 
 ### staff（店員さん＝人）
 - id, auth_user_id（Supabase auth.users 参照）, display_name, headline（一言）, avatar_url
-- stripe_account_id（Connect の Connected Account。未連携は null。**人ごとに1つ**）
+- stripe_account_id（Connect の Connected Account。**人ごとに1つ**）
+  - **プロフィール作成（`POST /staff/me`）時に連結アカウントを自動作成**して保存する（入口が招待リンクでも `/staff` 直アクセスでも同じ）。これにより**本人確認の前でも投げ銭を受け取れる（held で溜まる）**＝「体験を登録の前に」を満たす。
+  - 受け取り（Direct charge）には連結アカウントが **`charges_enabled`** である必要があるため、自動作成したアカウントが課金可能になるところまで用意する。送金（payouts_enabled）は本人確認・口座登録の完了後。
 - identity_status（本人確認・着金可否の状態。下記7参照。**人ごと**）
 - created_at
 - **store_id は持たない**（所属は staff_store で表す）。
@@ -199,13 +201,14 @@ QR読取（QR は membership＝人×店 を指す）
 
 ### 店員さんの本人確認 / 着金可否（identity_status）
 ```
-none（未着手）
-  ↓ Connect オンボーディング開始
+none（未着手・ただし連結アカウントはプロフィール作成時に自動作成済み＝charges_enabled）
+  ↓ Connect オンボーディング開始（本人確認書類の提出＝payout 解禁のため）
 pending（審査中 / 情報不足）
-  ↓ account.updated Webhook で charges/payouts_enabled=true
+  ↓ account.updated Webhook で payouts_enabled=true
 verified（着金可能）
 ```
-- `verified` 未満でも投げ銭は受け付ける（Direct charge は Connected Account に直課金できるが、payout は本人確認完了まで Stripe 側で保留される）。
+- 連結アカウントは**プロフィール作成時点で charges_enabled**（受け取り可能）。`identity_status` は **payout（送金）可否**を表す状態であり、`verified` 未満でも投げ銭は受け付ける（held で溜まる）。送金（payout）だけが本人確認完了まで Stripe 側で保留される。
+- charges は前倒し（作成時に capability を active 化）、payouts は後ろ倒し（`individual.verification.document` 等の提出後に `payouts_enabled=true`）で分離する。
 - Model 層の `canPayout()` が identity_status から着金可否を純粋関数で判定する。
 
 ### 投げ銭の決済 / 着金（status × settlement_status）

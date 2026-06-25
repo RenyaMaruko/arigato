@@ -65,6 +65,7 @@ import {
   createDirectChargePaymentIntent,
   createConnectOnboardingLink,
   createPayout,
+  createConnectedAccount,
 } from "./infrastructure/stripe/stripe-connect.js";
 import { verifyWebhookEvent } from "./infrastructure/stripe/stripe-webhook.js";
 // Supabase JWT の検証（JWKS / 非対称鍵）は infrastructure/auth に隔離する
@@ -135,8 +136,10 @@ export function createApp() {
   const staffRoute = createStaffRoute({
     authMiddleware,
     getStaffMe: (authUserId) => getStaffMe(staffRepo, buildStaffTipUrl, authUserId),
+    // プロフィール作成時に連結アカウントを自動作成（charges 前倒し・payouts は本人確認後）。
+    // feature は Stripe SDK を直接知らない。infrastructure の createConnectedAccount を注入する。
     createStaffProfile: (authUserId, input) =>
-      createStaffProfile(staffRepo, buildStaffTipUrl, authUserId, input),
+      createStaffProfile(staffRepo, buildStaffTipUrl, createConnectedAccount, authUserId, input),
     // 招待コードで所属（staff_store）を追加する（参加の確定点。新規/既存問わず）
     joinStore: (authUserId, inviteCode) =>
       joinStore(staffRepo, buildStaffTipUrl, authUserId, inviteCode),

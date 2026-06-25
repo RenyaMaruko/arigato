@@ -346,6 +346,16 @@ function createMockRepo() {
 // QR用URL の組み立て（ローカルのベース URL を使う・membership 単位）
 const buildUrl = (membershipId: string) => buildTipUrl("http://localhost:5173", membershipId);
 
+// テスト用の連結アカウント作成（infrastructure のスタブ）。呼び出し回数と引数を記録できる vi.fn。
+// 既定は charges_enabled=true の連結アカウントを返す（本人確認前でも受け取れる状態を模す）。
+function makeCreateConnectedAccount() {
+  let seq = 0;
+  return vi.fn(async (_displayName: string) => {
+    seq += 1;
+    return { connectedAccountId: `acct_test_${seq}`, chargesEnabled: true };
+  });
+}
+
 // プロフィール作成＋参加までを一気に行うヘルパ（新規ユーザーの典型フロー）
 async function setupAndJoin(
   mock: ReturnType<typeof createMockRepo>,
@@ -353,7 +363,9 @@ async function setupAndJoin(
   displayName: string,
   code: string,
 ) {
-  await createStaffProfile(mock.repo, buildUrl, authUserId, { displayName });
+  await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), authUserId, {
+    displayName,
+  });
   return joinStore(mock.repo, buildUrl, authUserId, code);
 }
 
@@ -410,7 +422,8 @@ describe("staff.service", () => {
   // --- プロフィール作成（display_name / headline のみ・本人確認なし・多重不可） ---
 
   it("createStaffProfile: display_name / headline のみで本人確認なし（identity_status=none）で成立し、所属はまだ無い", async () => {
-    const me = await createStaffProfile(mock.repo, buildUrl, "auth-user-1", {
+    const createAccount = makeCreateConnectedAccount();
+    const me = await createStaffProfile(mock.repo, buildUrl, createAccount, "auth-user-1", {
       displayName: "山田 さくら",
       headline: "カフェで働いています",
     });
@@ -422,18 +435,55 @@ describe("staff.service", () => {
     expect(me.memberships).toHaveLength(0);
   });
 
+  it("createStaffProfile: 連結アカウントを自動作成し stripe_account_id を保存する（受け取り前倒し・人ごと1つ）", async () => {
+    const createAccount = makeCreateConnectedAccount();
+    await createStaffProfile(mock.repo, buildUrl, createAccount, "auth-user-1", {
+      displayName: "山田 さくら",
+    });
+    // プロフィール作成に続けて連結アカウントが1回だけ作られる（表示名を渡す）
+    expect(createAccount).toHaveBeenCalledTimes(1);
+    expect(createAccount).toHaveBeenCalledWith("山田 さくら");
+    // 保存された連結アカウントが Connect 連携状態に反映される（本人確認前でも受け取れる土台）
+    const connect = await mock.repo.findStaffConnect("auth-user-1");
+    expect(connect!.stripeAccountId).toBe("acct_test_1");
+    // identity_status は none のまま（送金＝payout は本人確認後）
+    expect(connect!.identityStatus).toBe("none");
+  });
+
+  it("createStaffProfile: 連結アカウント作成が失敗してもプロフィール作成は成立する（体験を止めない）", async () => {
+    // 連結アカウント作成が失敗するスタブ（Stripe 障害を模す）
+    const failing = vi.fn(async () => {
+      throw new Error("stripe down");
+    });
+    const me = await createStaffProfile(mock.repo, buildUrl, failing, "auth-user-1", {
+      displayName: "山田 さくら",
+    });
+    // プロフィール自体は作成済み
+    expect(me.displayName).toBe("山田 さくら");
+    // 連結アカウントは未保存（後追いで onboarding / tip 側が作る）
+    const connect = await mock.repo.findStaffConnect("auth-user-1");
+    expect(connect!.stripeAccountId).toBeNull();
+  });
+
   it("createStaffProfile: 既にプロフィールがあると多重作成できない（StaffAlreadyExistsError）", async () => {
-    await createStaffProfile(mock.repo, buildUrl, "auth-user-1", { displayName: "山田 さくら" });
+    const createAccount = makeCreateConnectedAccount();
+    await createStaffProfile(mock.repo, buildUrl, createAccount, "auth-user-1", {
+      displayName: "山田 さくら",
+    });
     // 同じ auth ユーザーが再度作成しようとすると弾かれる
     await expect(
-      createStaffProfile(mock.repo, buildUrl, "auth-user-1", { displayName: "別名" }),
+      createStaffProfile(mock.repo, buildUrl, createAccount, "auth-user-1", { displayName: "別名" }),
     ).rejects.toBeInstanceOf(StaffAlreadyExistsError);
+    // 連結アカウントは最初の1回のみ（多重作成時は再作成しない＝冪等）
+    expect(createAccount).toHaveBeenCalledTimes(1);
   });
 
   // --- 参加（join）: 新規 / 同店重複 / 招待無効 / プロフィール未作成 ---
 
   it("joinStore: 招待コードで所属（membership）を1件作り joined を返す。QR用URLは /tip/:membershipId", async () => {
-    await createStaffProfile(mock.repo, buildUrl, "auth-user-1", { displayName: "山田 さくら" });
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-1", {
+      displayName: "山田 さくら",
+    });
     const result = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-OK");
     expect(result.status).toBe("joined");
     expect(result.storeId).toBe("store-1");
@@ -484,14 +534,18 @@ describe("staff.service", () => {
   });
 
   it("joinStore: 店未承認の招待では参加できない（InviteNotUsableError）", async () => {
-    await createStaffProfile(mock.repo, buildUrl, "auth-user-1", { displayName: "誰か" });
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-1", {
+      displayName: "誰か",
+    });
     await expect(
       joinStore(mock.repo, buildUrl, "auth-user-1", "INV-STORE-PENDING"),
     ).rejects.toBeInstanceOf(InviteNotUsableError);
   });
 
   it("joinStore: 存在しない招待では参加できない（InviteNotUsableError）", async () => {
-    await createStaffProfile(mock.repo, buildUrl, "auth-user-1", { displayName: "誰か" });
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-1", {
+      displayName: "誰か",
+    });
     await expect(
       joinStore(mock.repo, buildUrl, "auth-user-1", "NOPE"),
     ).rejects.toBeInstanceOf(InviteNotUsableError);
@@ -638,12 +692,17 @@ describe("staff.service", () => {
 
   // --- Connect オンボーディング ---
 
-  it("startConnectOnboarding: リンクを発行し、新規 Connected Account を本人に保存する", async () => {
+  it("startConnectOnboarding: 既存の連結アカウント（プロフィール作成時に自動作成）に対してリンクを発行する", async () => {
     await setupAndJoin(mock, "auth-A", "Aさん", "INV-OK");
-    // Connected Account を新規作成してリンクを返す infrastructure をモック
+    // プロフィール作成時に連結アカウントが自動作成済みであることを確認（受け取り前倒しの土台）
+    const before = await mock.repo.findStaffConnect("auth-A");
+    expect(before!.stripeAccountId).not.toBeNull();
+    const existingAccountId = before!.stripeAccountId!;
+
+    // 既存アカウントに対してオンボーディングリンクを返す infrastructure をモック
     const createLink = vi.fn(async () => ({
-      onboardingUrl: "https://connect.stripe.com/setup/acct_new",
-      connectedAccountId: "acct_new",
+      onboardingUrl: "https://connect.stripe.com/setup/existing",
+      connectedAccountId: existingAccountId,
     }));
     const buildUrls = () => ({
       returnUrl: "http://localhost:5173/staff/identity/complete",
@@ -652,13 +711,14 @@ describe("staff.service", () => {
 
     const result = await startConnectOnboarding(mock.repo, createLink, buildUrls, "auth-A");
     expect(result).not.toBeNull();
-    expect(result!.onboardingUrl).toBe("https://connect.stripe.com/setup/acct_new");
-    // 未連携だったので新規作成され、保存される
+    expect(result!.onboardingUrl).toBe("https://connect.stripe.com/setup/existing");
+    // 既に連結済みなので、その既存アカウント ID を渡す（人ごと1つ・新規作成しない）
     expect(createLink).toHaveBeenCalledWith(
-      expect.objectContaining({ connectedAccountId: null, staffDisplayName: "Aさん" }),
+      expect.objectContaining({ connectedAccountId: existingAccountId, staffDisplayName: "Aさん" }),
     );
-    const connect = await mock.repo.findStaffConnect("auth-A");
-    expect(connect!.stripeAccountId).toBe("acct_new");
+    // アカウント ID は変わらない（再作成されない）
+    const after = await mock.repo.findStaffConnect("auth-A");
+    expect(after!.stripeAccountId).toBe(existingAccountId);
   });
 
   it("startConnectOnboarding: プロフィール未作成なら null", async () => {
@@ -680,18 +740,11 @@ describe("staff.service", () => {
 
   it("applyConnectAccountUpdate: payouts_enabled=true で verified にし held→payable へ遷移する", async () => {
     await seedTwoStaffWithTips();
-    // A の Connected Account をオンボーディング開始で紐づける
-    await startConnectOnboarding(
-      mock.repo,
-      async () => ({
-        onboardingUrl: "https://connect.stripe.com/x",
-        connectedAccountId: "acct_A",
-      }),
-      () => ({ returnUrl: "r", refreshUrl: "f" }),
-      "auth-A",
-    );
+    // A の連結アカウントはプロフィール作成時に自動作成済み。その実 ID で account.updated を発火させる。
+    const connect = await mock.repo.findStaffConnect("auth-A");
+    const acctA = connect!.stripeAccountId!;
 
-    const result = await applyConnectAccountUpdate(mock.repo, "acct_A", true);
+    const result = await applyConnectAccountUpdate(mock.repo, acctA, true);
     expect(result.found).toBe(true);
     expect(result.verified).toBe(true);
     // A の held 2件が payable へ昇格する
@@ -707,18 +760,12 @@ describe("staff.service", () => {
 
   it("applyConnectAccountUpdate: 冪等 — 2回目は二重遷移しない（promotedTips=0）", async () => {
     await seedTwoStaffWithTips();
-    await startConnectOnboarding(
-      mock.repo,
-      async () => ({
-        onboardingUrl: "https://connect.stripe.com/x",
-        connectedAccountId: "acct_A",
-      }),
-      () => ({ returnUrl: "r", refreshUrl: "f" }),
-      "auth-A",
-    );
+    // 連結アカウントはプロフィール作成時に自動作成済み。その実 ID で2回 account.updated を発火させる。
+    const connect = await mock.repo.findStaffConnect("auth-A");
+    const acctA = connect!.stripeAccountId!;
 
-    const first = await applyConnectAccountUpdate(mock.repo, "acct_A", true);
-    const second = await applyConnectAccountUpdate(mock.repo, "acct_A", true);
+    const first = await applyConnectAccountUpdate(mock.repo, acctA, true);
+    const second = await applyConnectAccountUpdate(mock.repo, acctA, true);
     expect(first.promotedTips).toBe(2);
     // 既に verified のため二重遷移しない
     expect(second.verified).toBe(true);
@@ -736,20 +783,26 @@ describe("staff.service", () => {
 
   // --- 送金（payout）---
 
-  // A を verified にして payable な tip を用意するヘルパ（送金検証の前提を整える）
+  // A を verified にして payable な tip を用意するヘルパ（送金検証の前提を整える）。
+  // 連結アカウントはプロフィール作成時に自動作成済み（seedTwoStaffWithTips 経由）。
+  // オンボーディングは既存アカウントに対してリンクを発行するだけ（人ごと1つ・再作成しない）。
+  // 本人確認の完了は account.updated（payouts_enabled=true）で表す＝その実際の口座 ID で発火させる。
   async function setupVerifiedWithPayable() {
     await seedTwoStaffWithTips();
     await startConnectOnboarding(
       mock.repo,
       async () => ({
         onboardingUrl: "https://connect.stripe.com/x",
-        connectedAccountId: "acct_A",
+        // 既存アカウントがあるため Service はこの値で上書きしない（人ごと1つ）。
+        connectedAccountId: "acct_unused",
       }),
       () => ({ returnUrl: "r", refreshUrl: "f" }),
       "auth-A",
     );
+    // A の連結アカウント（プロフィール作成時に自動作成された実 ID）を取得する
+    const connect = await mock.repo.findStaffConnect("auth-A");
     // account.updated で verified へ → A の held 2件（額面300/500）が payable（手取り 255+425=680）へ
-    await applyConnectAccountUpdate(mock.repo, "acct_A", true);
+    await applyConnectAccountUpdate(mock.repo, connect!.stripeAccountId!, true);
   }
 
   // テスト用の Stripe payout 実行（呼ばれた額を記録し、指定の payout ID を返す）
@@ -769,6 +822,9 @@ describe("staff.service", () => {
 
   it("createStaffPayout: verified＋payable があれば全額（手取り合計）を送金し、tip を paid にする", async () => {
     await setupVerifiedWithPayable();
+    // A の連結アカウント（プロフィール作成時に自動作成された実 ID）を送金先として検証する
+    const connectA = await mock.repo.findStaffConnect("auth-A");
+    const acctA = connectA!.stripeAccountId!;
     const stripePayout = makeStripePayout();
 
     const result = await createStaffPayout(mock.repo, stripePayout, "auth-A");
@@ -779,7 +835,7 @@ describe("staff.service", () => {
     // Stripe payout は Connected Account 上で手取り合計を送金する。
     // idempotencyKey・payoutId（metadata 用）には自前 payout 行の id（= result.id）を渡す（二重送金防止／Webhook 照合）。
     expect(stripePayout).toHaveBeenCalledWith({
-      connectedAccountId: "acct_A",
+      connectedAccountId: acctA,
       amount: 680,
       currency: "jpy",
       idempotencyKey: result!.id,
@@ -810,18 +866,11 @@ describe("staff.service", () => {
   });
 
   it("createStaffPayout: 着金可能額が最低送金額未満なら PayoutBelowMinimumError", async () => {
-    // verified だが payable が無い（残高0）状態を作る
+    // verified だが payable が無い（残高0）状態を作る。
+    // 連結アカウントはプロフィール作成時に自動作成済み。その実 ID で account.updated を発火させる。
     await setupAndJoin(mock, "auth-C", "Cさん", "INV-OK");
-    await startConnectOnboarding(
-      mock.repo,
-      async () => ({
-        onboardingUrl: "https://connect.stripe.com/x",
-        connectedAccountId: "acct_C",
-      }),
-      () => ({ returnUrl: "r", refreshUrl: "f" }),
-      "auth-C",
-    );
-    await applyConnectAccountUpdate(mock.repo, "acct_C", true);
+    const connectC = await mock.repo.findStaffConnect("auth-C");
+    await applyConnectAccountUpdate(mock.repo, connectC!.stripeAccountId!, true);
 
     const stripePayout = makeStripePayout();
     await expect(createStaffPayout(mock.repo, stripePayout, "auth-C")).rejects.toBeInstanceOf(

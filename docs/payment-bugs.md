@@ -89,12 +89,18 @@
 
 ---
 
-## 8. [運用注意] 未オンボーディングの連結アカウントには直課金できない（staff_not_chargeable）
+## 8. [修正済] 未オンボーディングの連結アカウントには直課金できない（staff_not_chargeable）★体験を登録の前に
 
-- **症状**：投げ銭で `staff_not_chargeable` エラー。
-- **原因**：店員の Connected Account が `charges_enabled=false`（本人確認・オンボーディング未完）。**仕様どおりの挙動**（Direct charge は課金可能な口座が必要）。
-- **対応**：デモ/検証では課金可能なテスト連結アカウント、または `/staff/identity` のオンボーディング（テストデータ自動入力）を完了してから課金する。
-- **教訓**：「体験を登録の前に」でも、**実際の課金には連結アカウントが chargeable である必要**がある点を区別する。
+- **症状**：本人確認前の店員に投げ銭すると `staff_not_chargeable`（「決済を開始できませんでした」）。連結アカウントは**オンボーディング開始時にしか作られず**、プロフィール作成だけでは未作成だった。
+- **原因**：Direct charge は課金先の Connected Account が **`charges_enabled`** である必要がある。プロフィール作成時に連結アカウントを作っていなかったため、未オンボーディングの店員は課金口が無く弾かれていた。「体験を登録の前に（本人確認は後ろ倒し）」と矛盾していた。
+- **修正**：**連結アカウントをプロフィール作成（`POST /staff/me`）時に自動作成**するようにした（`createStaffProfile` Service に `createConnectedAccount` を注入。入口が招待リンクでも `/staff` 直アクセスでも同じ経路を通るため両方カバー。既に連結済みなら再作成しない＝冪等。作成失敗してもプロフィール作成は壊さずログのみ）。
+- **charges_enabled をどう満たすか（重要な作法）**：
+  - **`controller.requirement_collection: "application"` ＋ `stripe_dashboard.type: "none"`** で作成する（この組み合わせのときだけ、運営が API で本人情報・銀行口座・**利用規約同意（tos_acceptance）を代理投入（prefill）**できる）。
+  - `requirement_collection: "stripe"`（Stripe ホスト型オンボーディング相当）では **運営が ToS を代理同意できず**（`You cannot accept the Terms of Service on behalf of accounts where controller[requirement_collection]=stripe`）、ホスト画面を通すまで `charges_enabled` にならない。そのため「前倒しで受け取れる」を満たすには application 側を選ぶ必要がある。
+  - 作成直後に **JP individual のテスト用 prefill**（business_profile.mcc/url/product_description、漢字＋カナの代表者情報、テスト銀行口座、tos_acceptance）を投入すると、テストモードでは即 `card_payments`/`transfers` capability が active になり **`charges_enabled=true`** になる。
+  - **`account_holder_name` はカナ／英字のみ**許可（漢字を含む表示名を渡すと `The account holder name may contain only katakana or alphabetical characters` で失敗）。テスト prefill ではカナの固定ダミーを使う。
+- **受け取りと送金の分離**：上記 prefill 後も **`payouts_enabled=false`**（`requirements.currently_due` に `individual.verification.document` が残る）。送金（payout）は本人確認完了（`account.updated` の `payouts_enabled=true` Webhook）後に解禁する設計を維持。受け取り（charges）は前倒し・送金（payouts）は後ろ倒し。
+- **教訓**：「課金可能な連結アカウントを前倒しで用意する」には controller の **requirement_collection を application に**して運営が ToS 同意・本人情報を prefill する必要がある。Express（stripe 収集）のままでは API 単独で chargeable にできない。
 
 ---
 

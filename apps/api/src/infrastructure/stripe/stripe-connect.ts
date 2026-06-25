@@ -1,4 +1,5 @@
 import { getStripe } from "./stripe.client.js";
+import type { Stripe } from "./stripe.client.js";
 import type {
   CreateDirectChargeParams,
   DirectChargeResult,
@@ -7,6 +8,7 @@ import type {
   CreateOnboardingLinkResult,
   CreatePayoutParams,
   CreatePayoutResult,
+  CreateConnectedAccountResult,
 } from "./stripe.types.js";
 
 /**
@@ -114,24 +116,12 @@ export async function createConnectOnboardingLink(
 ): Promise<CreateOnboardingLinkResult> {
   const stripe = getStripe();
 
-  // 既存の Connected Account が無ければ作成する（本人確認は後ろ倒し。未確認でも作れる）
+  // 既存の Connected Account が無ければ作成する（本人確認は後ろ倒し。未確認でも作れる）。
+  // プロフィール作成時の自動作成（createConnectedAccount）と同じ controller を使い、
+  // 「受け取り（charges）は前倒し・送金（payouts）は本人確認後」を満たす（アカウントは人ごと1つで共通）。
   let connectedAccountId = params.connectedAccountId;
   if (!connectedAccountId) {
-    const account = await stripe.accounts.create({
-      country: "JP",
-      // controller で責務を明示（Express 相当: 手数料は運営負担、Express ダッシュボード、要件は Stripe 収集）
-      controller: {
-        losses: { payments: "application" },
-        fees: { payer: "application" },
-        stripe_dashboard: { type: "express" },
-        requirement_collection: "stripe",
-      },
-      capabilities: {
-        card_payments: { requested: true },
-        transfers: { requested: true },
-      },
-      business_profile: { name: params.staffDisplayName },
-    });
+    const account = await stripe.accounts.create(buildConnectedAccountParams(params.staffDisplayName));
     connectedAccountId = account.id;
   }
 
@@ -184,29 +174,138 @@ export async function createPayout(params: CreatePayoutParams): Promise<CreatePa
 }
 
 /**
- * 検証用: テスト用の Connected Account（Express ダッシュボード）を1つ作成する。
- * 本人確認は後ろ倒し（保留残高モデル）のため、未確認のままでも Direct charge は作れる。
- * 本番のオンボーディング/保留残高の本格実装は Sprint 5。ここでは E2E 検証のために
- * 「直課金できる Connected Account」を用意できる入口だけを提供する。
+ * Connected Account の作成パラメータ（controller・capabilities）を組み立てる。
  *
- * controller プロパティで責務を明示する（Accounts v2 の思想に沿い、legacy type は使わない）。
+ * 設計上の肝（「受け取りは前倒し・送金は本人確認後」を Stripe の作法で満たす）:
+ *  - `controller.requirement_collection: "application"`（要件収集は運営が担う）＋ `stripe_dashboard.type: "none"`。
+ *    この組み合わせのときだけ、運営が API で本人情報・口座・利用規約同意を「代理投入（prefill）」でき、
+ *    その結果 **card_payments / transfers capability が active になり charges_enabled=true** にできる
+ *    （= 本人確認の前でも Direct charge を受けられる＝held で溜まる）。
+ *    逆に requirement_collection: "stripe"（Stripe ホスト型オンボーディング）では運営が ToS を代理同意できず、
+ *    ホスト画面を通すまで charges_enabled にならない。「体験を登録の前に」を満たすため application 側を選ぶ。
+ *  - losses.payments / fees.payer は application（Direct charge の推奨。手数料は運営負担、負債は運営が引き受ける）。
+ *  - これは「Connected Account の作り方」の controller 設定であり、Direct charge / application_fee の方針は変えない。
+ *    送金（payouts_enabled）は本人確認（individual.verification.document 等）完了まで Stripe 側で保留される。
  */
-export async function createTestConnectedAccount(displayName: string): Promise<string> {
-  const stripe = getStripe();
-  const account = await stripe.accounts.create({
+function buildConnectedAccountParams(
+  displayName: string,
+): Stripe.AccountCreateParams {
+  return {
     country: "JP",
-    // controller で責務を明示（Express 相当: 手数料は運営負担、Express ダッシュボード、要件は Stripe 収集）
+    // controller で責務を明示（Accounts v2 の思想・legacy type は使わない）。
+    // requirement_collection=application のとき dashboard は none 必須（Stripe の制約）。
     controller: {
       losses: { payments: "application" },
       fees: { payer: "application" },
-      stripe_dashboard: { type: "express" },
-      requirement_collection: "stripe",
+      stripe_dashboard: { type: "none" },
+      requirement_collection: "application",
     },
     capabilities: {
       card_payments: { requested: true },
       transfers: { requested: true },
     },
     business_profile: { name: displayName },
-  });
-  return account.id;
+  };
+}
+
+/**
+ * charges_enabled を満たすための「テスト用 prefill（本人情報・銀行口座・利用規約同意）」を組み立てる。
+ *
+ * Stripe の作法: requirement_collection=application の Connected Account に対し、運営が
+ * card_payments capability の必須要件（business_profile / 代表者情報 / 銀行口座 / ToS 同意）を
+ * 代理投入すると、テストモードでは即座に capability が active になり charges_enabled=true になる。
+ * 値は Stripe のテスト用ダミー（実在しない固定値）。本番では本人がオンボーディングで入力する情報に置き換わる。
+ *
+ * 送金（payouts）に必要な本人確認書類（individual.verification.document）はここでは入れない。
+ * これにより「受け取りは可能・送金は本人確認後」の分離が保たれる。
+ */
+function buildChargesEnabledPrefill(nowSeconds: number): Stripe.AccountUpdateParams {
+  return {
+    business_type: "individual",
+    // 業種（飲食 5814）・URL・サービス説明（card_payments の必須要件）
+    business_profile: {
+      mcc: "5814",
+      url: "https://arigato.jp",
+      product_description: "接客スタッフへの投げ銭（ありがとう）の受け取り",
+    },
+    // 代表者（個人）情報。日本アカウントは漢字／カナ両方が必須。テスト用のダミー固定値を投入する。
+    individual: {
+      first_name: "太郎",
+      last_name: "山田",
+      first_name_kana: "タロウ",
+      last_name_kana: "ヤマダ",
+      first_name_kanji: "太郎",
+      last_name_kanji: "山田",
+      email: "staff@arigato.jp",
+      phone: "+819012345678",
+      dob: { day: 1, month: 1, year: 1990 },
+      address_kana: {
+        postal_code: "1500001",
+        state: "トウキヨウト",
+        city: "シブヤク",
+        town: "ジングウマエ",
+        line1: "1-1-1",
+      },
+      address_kanji: {
+        postal_code: "1500001",
+        state: "東京都",
+        city: "渋谷区",
+        town: "神宮前",
+        line1: "1-1-1",
+      },
+    },
+    // 銀行口座（Stripe テスト用の routing/account。日本は口座名義必須）。
+    // 口座名義はカナ／英字のみ許可されるため、表示名（漢字を含み得る）ではなくカナの固定ダミーを使う。
+    // これは charges_enabled を満たすためのテスト用 prefill であり、本番は本人がオンボーディングで入力する。
+    external_account: {
+      object: "bank_account",
+      country: "JP",
+      currency: "jpy",
+      account_holder_name: "ヤマダ タロウ",
+      routing_number: "1100000",
+      account_number: "0001234",
+    },
+    // 利用規約への同意（requirement_collection=application のときだけ運営が代理同意できる）
+    tos_acceptance: {
+      date: nowSeconds,
+      ip: "127.0.0.1",
+    },
+  };
+}
+
+/**
+ * 店員さんの Connected Account を新規作成し、受け取り（Direct charge）を即可能にする（infrastructure 層）。
+ *
+ * プロフィール作成（POST /staff/me）時にコンポジションルートから呼ばれ、人ごとに1つだけ作る。
+ * 「体験を登録の前に」を満たすため、本人確認の前でも投げ銭を受け取れる（held で溜まる）よう、
+ * 作成直後に charges_enabled を満たす（capability を active にする）。送金は本人確認完了まで保留される。
+ *
+ * 流れ:
+ *  1. controller（application 収集・dashboard none）＋ capabilities（card_payments / transfers）で作成。
+ *  2. テスト用 prefill（本人情報・口座・ToS 同意）を投入し、charges_enabled を満たす。
+ *  3. 万一まだ charges_enabled でなければ警告ログを残す（呼び出し元の判断材料）。
+ */
+export async function createConnectedAccount(
+  displayName: string,
+): Promise<CreateConnectedAccountResult> {
+  const stripe = getStripe();
+
+  // 1. Connected Account を作成（controller / capabilities を明示）
+  const account = await stripe.accounts.create(buildConnectedAccountParams(displayName));
+
+  // 2. charges_enabled を満たすためのテスト用 prefill を投入する
+  const updated = await stripe.accounts.update(
+    account.id,
+    buildChargesEnabledPrefill(Math.floor(Date.now() / 1000)),
+  );
+
+  // 3. それでも charges_enabled でない場合は警告（テスト要件が変わった可能性。受け取りに失敗し得る）
+  if (!updated.charges_enabled) {
+    console.warn(
+      `[stripe-connect] Connected Account ${account.id} は作成後も charges_enabled になりませんでした` +
+        `（currently_due: ${JSON.stringify(updated.requirements?.currently_due ?? [])}）。`,
+    );
+  }
+
+  return { connectedAccountId: account.id, chargesEnabled: updated.charges_enabled ?? false };
 }

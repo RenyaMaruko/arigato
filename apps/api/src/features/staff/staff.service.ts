@@ -137,16 +137,29 @@ export class StaffNotFoundError extends Error {
   }
 }
 
+// 連結アカウントを作成する infrastructure 関数の型（コンポジションルートで注入）。
+// プロフィール作成時に呼ばれ、受け取り（charges）を前倒しで可能にする（payouts は本人確認後）。
+export type CreateConnectedAccount = (
+  displayName: string,
+) => Promise<{ connectedAccountId: string; chargesEnabled: boolean }>;
+
 /**
  * 初回プロフィールを作成する（POST /staff/me・本人スコープ）。
  * プロフィール（表示名・一言・写真）を人ごとに1つ作る。所属の確定はここでは行わない
- * （参加は POST /staff/me/join に集約する）。本人確認・口座登録・Connect 連携は一切求めない。
+ * （参加は POST /staff/me/join に集約する）。本人確認・口座登録（payout）は一切求めない。
+ *
+ * 「体験を登録の前に」を満たすため、プロフィール作成に続けて **連結アカウントを自動作成**し、
+ * stripe_account_id を保存する（入口が招待リンクでも /staff 直アクセスでも同じ経路を通る）。
+ * これにより本人確認の前でも投げ銭を受け取れる（held で溜まる）。送金は本人確認完了後。
  *
  * - 既に自分の staff があれば多重作成を防ぐ（StaffAlreadyExistsError）。
+ * - 連結アカウント作成は冪等（既に stripe_account_id があれば再作成しない）。
+ * - 連結アカウント作成が失敗してもプロフィール作成自体は壊さない（後追いで onboarding / tip 側が作成）。
  */
 export async function createStaffProfile(
   repo: StaffRepository,
   buildUrl: BuildTipUrl,
+  createConnectedAccount: CreateConnectedAccount,
   authUserId: string,
   input: CreateStaffProfileInput,
 ): Promise<StaffMe> {
@@ -163,6 +176,24 @@ export async function createStaffProfile(
     headline: normalizeHeadline(input.headline),
     avatarUrl: input.avatarUrl ?? null,
   });
+
+  // プロフィール作成に続けて連結アカウントを自動作成し、受け取り（charges）を前倒しで可能にする。
+  // 既に連結済みなら再作成しない（冪等）。作成失敗はプロフィール作成を巻き戻さず、ログのみ（後追いで作成）。
+  const connect = await repo.findStaffConnect(authUserId);
+  if (connect && !connect.stripeAccountId) {
+    try {
+      const result = await createConnectedAccount(profile.displayName);
+      await repo.setStripeAccountId(authUserId, result.connectedAccountId);
+    } catch (err) {
+      // 連結アカウント作成に失敗しても、プロフィール作成は成立させる（体験を止めない）。
+      // 後続の投げ銭 / オンボーディングで連結アカウントを作る経路があるため、ここではログに留める。
+      console.error(
+        "[staff.service] 連結アカウントの自動作成に失敗しました（プロフィールは作成済み）:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
   // 作成直後は所属なし。所属一覧は空配列で返す（後続の join で追加される）
   return toStaffMe(profile, [], buildUrl);
 }

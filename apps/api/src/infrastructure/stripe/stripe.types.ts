@@ -102,3 +102,11 @@ export type CreatePayoutResult = {
   // 生成された Stripe Payout の ID（payout 行に保存し、payout.* Webhook で照合する）
   payoutId: string;
 };
+
+// 連結アカウント作成の結果（プロフィール作成時に staff へ保存する）
+export type CreateConnectedAccountResult = {
+  // 作成した Connected Account の ID（staff.stripe_account_id に保存・人ごと1つ）
+  connectedAccountId: string;
+  // 受け取り（Direct charge）が可能か（true なら本人確認前でも held で受け取れる）
+  chargesEnabled: boolean;
+};
