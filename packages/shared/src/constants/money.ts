@@ -3,14 +3,17 @@
  * 金額計算（Model 層の純粋関数）やフロントの定額ボタンが参照する単一の真実の源泉。
  * 通貨は日本円（最小単位＝1円）で扱う。
  *
- * 料率モデル（手取り型）:
+ * 料率モデル（手取り型・案B：fees.payer=application）:
  *  - お客さまは投げ銭額（額面）を「ぴったり」支払う（上乗せなし・高く見せない）。`customer_total = amount`。
- *  - 手数料は合計 15%（= 決済料 + 運営手数料）を「店員側から差し引く」。店員手取りは約 85%。
- *  - 運営手数料（application_fee）は「15% − Stripe 決済料率」で算出する。
- *    Direct charge では Stripe の処理手数料が Connected Account（店員）側から引かれるため、
- *    運営が application_fee を 15% 丸ごと取ると店員手取りが 85% を下回る。決済料分を差し引くことで
- *    店員手取り約 85% を成立させる。
- *  - 例: ¥1,000 → お客さま ¥1,000 / Stripe 約 ¥36 / 運営 約 ¥114 / 店員 ¥850。
+ *  - 手数料は合計 15% を「店員側から差し引く」。店員手取りは約 85%。
+ *  - 連結アカウントの controller は requirement_collection=application ＋ dashboard none（charges_enabled を
+ *    前倒しで満たすために必須）。この構成では Stripe の制約上 fees.payer も application でなければならず
+ *    （fees.payer=account は不可）、Stripe 決済料（約3.6%）は運営（application）が負担する。
+ *  - したがって application_fee（運営の取り分）＝ 額面 × 15%。Direct charge では
+ *    連結アカウント残高 ＝ 額面 − application_fee となるため、これで店員手取りが額面の 85% になり、
+ *    DB の手取り（floor(額面×0.85)）と Stripe 実残高が一致する。運営の純取り分は application_fee から
+ *    Stripe 料が引かれた残り（約 15% − 3.6% = 11.4%）。
+ *  - 例: ¥1,000 → お客さま ¥1,000 / application_fee ¥150 / 店員 ¥850 / 運営純額 約 ¥114 / Stripe 約 ¥36（運営の手数料から差引）。
  */
 
 // 定額投げ銭ボタンの金額候補（お客さまが支払う額面・円。店員手取りはこの約85%）。3列×2行のグリッドで表示する。
@@ -29,10 +32,11 @@ export const STRIPE_FEE_RATE = 0.036;
 // 店員さんの手取り率（約85%）。額面 × これ＝店員手取り。手数料合計15%を額面から差し引いた残り。
 export const STAFF_TAKE_RATE = 1 - TOTAL_FEE_RATE; // = 0.85
 
-// 運営手数料率（application_fee の算出に使う・約11.4%）。
-// ＝ 手数料合計15% − Stripe 決済料3.6%。Direct charge で Stripe 料が店員側から引かれる分を差し引き、
-// 運営の取り分をこの率に抑えることで店員手取り約85%を成立させる。
-export const PLATFORM_FEE_RATE = TOTAL_FEE_RATE - STRIPE_FEE_RATE; // = 0.114
+// 運営手数料率（application_fee の算出に使う・15%）。
+// 案B（fees.payer=application）では Stripe 決済料を運営が負担するため、application_fee を 15% 丸ごと取る。
+// Direct charge では 連結アカウント残高 ＝ 額面 − application_fee となるので、これで店員手取りが額面の85%になり
+// DB の手取り（floor(額面×0.85)）と Stripe 実残高が一致する。運営の純取り分は Stripe 料を引いた約11.4%。
+export const PLATFORM_FEE_RATE = TOTAL_FEE_RATE; // = 0.15
 
 // 通貨コード（Stripe へ渡す通貨。日本円）
 export const CURRENCY = "jpy" as const;

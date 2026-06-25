@@ -15,44 +15,48 @@ import {
 
 /**
  * 金額計算 Model（純粋関数）のユニットテスト。
- * 料率モデル（手取り型）を保証する:
+ * 料率モデル（手取り型・案B：fees.payer=application）を保証する:
  *  - お客さま支払額（customer_total）＝ 額面（amount）。上乗せなし。
- *  - 運営手数料（platform_fee）≈ 11.4% ＝ 15% − Stripe決済料3.6%（円未満切り上げ）。
- *  - 店員手取り（staff_amount）≈ 85%（円未満切り捨て）。
- *  - 整合: 額面 − Stripe決済料 − 運営手数料 ≒ 店員手取り。
+ *  - 運営手数料（platform_fee = application_fee）＝ 額面 − 店員手取り（floor(額面×0.85)）＝ 実質 額面の約15%。
+ *  - 店員手取り（staff_amount）＝ floor(額面×0.85)（円未満切り捨て）。
+ *  - 最重要の不変条件: 店員手取り + 運営手数料 ＝ 額面（1円も取りこぼさない）。
+ *    Direct charge では 連結アカウント残高 ＝ 額面 − application_fee なので、これで残高 ＝ 店員手取り が成立する。
+ *    Stripe 決済料は運営（fees.payer=application）負担で application_fee から差し引かれる（運営純額 約11.4%）。
  */
 
 // 各定数が手取り型の前提どおりであることを確認するための期待値表。
-// platform_fee = ceil(amount × (0.15 − 0.036))、staff = floor(amount × 0.85)。
+// staff = floor(amount × 0.85)、platform_fee（application_fee）= amount − staff（= 約15%）。
 const cases = [
-  // ¥100: platform ceil(11.4)=12 / staff floor(85)=85 / customer=100
-  { amount: 100, platformFee: 12, staffAmount: 85, customerTotal: 100 },
-  // ¥300: platform ceil(34.2)=35 / staff floor(255)=255
-  { amount: 300, platformFee: 35, staffAmount: 255, customerTotal: 300 },
-  // ¥500: platform ceil(57)=57 / staff floor(425)=425
-  { amount: 500, platformFee: 57, staffAmount: 425, customerTotal: 500 },
-  // ¥1,000（仕様例）: platform ceil(114)=114 / staff floor(850)=850 / customer=1000
-  { amount: 1000, platformFee: 114, staffAmount: 850, customerTotal: 1000 },
-  // ¥5,000: platform ceil(570)=570 / staff floor(4250)=4250
-  { amount: 5000, platformFee: 570, staffAmount: 4250, customerTotal: 5000 },
-  // ¥50,000（上限境界）: platform ceil(5700)=5700 / staff floor(42500)=42500
-  { amount: 50000, platformFee: 5700, staffAmount: 42500, customerTotal: 50000 },
+  // ¥100: staff floor(85)=85 / platform 100−85=15 / customer=100
+  { amount: 100, platformFee: 15, staffAmount: 85, customerTotal: 100 },
+  // ¥300: staff floor(255)=255 / platform 45
+  { amount: 300, platformFee: 45, staffAmount: 255, customerTotal: 300 },
+  // ¥500: staff floor(425)=425 / platform 75
+  { amount: 500, platformFee: 75, staffAmount: 425, customerTotal: 500 },
+  // ¥1,000（仕様例）: staff floor(850)=850 / platform 150 / customer=1000
+  { amount: 1000, platformFee: 150, staffAmount: 850, customerTotal: 1000 },
+  // ¥5,000: staff floor(4250)=4250 / platform 750
+  { amount: 5000, platformFee: 750, staffAmount: 4250, customerTotal: 5000 },
+  // ¥5,500（検算例）: staff floor(4675)=4675 / platform 825
+  { amount: 5500, platformFee: 825, staffAmount: 4675, customerTotal: 5500 },
+  // ¥50,000（上限境界）: staff floor(42500)=42500 / platform 7500
+  { amount: 50000, platformFee: 7500, staffAmount: 42500, customerTotal: 50000 },
 ];
 
-describe("tip.model 金額計算（手取り型）", () => {
-  // 前提: 手数料合計15%・Stripe決済料3.6%・運営手数料≈11.4%・店員手取り85% を真実の源泉とする
-  it("料率定数が手取り型の前提どおりである", () => {
+describe("tip.model 金額計算（手取り型・案B）", () => {
+  // 前提: 手数料合計15%・Stripe決済料3.6%・店員手取り85%・application_fee率15% を真実の源泉とする
+  it("料率定数が手取り型（案B）の前提どおりである", () => {
     expect(TOTAL_FEE_RATE).toBe(0.15);
     expect(STRIPE_FEE_RATE).toBe(0.036);
     expect(STAFF_TAKE_RATE).toBe(0.85);
-    // 運営手数料率 ≈ 0.114（浮動小数の都合で 0.114 近傍。差分を許容して確認）
-    expect(PLATFORM_FEE_RATE).toBeCloseTo(0.114, 6);
+    // 案B では application_fee 率 = 15%（Stripe 料は運営負担で application_fee から引かれる）
+    expect(PLATFORM_FEE_RATE).toBe(0.15);
   });
 
   describe.each(cases)(
     "投げ銭 ¥$amount のとき",
     ({ amount, platformFee, staffAmount, customerTotal }) => {
-      it(`platform_fee は ¥${platformFee}（≈11.4%・切り上げ）`, () => {
+      it(`platform_fee（application_fee）は ¥${platformFee}（＝額面−店員手取り・約15%）`, () => {
         expect(calculatePlatformFee(amount)).toBe(platformFee);
       });
 
@@ -66,12 +70,10 @@ describe("tip.model 金額計算（手取り型）", () => {
         expect(calculateStaffAmount(amount)).toBe(staffAmount);
       });
 
-      it("整合: 額面 − Stripe決済料 − 運営手数料 ≒ 店員手取り（端数1円以内）", () => {
-        // Stripe 決済料（参考値・四捨五入）
-        const stripeFee = Math.round(amount * STRIPE_FEE_RATE);
-        const remainder = amount - stripeFee - calculatePlatformFee(amount);
-        // 端数方針（platform=ceil / staff=floor）の都合で1円以内のズレを許容する
-        expect(Math.abs(remainder - calculateStaffAmount(amount))).toBeLessThanOrEqual(1);
+      it("最重要の不変条件: 店員手取り + application_fee ＝ 額面（連結残高＝DB手取りが1円もズレない）", () => {
+        // Direct charge では 連結残高 = 額面 − application_fee。これが DB の店員手取りと一致するには
+        // 店員手取り + application_fee == 額面 でなければならない。
+        expect(calculateStaffAmount(amount) + calculatePlatformFee(amount)).toBe(amount);
       });
 
       it("buildTipAmounts は amount/platformFee/customerTotal を正しく返す", () => {
@@ -80,14 +82,16 @@ describe("tip.model 金額計算（手取り型）", () => {
     },
   );
 
-  // 端数が出る金額でも運営手数料は切り上げ・店員手取りは切り捨ての整数になる
-  it("端数が出る金額でも platform_fee は切り上げ・staff_amount は切り捨ての整数になる", () => {
-    // 333 × 0.114 = 37.962 → 切り上げ 38
-    expect(calculatePlatformFee(333)).toBe(38);
-    // 上乗せ廃止のため customer_total は額面そのまま
-    expect(calculateCustomerTotal(333)).toBe(333);
+  // 端数が出る金額でも store 手取りは切り捨て・application_fee は補完で整数になり、合計は額面に一致する
+  it("端数が出る金額でも staff=切り捨て・application_fee=補完で合計が額面に一致する", () => {
     // 333 × 0.85 = 283.05 → 切り捨て 283
     expect(calculateStaffAmount(333)).toBe(283);
+    // application_fee = 333 − 283 = 50（実質 ceil(333×0.15)=ceil(49.95)=50 と一致）
+    expect(calculatePlatformFee(333)).toBe(50);
+    // 不変条件: 合計が額面に一致
+    expect(calculateStaffAmount(333) + calculatePlatformFee(333)).toBe(333);
+    // 上乗せ廃止のため customer_total は額面そのまま
+    expect(calculateCustomerTotal(333)).toBe(333);
   });
 });
 

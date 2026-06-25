@@ -134,6 +134,30 @@
 
 ---
 
+## 11. [修正済] 料率の不整合（fees.payer と application_fee 率の矛盾）→ DB手取りと Stripe 実額が食い違い、送金で端数が浮く ★お金
+
+- **症状**：店員手取りを「85%」で DB 記録しているのに、Stripe 上の連結アカウント残高は「88.6%」になり、両者が食い違う。送金（available 基準）時に端数（¥198）が浮き、計算が合わない。
+- **原因**：
+  - 連結アカウントの controller が `fees.payer: "application"`（**Stripe 処理手数料3.6%を運営が負担**）になっていた。
+  - 一方 `application_fee` は **11.4%（=15%−3.6%）**＝「**店員が Stripe 手数料を負担する前提**」で算出していた。
+  - この矛盾で、Direct charge では 連結残高 ＝ 額面 − application_fee(11.4%) ＝ **88.6%** になり、DB の手取り(85%) と一致しなかった（運営の実取り分も 11.4% ではなく 7.8% にズレていた）。
+- **検証で判明した制約（案Aが不可）**：
+  - 当初の方針（案A）は「`fees.payer` を `application` → `account`（店員負担）に変え、application_fee=11.4% のまま整合させる」だった。
+  - だが**実Stripe（テストモード）で連結アカウントを新規作成して確認**した結果、`controller.requirement_collection: "application"` ＋ `stripe_dashboard.type: "none"`（**charges_enabled を本人確認前に満たすために必須**の構成・#8）では、`fees.payer: "account"` は使えない：
+    `When controlling requirement collection, the Connect application must also control losses, fees, and specify a dashboard type of `none`.`
+  - controller を変えると charges_enabled の前倒し（受け取りは登録前に）を壊すため、**案Aは採用不可**。
+- **修正（案B）**：`fees.payer: "application"` は据え置き、**application_fee を 15% に引き上げ**て整合させた。
+  - `PLATFORM_FEE_RATE` を 0.114 → 0.15 に変更。`calculatePlatformFee()` を **`額面 − calculateStaffAmount(額面)`** に変更し（＝実質 ceil(額面×0.15)）、**店員手取り + application_fee が必ず額面に一致**するようにした。
+  - Direct charge では 連結残高 ＝ 額面 − application_fee なので、**連結残高 ＝ DB手取り(floor(額面×0.85)) が1円もズレない**。Stripe 処理手数料は運営の application_fee から引かれ、運営純取り分は約11.4%。
+- **実Stripe 検算（テストモード・新規連結アカウント）**：`charges_enabled=true`（fees.payer=application）を確認。額面 ¥5,500 をテストカードで決済 → **連結アカウント残高 ¥4,675 ＝ DB手取り floor(5500×0.85)=4,675（差0）**、charge の balance_transaction も net=4,675・fee 内訳は `application_fee:825` のみ（店員側に Stripe 料は計上されない）、application_fee（運営総額）=¥825（=15%）。店員手取り率 85.00% を確認。検証後にテスト連結アカウントは削除。
+- **送金整合（#5）への影響なし**：送金は Stripe の実 available を正とし、`selectPayoutTipsWithinAvailable` は `calculateStaffTakeAmount`（=floor(額面×0.85)）で積む。今や **DB手取り＝連結残高**なので、available 基準の送金で端数の浮きが出ない（#5・#2 の対策は後退させていない）。
+- **教訓**：
+  - **fees.payer（誰が Stripe 料を負担するか）と application_fee 率は必ず整合させる**。負担者を変えずに率だけ動かす／率を変えずに負担者だけ動かすと、DB手取りと実残高が食い違う。
+  - **controller 構成には Stripe 側の依存制約がある**：requirement_collection=application＋dashboard none では fees も application 必須。**机上で「account にすればよい」と決めず、実Stripeで作って確認する**。
+  - **application_fee は率で ceil するより「額面 − 店員手取り」で補完**した方が、連結残高と DB手取りが端数ゼロで一致する（お金の不変条件を計算式で担保）。
+
+---
+
 ## まとめ：再発防止の原則
 
 1. **お客さま表示＝決済の即時結果／お金の確定＝Webhook**（2段の正）。表示をWebhook待ちにしない。

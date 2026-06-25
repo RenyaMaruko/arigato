@@ -10,7 +10,7 @@ export type CreateDirectChargeParams = {
   connectedAccountId: string;
   // 投げ銭の額面（円）。お客さま支払額そのもの（手取り型のため上乗せなし）
   amount: number;
-  // 運営の取り分（application_fee ≈ 11.4% ＝ 15% − Stripe決済料3.6%・円）。運営はこの手数料だけを受領する
+  // 運営の取り分（application_fee = 額面の約15% ＝ 額面 − 店員手取り・円）。fees.payer=application のため Stripe 料はここから引かれ運営純額は約11.4%
   applicationFeeAmount: number;
   // お客さま支払額（額面・円。上乗せ廃止のため = amount）。PaymentIntent の請求総額（amount）
   customerTotal: number;

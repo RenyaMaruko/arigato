@@ -298,12 +298,15 @@ verified（着金可能）
 ### 金額計算（Model 層・純粋関数・Vitest 対象）
 **料率モデル（手取り型）**: お客さまは投げ銭額を**そのまま**支払い（上乗せなし＝高く見せない）、手数料は**店員側から差し引く**。
 - **お客さま支払額 = 投げ銭額（額面）**（上乗せ廃止。`customer_total = amount`）。
-- **店員手取り ≈ 85%**（`STAFF_TAKE_RATE = 0.85`）。手数料は合計15%＝**決済料（Stripe 約3.6%）＋ 運営手数料**で構成し、店員側から引く。
-- **運営手数料（application_fee）≈ 11.4%**＝ 15% − Stripe約3.6%。Direct charge では Stripe 処理手数料が Connected Account 側から引かれるため、店員手取り85%を成立させるよう application_fee を「15% − Stripe率」で算出する。
-  - 例: ¥1,000 → お客さま ¥1,000 / Stripe 約¥36 / 運営 約¥114 / 店員 ¥850。
-- Stripe率は日本のカードで一律3.6%前提。他決済で異なる場合、店員手取りは「約85%」と表現（実料率は本番のStripe設定で最終確認）。
-- `calculatePlatformFee()`: 運営の取り分（application_fee）＝ 額面 × (0.15 − STRIPE_FEE_RATE)。
-- `calculateStaffAmount()`: 店員さんの手取り ＝ 額面 × STAFF_TAKE_RATE（約85%）。
+- **店員手取り ＝ 85%**（`STAFF_TAKE_RATE = 0.85`・floor）。額面の 15% を手数料として店員側から引く。
+- **運営手数料（application_fee）＝ 15%**（`PLATFORM_FEE_RATE = 0.15`）。実装は `application_fee_amount = 額面 − floor(額面×0.85)` で算出し、**店員手取り + application_fee が必ず額面に一致**させる。Direct charge では 連結アカウント残高 ＝ 額面 − application_fee なので、これで**連結残高（店員の取り分）が DB の手取り(floor(額面×0.85)) と1円もズレない**。
+  - 例: ¥1,000 → お客さま ¥1,000 / application_fee ¥150 / 店員 ¥850（運営純額 約¥114・Stripe約¥36 は運営の手数料から差引）。¥5,500 → 店員 ¥4,675 / application_fee ¥825。
+- **Stripe手数料の負担者は運営（application）側＝`controller.fees.payer: "application"`（案B）**。
+  - 当初は `fees.payer: "account"`（店員負担）＋ application_fee=11.4% を想定したが、**実Stripeで検証した結果**、`controller.requirement_collection: "application"` ＋ `stripe_dashboard.type: "none"`（charges_enabled を前倒しで満たすために必須の構成）では Stripe の制約で **`fees.payer` も `application` でなければならず、`account` は使用不可**（エラー: "When controlling requirement collection, the Connect application must also control losses, fees, and specify a dashboard type of none."）。
+  - そこで **案B**: `fees.payer: "application"` のまま **application_fee を 15% に引き上げる**。Stripe 処理手数料（約3.6%）は運営の application_fee から差し引かれ、運営の純取り分は約 11.4%。店員手取りは額面の 85%（＝連結残高）で DB と一致する。これにより旧構成の「店員88.6%・運営7.8%・DB手取り85%との食い違い（送金時の端数¥198）」を解消する。
+- Stripe率は日本のカードで一律3.6%前提。他決済で異なる場合、運営純取り分は前後する（店員手取り85%・application_fee15%は固定。実料率は本番のStripe設定で最終確認）。
+- `calculatePlatformFee()`: 運営の取り分（application_fee）＝ 額面 − `calculateStaffAmount()`（＝実質 額面の約15%・補完で端数を吸収）。
+- `calculateStaffAmount()`: 店員さんの手取り ＝ floor(額面 × STAFF_TAKE_RATE)（85%）。
 - `calculateCustomerTotal()`: お客さま支払額 ＝ 額面（上乗せなし）。後方互換のため関数は残すが上乗せ0。
 - `canPayout()`: identity_status から着金可否を判定。
 

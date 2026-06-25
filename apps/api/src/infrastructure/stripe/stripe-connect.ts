@@ -51,9 +51,10 @@ export async function createDirectChargePaymentIntent(
       // お客さま支払額＝額面（上乗せ廃止のため customer_total = amount）。JPY は最小単位＝1円のため整数をそのまま渡す
       amount: params.customerTotal,
       currency: params.currency,
-      // 運営の取り分（application_fee ≈ 11.4% ＝ 15% − Stripe決済料3.6%）。
-      // Direct charge では Stripe 料が店員側から引かれるため、これを 15% 丸ごとにせず差し引いた率にし、
-      // 店員手取り約85%を成立させる
+      // 運営の取り分（application_fee = 額面の約15% ＝ 額面 − 店員手取り）。
+      // 案B（fees.payer=application）では Stripe 決済料は運営が負担し application_fee から引かれる。
+      // Direct charge では 連結残高 ＝ 額面 − application_fee なので、これで店員手取り85%（連結残高）が
+      // DB手取り(floor(額面×0.85)) と1円もズレず一致する。運営の純取り分は Stripe 料を引いた約11.4%。
       application_fee_amount: params.applicationFeeAmount,
       // 動的決済手段を有効化（payment_method_types は渡さない）
       automatic_payment_methods: { enabled: true },
@@ -267,7 +268,13 @@ async function findEarliestPendingAvailableOn(
  *    （= 本人確認の前でも Direct charge を受けられる＝held で溜まる）。
  *    逆に requirement_collection: "stripe"（Stripe ホスト型オンボーディング）では運営が ToS を代理同意できず、
  *    ホスト画面を通すまで charges_enabled にならない。「体験を登録の前に」を満たすため application 側を選ぶ。
- *  - losses.payments / fees.payer は application（Direct charge の推奨。手数料は運営負担、負債は運営が引き受ける）。
+ *  - losses.payments / fees.payer はともに application。
+ *    requirement_collection=application ＋ dashboard none の構成では、Stripe の制約により
+ *    運営（application）が losses と fees の両方を持つ必要があり、fees.payer=account は選べない
+ *    （実Stripeで「the Connect application must also control losses, fees, and specify a dashboard type of none.」を確認）。
+ *    したがって Stripe 処理手数料は運営が負担し、料率の整合は application_fee 率を 15% にすることで取る（案B）。
+ *    額面 − application_fee(15%) ＝ 店員手取り85% が連結アカウント残高として残り（Stripe料は運営の application_fee から差し引かれる）、
+ *    DB の手取り(floor(額面×0.85)) と一致する。
  *  - これは「Connected Account の作り方」の controller 設定であり、Direct charge / application_fee の方針は変えない。
  *    送金（payouts_enabled）は本人確認（individual.verification.document 等）完了まで Stripe 側で保留される。
  */
@@ -280,6 +287,12 @@ function buildConnectedAccountParams(
     // requirement_collection=application のとき dashboard は none 必須（Stripe の制約）。
     controller: {
       losses: { payments: "application" },
+      // Stripe 処理手数料は運営（application）が負担する。
+      // requirement_collection=application ＋ dashboard none の構成では、Stripe の制約により
+      // 運営が losses・fees の両方を持ち dashboard=none を指定しなければならない
+      // （fees.payer=account は同構成では不可：「When controlling requirement collection,
+      //   the Connect application must also control losses, fees, and specify a dashboard type of none.」）。
+      // そのため fees.payer は application のまま据え置き、料率の整合は application_fee 率（=15%）で取る（案B）。
       fees: { payer: "application" },
       stripe_dashboard: { type: "none" },
       requirement_collection: "application",

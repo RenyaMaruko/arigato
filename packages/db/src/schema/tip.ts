@@ -23,7 +23,9 @@ export const tip = pgTable("tip", {
   membershipId: uuid("membership_id").references(() => staffStore.id),
   // 投げ銭の額面＝お客さま支払額（円）。店員手取りはこの約85%（手数料15%・決済料込み）
   amount: integer("amount").notNull(),
-  // 運営手数料（application_fee ≈ 11.4% ＝ 15% − Stripe決済料3.6%・円）
+  // 運営手数料（application_fee = 額面 − 店員手取り ≈ 15%・円）。
+  // ここに格納するのは application_fee（15%）そのもの。運営の純取り分は本番で Stripe 決済料(約3.6%)が
+  // application_fee から引かれて約11.4%になる（列には入らない）。
   platformFee: integer("platform_fee").notNull(),
   // お客さま支払額（額面・円。上乗せ廃止のため = amount）
   customerTotal: integer("customer_total").notNull(),

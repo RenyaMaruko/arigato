@@ -1,22 +1,25 @@
-import { PLATFORM_FEE_RATE, STAFF_TAKE_RATE } from "@arigato/shared";
+import { STAFF_TAKE_RATE } from "@arigato/shared";
 import type { IdentityStatus, SettlementStatus } from "@arigato/shared";
 
 /**
  * tip feature の Model 層（純粋関数・金額計算）。
  * DB アクセスを持たず、投げ銭の金額計算・着金状態の判定ルールのみを記述する。Vitest のテスト対象。
  *
- * 料率モデル（手取り型）:
+ * 料率モデル（手取り型・案B：fees.payer=application）:
  *  - お客さまは額面（amount）を「ぴったり」支払う（上乗せなし）。`customer_total = amount`。
- *  - 手数料合計15%（決済料 + 運営手数料）を店員側から差し引き、店員手取りは約85%。
- *  - 運営手数料（application_fee）＝ 額面 ×（15% − Stripe決済料3.6%）≈ 11.4%。
- *    Direct charge では Stripe 料が店員側から引かれるため、運営の取り分をこの率に抑えることで
- *    店員手取り約85%（＝ 額面 − Stripe料 − 運営手数料）を成立させる。
- *  - 例: ¥1,000 → お客さま ¥1,000 / Stripe 約 ¥36 / 運営 約 ¥114 / 店員 ¥850。
+ *  - 手数料合計15%を店員側から差し引き、店員手取りは約85%。
+ *  - 連結アカウントの controller 制約（requirement_collection=application＋dashboard none）では fees.payer も
+ *    application でなければならず、Stripe 決済料（約3.6%）は運営が負担する。
+ *    そのため 運営手数料（application_fee）＝ 額面 × 15%。Direct charge では
+ *    連結アカウント残高 ＝ 額面 − application_fee なので、これで店員手取りが額面の85%になる。
+ *  - 例: ¥1,000 → お客さま ¥1,000 / application_fee ¥150 / 店員 ¥850（運営純額 約¥114・Stripe約¥36 は運営手数料から差引）。
  *
- * 端数方針（1か所に集約）:
- *  - 運営手数料（platformFee）は円未満を切り上げ（Math.ceil）＝運営が取りこぼさない。
+ * 端数方針（DB と Stripe 実残高を1円も食い違わせない・最重要）:
  *  - 店員手取り（staffAmount）は円未満を切り捨て（Math.floor）＝店員に過剰計上しない。
- *  - これにより customer_total(=amount) − Stripe料 − platformFee ≒ staffAmount（約85%）で整合する。
+ *  - 運営手数料（platformFee = application_fee_amount）は「額面 − staffAmount」で算出する。
+ *    こうすると staffAmount + platformFee が必ず額面に一致するため、
+ *    Direct charge の連結アカウント残高（＝ 額面 − application_fee）が DB の staffAmount と1円もズレない。
+ *  - 結果として platformFee は実質 ceil(額面×0.15) と等価（額面の約15%）になる。
  */
 
 /**
@@ -37,11 +40,13 @@ export function initialSettlementStatusOnSucceeded(
 
 /**
  * 運営の取り分（application_fee）を計算する。
- * 額面 ×（15% − Stripe決済料3.6%）≈ 11.4% を運営手数料とし、円未満は切り上げる（運営が取りこぼさない）。
- * これが Stripe の application_fee_amount になる。
+ * 「額面 − 店員手取り（floor(額面×0.85)）」で算出する＝実質 額面の約15%（ceil 相当）。
+ * Direct charge では 連結アカウント残高 ＝ 額面 − application_fee となるため、こう定義すると
+ * 連結残高が DB の店員手取り（staffAmount）と1円もズレない（DB と Stripe 実額の一致を保証）。
+ * これが Stripe の application_fee_amount になる。運営の純取り分は Stripe 料を引いた残り（約11.4%）。
  */
 export function calculatePlatformFee(amount: number): number {
-  return Math.ceil(amount * PLATFORM_FEE_RATE);
+  return amount - calculateStaffAmount(amount);
 }
 
 /**
@@ -77,7 +82,7 @@ export function buildTipAmounts(amount: number): {
   return {
     // 額面（お客さまが支払う額・DB の amount カラム）
     amount,
-    // 運営手数料（application_fee ≈ 11.4%）
+    // 運営手数料（application_fee = 額面 − 店員手取り ＝ 約15%）
     platformFee: calculatePlatformFee(amount),
     // お客さま支払額（上乗せ廃止のため額面と一致）
     customerTotal: calculateCustomerTotal(amount),
