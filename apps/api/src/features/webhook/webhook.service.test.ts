@@ -34,6 +34,7 @@ function succeededEvent(
     accountId: null,
     payoutsEnabled: null,
     payoutId: null,
+    payoutMetadataId: null,
     payoutArrivedAt: null,
     payoutFailureReason: null,
   };
@@ -53,6 +54,7 @@ function accountUpdatedEvent(
     accountId,
     payoutsEnabled,
     payoutId: null,
+    payoutMetadataId: null,
     payoutArrivedAt: null,
     payoutFailureReason: null,
   };
@@ -63,7 +65,7 @@ function payoutEvent(
   eventId: string,
   type: "payout.paid" | "payout.failed",
   payoutId: string,
-  opts: { arrivedAt?: Date | null; failureReason?: string | null } = {},
+  opts: { arrivedAt?: Date | null; failureReason?: string | null; metadataId?: string | null } = {},
 ): VerifiedEvent {
   return {
     id: eventId,
@@ -73,6 +75,7 @@ function payoutEvent(
     accountId: null,
     payoutsEnabled: null,
     payoutId,
+    payoutMetadataId: opts.metadataId ?? null,
     payoutArrivedAt: opts.arrivedAt ?? null,
     payoutFailureReason: opts.failureReason ?? null,
   };
@@ -85,6 +88,7 @@ function makeApplyPayoutUpdate(updated = true) {
     async (params: {
       kind: "paid" | "failed";
       stripePayoutId: string;
+      payoutId: string | null;
       arrivedAt: Date | null;
       failureReason: string | null;
     }) => {
@@ -165,6 +169,7 @@ describe("webhook.service handleStripeWebhook", () => {
       accountId: null,
       payoutsEnabled: null,
       payoutId: null,
+      payoutMetadataId: null,
       payoutArrivedAt: null,
       payoutFailureReason: null,
     };
@@ -232,6 +237,7 @@ describe("webhook.service handleStripeWebhook", () => {
       accountId: null,
       payoutsEnabled: null,
       payoutId: null,
+      payoutMetadataId: null,
       payoutArrivedAt: null,
       payoutFailureReason: null,
     };
@@ -384,6 +390,7 @@ describe("webhook.service handleStripeWebhook", () => {
     expect(applyPayout).toHaveBeenCalledWith({
       kind: "paid",
       stripePayoutId: "po_123",
+      payoutId: null,
       arrivedAt,
       failureReason: null,
     });
@@ -411,6 +418,7 @@ describe("webhook.service handleStripeWebhook", () => {
     expect(applyPayout).toHaveBeenCalledWith({
       kind: "failed",
       stripePayoutId: "po_456",
+      payoutId: null,
       arrivedAt: null,
       failureReason: "account_closed",
     });
@@ -443,5 +451,32 @@ describe("webhook.service handleStripeWebhook", () => {
     expect(second.payoutUpdated).toBe(false);
     // 反映は1回だけ（二重反映しない）
     expect(applyPayout).toHaveBeenCalledTimes(1);
+  });
+
+  it("payout.* の metadata.payout_id（自前 id）を照合バックアップとして反映関数へ渡す", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(0);
+    const applyPayout = makeApplyPayoutUpdate(true);
+    const arrivedAt = new Date("2026-07-03T00:00:00Z");
+
+    await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      applyPayout,
+      payoutEvent("evt_po_meta", "payout.paid", "po_meta", {
+        arrivedAt,
+        metadataId: "our-payout-uuid",
+      }),
+    );
+
+    // stripe_payout_id（主）に加え、metadata 由来の payoutId（従）も反映関数へ渡る
+    expect(applyPayout).toHaveBeenCalledWith({
+      kind: "paid",
+      stripePayoutId: "po_meta",
+      payoutId: "our-payout-uuid",
+      arrivedAt,
+      failureReason: null,
+    });
   });
 });

@@ -48,6 +48,8 @@ export type VerifiedWebhookEvent = {
   payoutsEnabled: boolean | null;
   // payout.* 系の Stripe Payout ID（該当しないイベントは null。送金の着金/失敗の照合に使う）
   payoutId: string | null;
+  // payout.* の metadata.payout_id（自前 payout 行の id。stripe_payout_id 未更新時の照合バックアップ。対象外は null）
+  payoutMetadataId: string | null;
   // payout.* の着金日時（payout.paid の arrival_date から。未設定・対象外は null）
   payoutArrivedAt: Date | null;
   // payout.failed の失敗理由（failure_message。対象外は null）
@@ -89,6 +91,10 @@ export type CreatePayoutParams = {
   amount: number;
   // 通貨コード（jpy）
   currency: string;
+  // 冪等キー（自前 payout 行の id を使う）。再試行で同じ payout を二重作成しない（二重送金防止）
+  idempotencyKey: string;
+  // 自前 payout 行の id。Stripe payout の metadata に載せ、Webhook 照合のバックアップにする
+  payoutId: string;
 };
 
 // 送金（payout）実行の結果（feature 側はこれを受け取って payout を記録する）

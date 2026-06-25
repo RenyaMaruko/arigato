@@ -164,14 +164,20 @@ export async function createPayout(params: CreatePayoutParams): Promise<CreatePa
   const stripe = getStripe();
 
   // payout を Connected Account のコンテキストで作成する（= 店員さんの残高→銀行）。
+  // idempotencyKey に自前 payout 行の id を使い、再試行で同じ payout を二重作成しない（二重送金防止）。
+  // metadata.payout_id に自前 payout 行の id を載せ、stripe_payout_id 更新前に落ちても
+  // Webhook 側で payout 行を照合できるようにする（照合のバックアップ）。
   const payout = await stripe.payouts.create(
     {
       // 送金額（円）。JPY は最小単位＝1円のため整数をそのまま渡す
       amount: params.amount,
       currency: params.currency,
+      // Webhook 照合のバックアップ（stripe_payout_id 未更新時に metadata で引けるように）
+      metadata: { payout_id: params.payoutId },
     },
-    // ★ Connected Account のコンテキストで実行（運営の残高を経由しない）
-    { stripeAccount: params.connectedAccountId },
+    // ★ Connected Account のコンテキストで実行（運営の残高を経由しない）。
+    //   idempotencyKey で再試行時の二重 payout 作成を防ぐ。
+    { stripeAccount: params.connectedAccountId, idempotencyKey: params.idempotencyKey },
   );
 
   return { payoutId: payout.id };

@@ -115,6 +115,7 @@ function succeeded(eventId: string, tipId: string): VerifiedEvent {
     accountId: null,
     payoutsEnabled: null,
     payoutId: null,
+    payoutMetadataId: null,
     payoutArrivedAt: null,
     payoutFailureReason: null,
   };
@@ -130,6 +131,7 @@ function accountUpdated(eventId: string, accountId: string): VerifiedEvent {
     accountId,
     payoutsEnabled: true,
     payoutId: null,
+    payoutMetadataId: null,
     payoutArrivedAt: null,
     payoutFailureReason: null,
   };

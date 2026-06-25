@@ -374,11 +374,14 @@ export async function applyConnectAccountUpdate(
   return repo.applyAccountUpdate(stripeAccountId, payoutsEnabled);
 }
 
-// Stripe payout を実行する infrastructure 関数の型（コンポジションルートで注入）
+// Stripe payout を実行する infrastructure 関数の型（コンポジションルートで注入）。
+// idempotencyKey（自前 payout 行の id）と payoutId（metadata 用・自前 payout 行の id）を渡す。
 export type CreatePayout = (params: {
   connectedAccountId: string;
   amount: number;
   currency: string;
+  idempotencyKey: string;
+  payoutId: string;
 }) => Promise<StripeCreatePayoutResult>;
 
 // 送金申請で起こりうる業務エラー（Route で HTTP ステータスに変換する）。
@@ -405,12 +408,18 @@ export class PayoutBelowMinimumError extends Error {
  *  - verified（着金可能＝口座登録済）でなければ PayoutNotVerifiedError。
  *  - 着金可能額が最低送金額（¥100）未満／残高0なら PayoutBelowMinimumError。
  *
- * 流れ:
- *  1. 本人の Connect 連携状態と着金可能な tip を取得する。
- *  2. 送金額＝payable な tip の手取り合計（floor(amount×0.85) の総和）を Model で算出する。
- *  3. 可否を判定（verified必須・最低額・全額）。
- *  4. Stripe payout を Connected Account 上で実行する（残高→銀行。送金手数料は店員から取らない）。
- *  5. payout 行を pending で記録し、対象の payable tip を paid＋payout_id 紐付けに更新する（トランザクション）。
+ * 堅牢な流れ（「Stripe 送金成功なのに DB 未記録」を構造的に防ぐ・冪等）:
+ *  1. 本人の Connect 連携状態と着金可能な tip を取得し、送金額＝payable な tip の手取り合計
+ *     （floor(amount×0.85) の総和）を Model で算出する。可否判定（verified必須・最低¥100・全額）。
+ *  2. ★先に DB トランザクションで★ payout 行を pending（stripe_payout_id は NULL）で作成し、
+ *     対象 payable tip を paid＋payout_id 紐付けに更新する。ここで失敗したら Stripe を呼ばない
+ *     （お金は動かない＝安全）。payout 行の id を取得する。
+ *  3. Stripe payout を実行する。idempotency_key と metadata.payout_id に payout 行の id を使う
+ *     （再試行で二重送金しない／Webhook 照合のバックアップ）。
+ *  4. Stripe 成功 → payout 行に stripe_payout_id を更新する（status は pending のまま。
+ *     確定は payout.paid Webhook を正とする）。
+ *  5. Stripe 失敗（例外）→ DB を revert する（payout 行を status=failed＋failure_reason、
+ *     対象 tip を payable へ戻す・payout_id=NULL）。エラーは呼び出し元へ再送出する。
  *
  * 着金の確定は payout.paid / payout.failed Webhook を正とする（ここでは pending で記録するだけ）。
  * プロフィール未作成なら null。
@@ -446,20 +455,34 @@ export async function createStaffPayout(
     throw new PayoutNotVerifiedError();
   }
 
-  // Stripe payout を実行（Connected Account の残高→銀行。送金額はそのまま店員さんが受け取る）
-  const stripeResult = await createPayout({
-    connectedAccountId: ctx.stripeAccountId,
-    amount: payoutAmount,
-    currency: CURRENCY,
-  });
-
-  // payout 行を pending で記録し、対象の payable tip を paid＋payout_id 紐付けへ（トランザクション）
-  const payout = await repo.createPayoutAndMarkTipsPaid({
+  // 【手順2】先に DB へ pending で記録し、対象 payable tip を paid＋紐付けへ（トランザクション）。
+  // ここで失敗すれば例外が伝播して Stripe は呼ばれない（お金は動かない＝安全）。
+  const payout = await repo.createPendingPayoutAndMarkTipsPaid({
     staffId: ctx.staffId,
     amount: payoutAmount,
-    stripePayoutId: stripeResult.payoutId,
     tipIds: payableTips.map((t) => t.tipId),
   });
+
+  // 【手順3】Stripe payout を実行（Connected Account の残高→銀行。送金手数料は店員から取らない）。
+  // idempotency_key・metadata.payout_id に自前 payout 行の id を使う（二重送金防止／Webhook 照合のバックアップ）。
+  let stripeResult: StripeCreatePayoutResult;
+  try {
+    stripeResult = await createPayout({
+      connectedAccountId: ctx.stripeAccountId,
+      amount: payoutAmount,
+      currency: CURRENCY,
+      idempotencyKey: payout.id,
+      payoutId: payout.id,
+    });
+  } catch (err) {
+    // 【手順5】Stripe 失敗 → DB を revert（payout=failed＋tip を payable へ戻す）。原因を記録して再送出する。
+    const reason = err instanceof Error ? err.message : "stripe_payout_failed";
+    await repo.revertPayoutByPayoutId(payout.id, reason);
+    throw err;
+  }
+
+  // 【手順4】Stripe 成功 → payout 行に stripe_payout_id を補完（status は pending のまま）。
+  await repo.attachStripePayoutId(payout.id, stripeResult.payoutId);
 
   return {
     id: payout.id,
@@ -506,14 +529,19 @@ export async function applyPayoutWebhookUpdate(
   repo: StaffRepository,
   params: {
     kind: "paid" | "failed";
+    // Stripe Payout ID（主の照合キー）
     stripePayoutId: string;
+    // 自前 payout 行の id（metadata.payout_id 由来・従の照合キー。stripe_payout_id 未補完時の保険）
+    payoutId: string | null;
     arrivedAt: Date | null;
     failureReason: string | null;
   },
 ): Promise<boolean> {
+  // 照合は stripe_payout_id を主・自前 payout 行の id を従とする（更新前に落ちても Webhook で確定できる）
+  const match = { stripePayoutId: params.stripePayoutId, payoutId: params.payoutId };
   if (params.kind === "paid") {
     // 着金日時は Webhook の値（無ければ現在時刻）
-    return repo.markPayoutPaid(params.stripePayoutId, params.arrivedAt ?? new Date());
+    return repo.markPayoutPaid(match, params.arrivedAt ?? new Date());
   }
-  return repo.markPayoutFailedAndRevertTips(params.stripePayoutId, params.failureReason);
+  return repo.markPayoutFailedAndRevertTips(match, params.failureReason);
 }

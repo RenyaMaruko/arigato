@@ -23,6 +23,8 @@ export type VerifiedEvent = {
   payoutsEnabled: boolean | null;
   // payout.* 系の Stripe Payout ID（送金の着金/失敗の照合に使う。該当しないイベントは null）
   payoutId: string | null;
+  // payout.* の metadata.payout_id（自前 payout 行の id・照合バックアップ。該当しないイベントは null）
+  payoutMetadataId: string | null;
   // payout.paid の着金日時（対象外は null）
   payoutArrivedAt: Date | null;
   // payout.failed の失敗理由（対象外は null）
@@ -72,8 +74,10 @@ export type HandleWebhookResult = {
 export type ApplyPayoutUpdate = (params: {
   // 確定種別（paid / failed）
   kind: "paid" | "failed";
-  // 自前 payout を照合する Stripe Payout ID
+  // 自前 payout を照合する Stripe Payout ID（主の照合キー）
   stripePayoutId: string;
+  // metadata.payout_id（自前 payout 行の id・従の照合キー。stripe_payout_id 更新前に落ちても確定できる保険）
+  payoutId: string | null;
   // payout.paid の着金日時
   arrivedAt: Date | null;
   // payout.failed の失敗理由
@@ -150,6 +154,8 @@ export async function handleStripeWebhook(
     const updated = await applyPayoutUpdate({
       kind: event.type === "payout.paid" ? "paid" : "failed",
       stripePayoutId: event.payoutId,
+      // metadata.payout_id（自前 payout 行の id）。stripe_payout_id 更新前に落ちた場合の照合バックアップ
+      payoutId: event.payoutMetadataId,
       arrivedAt: event.payoutArrivedAt,
       failureReason: event.payoutFailureReason,
     });

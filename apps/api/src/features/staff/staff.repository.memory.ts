@@ -180,8 +180,18 @@ export function createInMemoryStaffRepository(): StaffRepository {
     },
 
     // インメモリ実装は payout を永続化しないため、記録は擬似的に返すのみ（実 DB 環境で本実装が動く）
-    async createPayoutAndMarkTipsPaid(params) {
+    async createPendingPayoutAndMarkTipsPaid(params) {
       return { id: randomUUID(), amount: params.amount, status: "pending" as const };
+    },
+
+    // 同上。永続化しないため stripe_payout_id 補完は no-op（実 DB 環境で本実装が動く）
+    async attachStripePayoutId() {
+      // no-op
+    },
+
+    // 同上。永続化しないため revert は no-op（実 DB 環境で本実装が動く）
+    async revertPayoutByPayoutId() {
+      // no-op
     },
 
     // 同上。送金履歴も空
