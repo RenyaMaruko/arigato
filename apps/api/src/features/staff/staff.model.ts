@@ -204,12 +204,13 @@ export function selectPayoutTipsWithinAvailable(
   for (const tip of tips) {
     // 額面 → 店員手取り（約85%・floor）。残高・受取履歴の表示と同じ換算で整合させる
     const take = calculateStaffTakeAmount(tip.amount);
-    // この tip を足すと available を超えるなら選ばない（available 以下に収める）。
-    // 0円手取り（端数切り捨てで take=0）の tip はスキップしても累計に影響しないが、
-    // 念のため超過チェックの後に積む（take=0 は超過しないため自然に含まれる）。
+    // この tip を足すと available を超えるなら「スキップして次へ」（available 以下に収める）。
+    // available は Stripe 側で確定済み(settled)の額。受け取ったばかりで pending の tip は
+    // 手取りが大きく available を超えがちだが、それを break で打ち切ると、後ろにある
+    // available に収まる小さい tip まで送れなくなる（送金できる額>0 なのに送金不可になるバグ）。
+    // なので超過する tip はスキップ(continue)し、available に収まる tip を拾う。
     if (amount + take > availableAmount) {
-      // FIFO の途中で超えたら以降は積まない（古い分を優先して送る）
-      break;
+      continue;
     }
     amount += take;
     tipIds.push(tip.tipId);

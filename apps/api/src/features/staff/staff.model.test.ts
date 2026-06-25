@@ -126,6 +126,18 @@ describe("staff.model", () => {
     expect(selectPayoutTipsWithinAvailable([], 1000)).toEqual({ tipIds: [], amount: 0 });
   });
 
+  it("先頭(古い)tip が available を超えても打ち切らず、available に収まる後ろの tip を選ぶ（送金できる額>0 なのに送金不可になるバグの回帰）", () => {
+    // 古い ¥5000(手取り4250・Stripeはpending) → 新しい ¥1000(手取り850・available)。
+    // available=850。先頭の4250は超過するが break せずスキップし、後ろの850を選べること。
+    const tips = [
+      { tipId: "old", amount: 5000 },
+      { tipId: "new", amount: 1000 },
+    ];
+    const sel = selectPayoutTipsWithinAvailable(tips, 850);
+    expect(sel.amount).toBe(850);
+    expect(sel.tipIds).toEqual(["new"]);
+  });
+
   it("isInviteUsable は pending かつ店が導入承認に同意済みのときだけ true", () => {
     expect(isInviteUsable("pending", true)).toBe(true);
     // 店が導入承認に同意していなければ使えない（店承認を招待で担保）
