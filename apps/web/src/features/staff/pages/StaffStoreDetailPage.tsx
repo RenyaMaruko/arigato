@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate, useSearch } from "@tanstack/react-router";
+import { useNavigate, useParams } from "@tanstack/react-router";
 import { QRCodeSVG } from "qrcode.react";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StaffBottomNav } from "../components/StaffBottomNav.js";
@@ -8,22 +8,21 @@ import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe } from "../hooks/useStaff.js";
 
 /**
- * 店ごとのQR 発行画面（/staff/qr?m=:membershipId）。
- * 所属（membership＝人×店）ごとに別QR を貼るため、?m= で対象の所属を選び、
- * その所属の固定 URL（/tip/:membershipId）を指す QR を表示・印刷できるようにする。
- * QR は固定（再発行・失効なし）。読み取ると投げ銭画面が「その人＋その店」で開く。
- * ?m= が無い・不正なときは最初の所属にフォールバックする。
+ * 所属店舗の詳細画面（/staff/stores/:membershipId）。
+ * 多対多モデル（掛け持ち）で、所属（membership＝人×店）ごとの固定QR（/tip/:membershipId）を表示・印刷する。
+ * 所属店舗の一覧（/staff/stores）から選んで来る。QR は固定（再発行・失効なし）。
+ * 指定の所属が見つからないときは一覧へ戻す。
  */
-export function StaffQrPage() {
+export function StaffStoreDetailPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  // ?m= で表示対象の所属（membership）を受け取る
-  const { m: membershipParam } = useSearch({ from: "/staff/qr" });
+  // URL から対象の所属（membership）ID を受け取る
+  const { membershipId } = useParams({ from: "/staff/stores/$membershipId" });
   // ログイン状態と自分のプロフィール（所属一覧＝memberships を含む）を取得
   const { isAuthenticated, loading: authLoading } = useAuthSession();
   const meQuery = useStaffMe(isAuthenticated);
 
-  // 未ログイン・未作成なら入口（認証ゲート）へ戻す。リダイレクトは副作用で行う（描画中の setState を避ける）
+  // 未ログイン・未作成なら入口（認証ゲート）へ戻す。リダイレクトは副作用で行う
   const me = meQuery.data;
   const shouldRedirect = !authLoading && !meQuery.isLoading && (!isAuthenticated || !me);
   useEffect(() => {
@@ -43,11 +42,10 @@ export function StaffQrPage() {
     );
   }
 
-  // 表示対象の所属を決める（?m= 指定があればそれ、無ければ最初の所属）
-  const membership =
-    me.memberships.find((x) => x.membershipId === membershipParam) ?? me.memberships[0];
+  // URL の membershipId に対応する所属を探す
+  const membership = me.memberships.find((x) => x.membershipId === membershipId);
 
-  // 所属が1件も無いときは QR を出せない（招待からの参加を促す案内をホームで行う）
+  // 該当の所属が無いとき（不正なURL・脱退済み等）は一覧へ戻す
   if (!membership) {
     return (
       <PhoneFrame>
@@ -55,10 +53,10 @@ export function StaffQrPage() {
           <p className="text-token-md text-ink-sub">{t("staff.homeNoStores")}</p>
           <button
             type="button"
-            onClick={() => navigate({ to: "/staff" })}
+            onClick={() => navigate({ to: "/staff/stores" })}
             className="rounded-xl bg-rose px-6 py-3 text-token-md font-bold text-page"
           >
-            {t("staff.joinedGoHome")}
+            {t("staff.storesTitle")}
           </button>
         </div>
       </PhoneFrame>
@@ -76,7 +74,7 @@ export function StaffQrPage() {
       <div className="flex flex-none items-center justify-between px-[22px] pb-1.5 pt-2 print:hidden">
         <button
           type="button"
-          onClick={() => navigate({ to: "/staff" })}
+          onClick={() => navigate({ to: "/staff/stores" })}
           aria-label={t("staff.back")}
           className="flex h-6 w-6 items-center justify-center text-ink"
         >
@@ -162,9 +160,9 @@ export function StaffQrPage() {
         </div>
       </div>
 
-      {/* 下部ボトムナビ（現在地＝QR。印刷時は隠す） */}
+      {/* 下部ボトムナビ（現在地＝所属店舗。印刷時は隠す） */}
       <div className="print:hidden">
-        <StaffBottomNav active="qr" />
+        <StaffBottomNav active="stores" />
       </div>
     </PhoneFrame>
   );

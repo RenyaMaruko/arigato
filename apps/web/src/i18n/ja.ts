@@ -146,7 +146,9 @@ export const ja = {
       identityPending: "本人確認を確認中です",
       identityVerified: "本人確認済み",
       logout: "ログアウト",
-      // QR
+      // 所属店舗（一覧画面のタイトル）
+      storesTitle: "所属店舗",
+      // QR（所属店舗の詳細＝店ごとのQR）
       qrTitle: "QRコード",
       qrHeading: "あなた専用の投げ銭QR",
       // 店ごとのQR であることを示すサブ見出し（{{store}} に店名）
@@ -258,10 +260,10 @@ export const ja = {
       exportDownloading: "出力中…",
       exportError: "出力に失敗しました。もう一度お試しください。",
       exportLink: "申告データ（CSV）",
-      // ボトムナビ（モック01）。ホーム / 履歴 / QR / 設定
+      // ボトムナビ（モック01）。ホーム / 履歴 / 所属店舗 / 設定
       navHome: "ホーム",
       navHistory: "履歴",
-      navQr: "QR",
+      navStores: "所属店舗",
       navSettings: "設定",
       // 設定画面（10）。プロフィール・本人確認/口座・申告データ・ログアウトへの導線
       settingsTitle: "設定",

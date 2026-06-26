@@ -84,7 +84,7 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           )}
         </div>
 
-        {/* 所属しているお店（複数可・掛け持ち）。各店ごとに別QR（/tip/:membershipId）へ導く */}
+        {/* 所属しているお店（複数可・掛け持ち）。カードをタップで店舗詳細（店ごとのQR）へ導く */}
         <div className="mt-7">
           <div className="text-token-base font-bold text-ink-label">
             {t("staff.homeStoresLabel")}
@@ -97,10 +97,17 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           ) : (
             <div className="mt-3 flex flex-col gap-2.5">
               {me.memberships.map((m) => (
-                // 1店ぶんのカード（店アイコン＋店名＋その店のQRを表示する導線）
-                <div
+                // 1店ぶんのカード（タップで店舗詳細＝店ごとのQRへ）
+                <button
                   key={m.membershipId}
-                  className="flex items-center gap-3 rounded-xl border-[1.5px] border-line bg-page px-4 py-3"
+                  type="button"
+                  onClick={() =>
+                    navigate({
+                      to: "/staff/stores/$membershipId",
+                      params: { membershipId: m.membershipId },
+                    })
+                  }
+                  className="flex items-center gap-3 rounded-xl border-[1.5px] border-line bg-page px-4 py-3.5 text-left"
                 >
                   {/* 店のしるし（ローズ淡色の丸） */}
                   <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-rose">
@@ -109,36 +116,23 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
                   <span className="min-w-0 flex-1 truncate text-token-md font-semibold text-ink">
                     {m.storeName}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => navigate({ to: "/staff/qr", search: { m: m.membershipId } })}
-                    className="flex flex-none items-center gap-1.5 rounded-lg bg-rose px-3.5 py-2 text-token-sm font-bold text-page"
-                  >
-                    <QrIcon />
-                    {t("staff.homeStoreQr")}
-                  </button>
-                </div>
+                  {/* タップできることを示す右シェブロン */}
+                  <span className="flex-none text-muted-soft">
+                    <ChevronIcon />
+                  </span>
+                </button>
               ))}
             </div>
           )}
         </div>
 
-        {/* 機能アイコングリッド（モック01）。受取履歴・口座登録・データ出力・プロフィール編集へ導く */}
+        {/* 機能アイコングリッド（モック01）。受取履歴・データ出力・プロフィール編集へ導く。
+            送金・本人確認/口座登録は残高カードに一本化したため、重複を避けてグリッドからは外す。 */}
         <div className="mt-8 grid grid-cols-3 gap-x-2 gap-y-6">
           <FeatureTile
             label={t("staff.homeHistory")}
             onClick={() => navigate({ to: "/staff/history" })}
             icon={<HistoryIcon />}
-          />
-          <FeatureTile
-            label={t("staff.homePayout")}
-            onClick={() => navigate({ to: "/staff/payout" })}
-            icon={<WalletIcon />}
-          />
-          <FeatureTile
-            label={t("staff.homeAccount")}
-            onClick={() => navigate({ to: "/staff/identity" })}
-            icon={<CardIcon />}
           />
           <FeatureTile
             label={t("staff.exportLink")}
@@ -225,28 +219,6 @@ function StoreIcon() {
   );
 }
 
-/** QR アイコン（店ごとのQRを表示）。 */
-function QrIcon() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.9"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3" y="3" width="7" height="7" rx="1.2" />
-      <rect x="14" y="3" width="7" height="7" rx="1.2" />
-      <rect x="3" y="14" width="7" height="7" rx="1.2" />
-      <path d="M14 14h3v3M21 14v7M17 21h4M14 18.5v2.5" />
-    </svg>
-  );
-}
-
 /** 受取履歴（書類）アイコン。 */
 function HistoryIcon() {
   return (
@@ -263,47 +235,6 @@ function HistoryIcon() {
     >
       <rect x="5" y="3" width="14" height="18" rx="2.2" />
       <path d="M8.5 8h7M8.5 12h7M8.5 16h4" />
-    </svg>
-  );
-}
-
-/** 残高（財布）アイコン。 */
-function WalletIcon() {
-  return (
-    <svg
-      width="30"
-      height="30"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3" y="6" width="18" height="13" rx="2.4" />
-      <path d="M3 10h18" />
-      <circle cx="16.5" cy="14" r="1.1" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-/** 口座登録（カード）アイコン。 */
-function CardIcon() {
-  return (
-    <svg
-      width="30"
-      height="30"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
-      <path d="M2.5 9.5h19" />
     </svg>
   );
 }
