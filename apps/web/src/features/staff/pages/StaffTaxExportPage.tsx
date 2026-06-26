@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe } from "../hooks/useStaff.js";
 import { downloadTaxReport } from "../api/staff.api.js";
@@ -134,6 +135,9 @@ export function StaffTaxExportPage() {
           {downloading ? t("staff.exportDownloading") : t("staff.exportDownload")}
         </button>
       </div>
+
+      {/* 下部ボトムナビ（申告データ出力はタブに該当しないため active 未指定） */}
+      <StaffBottomNav />
     </PhoneFrame>
   );
 }

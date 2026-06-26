@@ -9,10 +9,12 @@ import { Link } from "@tanstack/react-router";
  */
 type NavKey = "home" | "history" | "stores" | "settings";
 
-export function StaffBottomNav({ active }: { active: NavKey }) {
+// active は任意。タブに該当しない画面（送金・プロフィール編集・本人確認など）では未指定で渡し、
+// その場合はどのタブもハイライトしない（全タブを淡色にする）。
+export function StaffBottomNav({ active }: { active?: NavKey }) {
   const { t } = useTranslation();
 
-  // 各タブの色（現在地はローズ・それ以外は淡いグレー）
+  // 各タブの色（現在地はローズ・それ以外＝未指定含むは淡いグレー）
   const colorFor = (key: NavKey) => (active === key ? "text-rose" : "text-muted-soft");
 
   return (

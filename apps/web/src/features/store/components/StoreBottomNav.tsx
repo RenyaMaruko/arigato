@@ -7,10 +7,11 @@ import { Link } from "@tanstack/react-router";
  */
 type NavKey = "home" | "staff" | "gratitude" | "settings";
 
-export function StoreBottomNav({ active }: { active: NavKey }) {
+// active は任意。タブに該当しない画面では未指定で渡し、その場合はどのタブもハイライトしない。
+export function StoreBottomNav({ active }: { active?: NavKey }) {
   const { t } = useTranslation();
 
-  // 各タブの色（現在地はローズ・それ以外は淡いグレー）
+  // 各タブの色（現在地はローズ・それ以外＝未指定含むは淡いグレー）
   const colorFor = (key: NavKey) => (active === key ? "text-rose" : "text-muted-soft");
 
   return (

@@ -4,6 +4,7 @@ import { useNavigate } from "@tanstack/react-router";
 import { MIN_PAYOUT_AMOUNT } from "@arigato/shared";
 import type { PayoutItem, PayoutStatus } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import {
   useStaffMe,
@@ -264,6 +265,9 @@ export function StaffPayoutPage() {
           </>
         )}
       </div>
+
+      {/* 下部ボトムナビ（送金はタブに該当しないため active 未指定＝どのタブもハイライトしない） */}
+      <StaffBottomNav />
 
       {/* 送金確認シート（下からせり上がる。スクリムタップ・キャンセルで閉じる） */}
       {confirmOpen && (

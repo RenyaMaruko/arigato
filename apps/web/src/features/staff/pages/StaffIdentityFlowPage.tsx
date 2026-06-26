@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe, useStartConnectOnboard } from "../hooks/useStaff.js";
 
@@ -119,6 +120,9 @@ export function StaffIdentityFlowPage() {
           {onboard.isPending ? t("staff.identityStarting") : t("staff.identityStart")}
         </button>
       </div>
+
+      {/* 下部ボトムナビ（本人確認フローはタブに該当しないため active 未指定） */}
+      <StaffBottomNav />
     </PhoneFrame>
   );
 }

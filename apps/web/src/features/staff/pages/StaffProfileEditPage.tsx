@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe, useUpdateStaffProfile } from "../hooks/useStaff.js";
 
@@ -171,6 +172,9 @@ function EditForm({
           {error && <div className="mt-3 text-center text-token-sm text-rose">{error}</div>}
         </form>
       </div>
+
+      {/* 下部ボトムナビ（プロフィール編集はタブに該当しないため active 未指定） */}
+      <StaffBottomNav />
     </PhoneFrame>
   );
 }
