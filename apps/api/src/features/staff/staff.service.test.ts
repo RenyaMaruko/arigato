@@ -43,8 +43,9 @@ import type {
  * - Connect オンボーディング・account.updated（held→payable 遷移・冪等）
  */
 
-// 受取履歴の拡張型（送金検証のため payoutId 追跡を足したもの。既存シードを壊さないため任意）
-type TestTip = StaffTipRow & { payoutId?: string | null };
+// 受取履歴の拡張型（送金検証のため payoutId 追跡・フィルタ検証のため storeId を足したもの。
+// 既存シードを壊さないため任意）。storeId 未指定は店舗フィルタ対象外として扱う。
+type TestTip = StaffTipRow & { payoutId?: string | null; storeId?: string | null };
 // 送金（payout）の内部表現
 type TestPayout = {
   id: string;
@@ -78,6 +79,23 @@ function createMockRepo() {
   let membershipSeq = 0;
   // payout ID の採番カウンタ
   let payoutSeq = 0;
+
+  // 実 DB の WHERE と同じ条件で tip を絞る共通フィルタ（list と合計で同一に使う＝サマリー連動）。
+  //  - 成立済み・返金/異議除外（既存の固定条件）
+  //  - storeId 指定時は t.store_id 一致
+  //  - from 指定時は receivedAt >= from（含む）/ to 指定時は receivedAt < to（排他）
+  function applyTipsFilter(
+    tips: TestTip[],
+    filter: { storeId?: string; from?: string; to?: string } | undefined,
+  ) {
+    return tips.filter((t) => {
+      if (t.settlementStatus === "refunded" || t.settlementStatus === "disputed") return false;
+      if (filter?.storeId && t.storeId !== filter.storeId) return false;
+      if (filter?.from && !(t.receivedAt >= filter.from)) return false;
+      if (filter?.to && !(t.receivedAt < filter.to)) return false;
+      return true;
+    });
+  }
 
   const repo: StaffRepository = {
     async findInviteByCode(code) {
@@ -168,9 +186,7 @@ function createMockRepo() {
     // 本人スコープ: その authUserId の履歴のみ「1ページ分」返す（キーセットページング）。
     // 実 DB と同じ並び（受取日時 DESC, id DESC）にし、cursor 以降を take 件返す。
     async listTipsPageByAuthUserId(params) {
-      const all = (tipsByAuth.get(params.authUserId) ?? [])
-        // 返金・異議は受取履歴から除外する（実 DB の WHERE と一致）
-        .filter((t) => t.settlementStatus !== "refunded" && t.settlementStatus !== "disputed")
+      const all = applyTipsFilter(tipsByAuth.get(params.authUserId) ?? [], params.filter)
         // 受取日時 DESC, id DESC（同点は id で安定させる）
         .slice()
         .sort((a, b) => {
@@ -194,10 +210,9 @@ function createMockRepo() {
 
     // 本人スコープ: その authUserId の全件集計（手取り合計・件数）を返す（ページに依らず一定）。
     // 実 DB の FLOOR(amount*0.85) と一致させるため Math.floor(amount*0.85) で合算する。
-    async getStaffTipsTotalsByAuthUserId(authUserId) {
-      const all = (tipsByAuth.get(authUserId) ?? []).filter(
-        (t) => t.settlementStatus !== "refunded" && t.settlementStatus !== "disputed",
-      );
+    async getStaffTipsTotalsByAuthUserId(authUserId, filter) {
+      // list とまったく同じフィルタを適用する（合計もフィルタ後＝サマリー連動）
+      const all = applyTipsFilter(tipsByAuth.get(authUserId) ?? [], filter);
       const totalAmount = all.reduce((sum, t) => sum + Math.floor(t.amount * 0.85), 0);
       return { totalCount: all.length, totalAmount };
     },
@@ -823,6 +838,168 @@ describe("staff.service", () => {
     const zero = await getStaffTips(mock.repo, "auth-A", { limit: 0 });
     expect(zero!.items).toHaveLength(20);
     expect(zero!.nextCursor).not.toBeNull();
+  });
+
+  // --- 受取履歴のフィルタ（店舗・期間。list と合計の両方に効く＝サマリー連動） ---
+
+  // 2店・異なる日付の受取を1人に仕込むヘルパ（フィルタ検証用）。
+  // store-1（カフェ）: 5月に2件（300/500）、store-bar（バー）: 6月に1件（1000）、4月に1件（200）。
+  async function seedFilterTips() {
+    await setupAndJoin(mock, "auth-F", "フィルタさん", "INV-OK");
+    await joinStore(mock.repo, buildUrl, "auth-F", "INV-BAR");
+    mock.tipsByAuth.set("auth-F", [
+      {
+        id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+        amount: 300,
+        message: null,
+        receivedAt: "2025-05-15T10:00:00Z",
+        storeName: "カフェ Arigato",
+        storeId: "store-1",
+        settlementStatus: "held",
+      },
+      {
+        id: "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb",
+        amount: 500,
+        message: null,
+        receivedAt: "2025-05-20T10:00:00Z",
+        storeName: "カフェ Arigato",
+        storeId: "store-1",
+        settlementStatus: "held",
+      },
+      {
+        id: "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        amount: 1000,
+        message: null,
+        receivedAt: "2025-06-10T10:00:00Z",
+        storeName: "バー Arigato",
+        storeId: "store-bar",
+        settlementStatus: "held",
+      },
+      {
+        id: "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        amount: 200,
+        message: null,
+        receivedAt: "2025-04-01T10:00:00Z",
+        storeName: "バー Arigato",
+        storeId: "store-bar",
+        settlementStatus: "held",
+      },
+    ]);
+  }
+
+  it("getStaffTips: storeId フィルタは一覧も合計もその店だけに絞る", async () => {
+    await seedFilterTips();
+    // store-1（カフェ）だけに絞る → 2件（300/500）
+    const res = await getStaffTips(mock.repo, "auth-F", { storeId: "store-1" });
+    expect(res!.items).toHaveLength(2);
+    expect(res!.items.every((i) => i.storeName === "カフェ Arigato")).toBe(true);
+    // 合計もフィルタ後（手取り floor(255)+floor(425)=680・件数2）。全件集計ではない
+    expect(res!.totalCount).toBe(2);
+    expect(res!.totalAmount).toBe(255 + 425);
+  });
+
+  it("getStaffTips: 期間フィルタ（from/to・to は排他）は範囲内だけに絞る（一覧・合計とも）", async () => {
+    await seedFilterTips();
+    // 2025-05-01 〜 2025-06-01（排他）＝5月分だけ。6月10日・4月1日は範囲外
+    const res = await getStaffTips(mock.repo, "auth-F", {
+      from: "2025-05-01T00:00:00Z",
+      to: "2025-06-01T00:00:00Z",
+    });
+    expect(res!.items).toHaveLength(2);
+    const ids = res!.items.map((i) => i.id);
+    expect(ids).toContain("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa");
+    expect(ids).toContain("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb");
+    // 合計もフィルタ後（5月の2件・手取り 680）
+    expect(res!.totalCount).toBe(2);
+    expect(res!.totalAmount).toBe(255 + 425);
+  });
+
+  it("getStaffTips: to は排他（境界の to と同時刻の受取は含めない）", async () => {
+    await seedFilterTips();
+    // to=2025-06-10T10:00:00Z（バーの1件と同時刻）。排他なのでその1件は含めない
+    const res = await getStaffTips(mock.repo, "auth-F", {
+      from: "2025-06-01T00:00:00Z",
+      to: "2025-06-10T10:00:00Z",
+    });
+    expect(res!.items).toHaveLength(0);
+    expect(res!.totalCount).toBe(0);
+    expect(res!.totalAmount).toBe(0);
+  });
+
+  it("getStaffTips: storeId＋期間の併用でさらに絞れる（一覧・合計とも）", async () => {
+    await seedFilterTips();
+    // store-bar かつ 6月 → バーの1件（1000）だけ
+    const res = await getStaffTips(mock.repo, "auth-F", {
+      storeId: "store-bar",
+      from: "2025-06-01T00:00:00Z",
+      to: "2025-07-01T00:00:00Z",
+    });
+    expect(res!.items).toHaveLength(1);
+    expect(res!.items[0]!.id).toBe("cccccccc-cccc-cccc-cccc-cccccccccccc");
+    expect(res!.totalCount).toBe(1);
+    // 手取り floor(1000*0.85)=850
+    expect(res!.totalAmount).toBe(850);
+  });
+
+  it("getStaffTips: フィルタ＋ページングが併用できる（フィルタ集合内で cursor が正しく続く）", async () => {
+    // store-1 に 3件、store-bar に 2件を仕込み、store-1 で limit=2 ページングする
+    await setupAndJoin(mock, "auth-P", "ページさん", "INV-OK");
+    await joinStore(mock.repo, buildUrl, "auth-P", "INV-BAR");
+    const tips: TestTip[] = [];
+    // store-1 の3件（新しい順に取得されるよう分単位でずらす）
+    for (let i = 0; i < 3; i++) {
+      tips.push({
+        id: `1111${i}111-1111-1111-1111-111111111111`,
+        amount: 300,
+        message: null,
+        receivedAt: `2025-05-15T10:0${i}:00Z`,
+        storeName: "カフェ Arigato",
+        storeId: "store-1",
+        settlementStatus: "held",
+      });
+    }
+    // store-bar の2件（フィルタで混ざらないことの確認用）
+    for (let i = 0; i < 2; i++) {
+      tips.push({
+        id: `2222${i}222-2222-2222-2222-222222222222`,
+        amount: 999,
+        message: null,
+        receivedAt: `2025-05-16T10:0${i}:00Z`,
+        storeName: "バー Arigato",
+        storeId: "store-bar",
+        settlementStatus: "held",
+      });
+    }
+    mock.tipsByAuth.set("auth-P", tips);
+
+    // store-1 で1ページ目（limit=2）→ 2件＋nextCursor、合計は store-1 の3件分
+    const page1 = await getStaffTips(mock.repo, "auth-P", { storeId: "store-1", limit: 2 });
+    expect(page1!.items).toHaveLength(2);
+    expect(page1!.nextCursor).not.toBeNull();
+    expect(page1!.totalCount).toBe(3);
+    // すべて store-1（バーは混ざらない）
+    expect(page1!.items.every((i) => i.storeName === "カフェ Arigato")).toBe(true);
+
+    // 2ページ目（cursor を渡す・フィルタは同じ）→ 残り1件、nextCursor=null
+    const page2 = await getStaffTips(mock.repo, "auth-P", {
+      storeId: "store-1",
+      limit: 2,
+      cursor: page1!.nextCursor!,
+    });
+    expect(page2!.items).toHaveLength(1);
+    expect(page2!.nextCursor).toBeNull();
+    expect(page2!.items[0]!.storeName).toBe("カフェ Arigato");
+    // 取りこぼし・重複なく store-1 の3件すべてが取れる
+    const ids = new Set([...page1!.items, ...page2!.items].map((i) => i.id));
+    expect(ids.size).toBe(3);
+  });
+
+  it("getStaffTips: フィルタ無し（指定なし）は全件（従来どおり）", async () => {
+    await seedFilterTips();
+    const res = await getStaffTips(mock.repo, "auth-F", {});
+    // 4件すべて。合計も全件
+    expect(res!.items).toHaveLength(4);
+    expect(res!.totalCount).toBe(4);
   });
 
   it("getStaffBalance: held 合計（保留残高）と着金可能額を本人に返す（人ごと集約）", async () => {

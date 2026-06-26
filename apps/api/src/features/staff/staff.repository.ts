@@ -83,6 +83,17 @@ export type StaffTipRow = {
   settlementStatus: SettlementStatus;
 };
 
+// 受取履歴の絞り込み（任意・list と合計の両方に同じ条件で適用する）。
+// list 取得・合計集計でまったく同じ WHERE を作るため1つの型に束ねる（サマリー連動を担保）。
+export type StaffTipsFilter = {
+  // 店舗で絞る（t.store_id = storeId）。未指定はフィルタ無し
+  storeId?: string;
+  // 受取日時の下限（COALESCE(succeeded_at,created_at) >= from）。ISO 文字列。未指定はフィルタ無し
+  from?: string;
+  // 受取日時の上限（COALESCE(succeeded_at,created_at) < to・排他）。ISO 文字列。未指定はフィルタ無し
+  to?: string;
+};
+
 // 受取履歴のキーセットページング取得に渡すパラメータ（本人のみ）。
 // cursor が無ければ先頭ページ。limit+1 件取って「次があるか」を判定するのは Service。
 export type ListTipsPageParams = {
@@ -91,6 +102,8 @@ export type ListTipsPageParams = {
   cursor: { receivedAt: string; id: string } | null;
   // 取得件数（Service が limit+1 を渡し、次ページの有無を判定する）
   take: number;
+  // 絞り込み（店舗・期間。未指定はフィルタ無し）。合計集計と同じ条件を渡す
+  filter?: StaffTipsFilter;
 };
 
 // 受取履歴の全件集計（合計金額・件数）。ページに依らず一定（必ず全件の別集計）。
@@ -190,8 +203,12 @@ export type StaffRepository = {
   // cursor 以降を COALESCE(succeeded_at,created_at) DESC, id DESC で take 件返す（金額・メッセージ含む）。
   listTipsPageByAuthUserId: (params: ListTipsPageParams) => Promise<StaffTipRow[]>;
   // 本人の受取履歴の「全件集計」（合計金額・件数）を取得する（ページに依らず一定・本人のみ）。
-  // ページの items から計算せず、必ず同じ WHERE 条件で全件を SUM/COUNT する。
-  getStaffTipsTotalsByAuthUserId: (authUserId: string) => Promise<StaffTipsTotals>;
+  // ページの items から計算せず、必ず list と同じ WHERE 条件（＋同じフィルタ）で全件を SUM/COUNT する。
+  // filter を渡すと合計もフィルタ後の値になる（サマリー連動）。
+  getStaffTipsTotalsByAuthUserId: (
+    authUserId: string,
+    filter?: StaffTipsFilter,
+  ) => Promise<StaffTipsTotals>;
   // 本人の保留残高集計に使う、成立済み tip の settlement 状態と金額を取得する（本人のみ）
   listSettlementsByAuthUserId: (authUserId: string) => Promise<SettlementRow[]>;
   // 本人の申告データ（受取記録）を年で絞って取得する（本人のみ）。year は西暦
@@ -306,6 +323,37 @@ export type ReconcileStaffTotals = {
   // 決済未確定（pending）の tip 件数（取りこぼしの掘り下げ対象の目安）
   pendingTipCount: number;
 };
+
+/**
+ * 受取履歴の絞り込み（店舗・期間）を SQL の AND 断片に変換する内部ヘルパ。
+ * list 取得と合計集計でまったく同じ条件を使い、サマリーが一覧と連動するようにする
+ * （合計もフィルタ後の全件集計になる）。値はパラメータとして束縛するため安全。
+ *  - storeId: t.store_id = ${storeId}
+ *  - from:    COALESCE(succeeded_at,created_at) >= ${from}::timestamptz（含む）
+ *  - to:      COALESCE(succeeded_at,created_at) <  ${to}::timestamptz（排他）
+ * 並びの基準（COALESCE(succeeded_at,created_at)）は orderExpr と同一にして整合させる。
+ * 未指定（undefined）の条件は付けない（フィルタ無し）。
+ */
+function buildTipsFilterCondition(filter: StaffTipsFilter | undefined) {
+  if (!filter) return sql``;
+  // 受取日時の式（ソート・cursor 比較と同一にする）
+  const receivedExpr = sql`COALESCE(t.succeeded_at, t.created_at)`;
+  const parts = [];
+  // 店舗フィルタ
+  if (filter.storeId) {
+    parts.push(sql`AND t.store_id = ${filter.storeId}`);
+  }
+  // 期間の下限（含む）
+  if (filter.from) {
+    parts.push(sql`AND ${receivedExpr} >= ${filter.from}::timestamptz`);
+  }
+  // 期間の上限（排他）
+  if (filter.to) {
+    parts.push(sql`AND ${receivedExpr} < ${filter.to}::timestamptz`);
+  }
+  // 断片を1つにまとめる（無ければ空）
+  return parts.length > 0 ? sql.join(parts, sql` `) : sql``;
+}
 
 /**
  * 実 DB（Drizzle / postgres-js）に対する Repository 実装を生成する。
@@ -533,6 +581,8 @@ export function createStaffRepository(): StaffRepository {
       const cursorCondition = params.cursor
         ? sql`AND (${orderExpr}, t.id) < (${params.cursor.receivedAt}::timestamptz, ${params.cursor.id}::uuid)`
         : sql``;
+      // 絞り込み（店舗・期間）。合計集計とまったく同じ条件を AND で足す（サマリー連動）。
+      const filterCondition = buildTipsFilterCondition(params.filter);
       const rows = await db.execute<StaffTipRow>(sql`
         SELECT
           t.id                AS "id",
@@ -549,6 +599,7 @@ export function createStaffRepository(): StaffRepository {
           AND t.status = 'succeeded'
           -- (f) 返金・チャージバックの tip は受取履歴から除外する
           AND t.settlement_status NOT IN ('refunded', 'disputed')
+          ${filterCondition}
           ${cursorCondition}
         ORDER BY ${orderExpr} DESC, t.id DESC
         LIMIT ${params.take}
@@ -559,8 +610,10 @@ export function createStaffRepository(): StaffRepository {
     // 本人の受取履歴の「全件集計」（合計金額・件数）を取得する（ページに依らず一定・本人のみ）。
     // ページの items から計算せず、受取履歴と同じ WHERE 条件で全件を SUM/COUNT する。
     // 手取り合計は FLOOR(amount * 0.85)（＝JS の calculateStaffTakeAmount=Math.floor(amount*0.85)）と一致させる。
-    async getStaffTipsTotalsByAuthUserId(authUserId) {
+    async getStaffTipsTotalsByAuthUserId(authUserId, filter) {
       const db = getDb();
+      // list 取得とまったく同じフィルタ条件を AND で足す（合計もフィルタ後の値＝サマリー連動）。
+      const filterCondition = buildTipsFilterCondition(filter);
       const rows = await db.execute<StaffTipsTotals>(sql`
         SELECT
           COUNT(*)::int                                  AS "totalCount",
@@ -571,6 +624,7 @@ export function createStaffRepository(): StaffRepository {
           AND t.status = 'succeeded'
           -- (f) 返金・チャージバックの tip は合計集計から除外する（受取履歴と同じ条件）
           AND t.settlement_status NOT IN ('refunded', 'disputed')
+          ${filterCondition}
       `);
       // COUNT/SUM は必ず1行返る（0件でも 0）。念のためフォールバックを置く
       return rows[0] ?? { totalCount: 0, totalAmount: 0 };

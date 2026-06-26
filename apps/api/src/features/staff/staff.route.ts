@@ -53,7 +53,7 @@ type StaffDeps = {
   // cursor（次ページの基点）・limit（1ページ件数・既定20）を受け取る。
   getStaffTips: (
     authUserId: string,
-    query: { cursor?: string; limit?: number },
+    query: { cursor?: string; limit?: number; storeId?: string; from?: string; to?: string },
   ) => Promise<StaffTipsResponse | null>;
   // 保留残高サマリ（held 合計・着金可能額・本人のみ）。未作成なら null
   getStaffBalance: (authUserId: string) => Promise<StaffBalance | null>;
@@ -132,8 +132,10 @@ export function createStaffRoute(deps: StaffDeps) {
     // cursor が不正でも Service が先頭ページ扱いにフォールバックする（落とさない）。
     .get("/me/tips", zValidator("query", StaffTipsQuerySchema), async (c) => {
       const authUser = c.get("authUser");
-      const { cursor, limit } = c.req.valid("query");
-      const tips = await deps.getStaffTips(authUser.id, { cursor, limit });
+      // cursor/limit に加え、店舗・期間フィルタ（storeId/from/to）を受け取る。
+      // 不正値は Zod が undefined に倒すため、ここでは安全側の値だけが渡る（フィルタ無し扱い）。
+      const { cursor, limit, storeId, from, to } = c.req.valid("query");
+      const tips = await deps.getStaffTips(authUser.id, { cursor, limit, storeId, from, to });
       if (!tips) {
         return c.json({ error: "staff_not_found" }, 404);
       }

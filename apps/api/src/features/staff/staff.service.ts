@@ -287,12 +287,26 @@ export async function updateStaffProfile(
  *    cursor が不正・壊れていても落とさず、先頭ページ扱いにフォールバックする（Model の decode が null を返す）。
  *  - limit を 1〜50 にクランプ（既定 20）。limit+1 件取って「次があるか」を判定し、nextCursor を返す。
  *  - 合計（totalAmount / totalCount）は「全受取」の別集計（Repository の SUM/COUNT）を使う。
- *    ページの items から計算しないため、どのページでも一定（全件の手取り合計・件数）。
+ *    ページの items から計算しないため、どのページでも一定（フィルタ後の手取り合計・件数）。
+ *
+ * フィルタ（任意・店舗 storeId・期間 from/to）:
+ *  - クエリの storeId/from/to をそのまま絞り込み条件として解釈し、
+ *    list 取得（listTipsPageByAuthUserId）と 合計集計（getStaffTipsTotalsByAuthUserId）の
+ *    **両方に同じ条件**を渡す。これにより合計もフィルタ後の値になり、サマリーが一覧と連動する。
+ *  - 不正値（Zod で undefined に倒したもの）は条件に入らない（フィルタ無し扱い・落とさない）。
+ *  - cursor 比較はフィルタ後の集合内で正しく動く（WHERE に AND で足すだけ・並びは不変）。
  */
 export async function getStaffTips(
   repo: StaffRepository,
   authUserId: string,
-  query: { cursor?: string; limit?: number } = {},
+  query: {
+    cursor?: string;
+    limit?: number;
+    // 絞り込み（店舗・期間。未指定はフィルタ無し）
+    storeId?: string;
+    from?: string;
+    to?: string;
+  } = {},
 ): Promise<StaffTipsResponse | null> {
   // 本人が存在するか（未作成なら履歴も無い）
   const me = await repo.findStaffByAuthUserId(authUserId);
@@ -309,11 +323,20 @@ export async function getStaffTips(
   // cursor を解釈する（不正・壊れていれば null＝先頭ページ扱い。落とさない）
   const cursor = decodeTipCursor(query.cursor);
 
+  // 絞り込み（店舗・期間）を1つにまとめる。list と合計で同じ条件を使う（サマリー連動）。
+  // 指定が無い項目は undefined のまま（Repository 側で条件を付けない＝フィルタ無し）。
+  const filter = {
+    storeId: query.storeId,
+    from: query.from,
+    to: query.to,
+  };
+
   // 次ページの有無を判定するため limit+1 件を要求する（多く取れたら次がある）
   const rows = await repo.listTipsPageByAuthUserId({
     authUserId,
     cursor,
     take: limit + 1,
+    filter,
   });
 
   // 次ページがあるか（limit を超えて取れたか）。超過分は表示せず捨てる
@@ -339,8 +362,9 @@ export async function getStaffTips(
       ? encodeTipCursor({ receivedAt: lastRow.receivedAt, id: lastRow.id })
       : null;
 
-  // 合計は必ず「全受取」の別集計（ページの items から計算しない・ページに依らず一定）
-  const totals = await repo.getStaffTipsTotalsByAuthUserId(authUserId);
+  // 合計は必ず「全受取」の別集計（ページの items から計算しない・ページに依らず一定）。
+  // list とまったく同じフィルタを渡し、合計もフィルタ後の値にする（サマリー連動）。
+  const totals = await repo.getStaffTipsTotalsByAuthUserId(authUserId, filter);
 
   return {
     items,

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import type { StaffTipItem, SettlementStatus } from "@arigato/shared";
@@ -6,6 +6,11 @@ import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe, useStaffTips } from "../hooks/useStaff.js";
+import {
+  computePeriodRange,
+  TIPS_PERIODS,
+  type TipsPeriod,
+} from "../lib/tipsFilters.js";
 
 /**
  * 受取履歴画面（/staff/history・モック04）。
@@ -16,9 +21,45 @@ export function StaffTipsHistoryPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { isAuthenticated, loading: authLoading } = useAuthSession();
-  // 自分のプロフィール（未作成・未ログインなら入口へ戻す）と受取履歴
+  // 自分のプロフィール（未作成・未ログインなら入口へ戻す）
   const meQuery = useStaffMe(isAuthenticated);
-  const tipsQuery = useStaffTips(isAuthenticated && Boolean(meQuery.data));
+
+  // 店舗・期間フィルタの選択状態（UI 状態なので useState で持つ）。
+  // storeId="" は「すべての店舗」、period="all" は「期間フィルタ無し」を表す。
+  const [storeId, setStoreId] = useState<string>("");
+  const [period, setPeriod] = useState<TipsPeriod>("all");
+
+  // 所属店一覧（店舗セレクタの選択肢）
+  const memberships = meQuery.data?.memberships ?? [];
+  // 重複店（掛け持ちで同店が複数 membership になる可能性）を除いた店舗一覧
+  const stores = useMemo(() => {
+    const seen = new Set<string>();
+    const list: { storeId: string; storeName: string }[] = [];
+    for (const m of memberships) {
+      if (!seen.has(m.storeId)) {
+        seen.add(m.storeId);
+        list.push({ storeId: m.storeId, storeName: m.storeName });
+      }
+    }
+    return list;
+  }, [memberships]);
+
+  // 期間プリセット → from/to（ISO）を計算し、店舗とまとめてフィルタにする。
+  // フィルタ未指定（すべて）は undefined にして API クエリに載せない。
+  const filter = useMemo(() => {
+    const range = computePeriodRange(period);
+    return {
+      storeId: storeId || undefined,
+      from: range.from,
+      to: range.to,
+    };
+  }, [storeId, period]);
+
+  // 何らかのフィルタが効いているか（0件時の文言を「全体0件」と「条件0件」で分けるために使う）
+  const hasActiveFilter = Boolean(filter.storeId || filter.from || filter.to);
+
+  // 受取履歴（フィルタを queryKey に含めるため、フィルタ変更で自動リセット＝先頭から取り直す）
+  const tipsQuery = useStaffTips(isAuthenticated && Boolean(meQuery.data), filter);
 
   // 未ログイン・未作成なら入口（認証ゲート）へ戻す
   const shouldRedirect =
@@ -63,9 +104,9 @@ export function StaffTipsHistoryPage() {
     return () => observer.disconnect();
   }, [hasNextPage, isFetchingNextPage, fetchNextPage, items.length]);
 
-  // ローディング表示（認証・プロフィール・履歴のいずれか取得中）
+  // ローディング表示（認証・プロフィール・履歴のいずれか取得中）。スピナーで示す
   if (authLoading || meQuery.isLoading || !meQuery.data) {
-    return <HistoryLoading label={t("staff.loading")} />;
+    return <HistoryLoading />;
   }
 
   return (
@@ -86,19 +127,56 @@ export function StaffTipsHistoryPage() {
       </div>
 
       <div className="flex flex-1 flex-col overflow-y-auto px-5 pb-6 pt-4">
+        {/* フィルタ行（店舗・期間）。ヘッダー直下・サマリーの上に置く。
+            フィルタ変更で useStaffTips が自動リセットされ、一覧・サマリーが連動して絞られる。
+            所属が1店だけのときは店舗セレクタを出さない（選びようがないため）。 */}
+        <div className="mb-3 flex flex-wrap items-center gap-2">
+          {stores.length > 1 && (
+            <FilterSelect
+              ariaLabel={t("staff.tipsFilterStoreLabel")}
+              value={storeId}
+              onChange={setStoreId}
+              options={[
+                { value: "", label: t("staff.tipsFilterAllStores") },
+                ...stores.map((s) => ({ value: s.storeId, label: s.storeName })),
+              ]}
+            />
+          )}
+          <FilterSelect
+            ariaLabel={t("staff.tipsFilterPeriodLabel")}
+            value={period}
+            onChange={(v) => setPeriod(v as TipsPeriod)}
+            options={TIPS_PERIODS.map((p) => ({
+              value: p,
+              label: t(`staff.tipsFilterPeriod${capitalize(p)}` as const),
+            }))}
+          />
+        </div>
+
         {tipsQuery.isLoading ? (
-          <div className="flex flex-1 items-center justify-center text-token-md text-ink-sub">
-            {t("staff.loading")}
+          // 初回（フィルタ変更含む）ローディングはスピナーで示す（やや上寄りで中央に）
+          <div className="flex flex-1 items-center justify-center pb-10">
+            <Spinner />
           </div>
         ) : tipsQuery.isError ? (
-          // 取得に失敗したときのエラー表示（空・ローディングと分岐）
-          <div className="flex flex-1 items-center justify-center px-6 text-center text-token-md text-muted">
-            {t("staff.loadError")}
+          // 取得に失敗したときのエラー表示（空・ローディングと分岐・カード体裁で浮かせない）
+          <div className="flex flex-1 items-center justify-center pb-10">
+            <div className="rounded-xl border-[1.5px] border-line bg-surface-subtle px-6 py-6 text-center text-token-sm leading-relaxed text-ink-sub">
+              {t("staff.loadError")}
+            </div>
           </div>
         ) : items.length === 0 ? (
-          // 受取がまだ無いときの空表示
-          <div className="flex flex-1 items-center justify-center px-6 text-center text-token-md text-muted">
-            {t("staff.tipsEmpty")}
+          // 0件の空表示。フィルタが効いているかで文言を分ける（全体0件 / 条件0件）。
+          // ハートを淡く添えてカード体裁で見せ、ぽつんと浮かないようにする。
+          <div className="flex flex-1 items-center justify-center pb-10">
+            <div className="flex flex-col items-center gap-3 rounded-xl border-[1.5px] border-line bg-surface-subtle px-8 py-8 text-center">
+              <span className="flex h-12 w-12 items-center justify-center rounded-full bg-rose-soft text-rose">
+                <HeartIcon />
+              </span>
+              <span className="text-token-sm leading-relaxed text-ink-sub">
+                {hasActiveFilter ? t("staff.tipsFilteredEmpty") : t("staff.tipsEmpty")}
+              </span>
+            </div>
           </div>
         ) : (
           <>
@@ -150,10 +228,8 @@ export function StaffTipsHistoryPage() {
                 番兵が可視になると IntersectionObserver が次ページを取りに行く。
                 次ページが無くなれば番兵は描画されず、自動取得は停止する。 */}
             {hasNextPage && (
-              <div ref={sentinelRef} className="flex justify-center py-4">
-                {isFetchingNextPage && (
-                  <span className="text-token-sm text-ink-sub">{t("staff.loading")}</span>
-                )}
+              <div ref={sentinelRef} className="flex justify-center py-5">
+                {isFetchingNextPage && <Spinner size="sm" />}
               </div>
             )}
           </>
@@ -251,15 +327,93 @@ function SettlementBadge({ status }: { status: SettlementStatus }) {
   );
 }
 
-/** 受取履歴画面のローディング表示（スマホ枠内で中央寄せ）。 */
-function HistoryLoading({ label }: { label: string }) {
+/** 受取履歴画面のローディング表示（スマホ枠内で中央寄せ・スピナー）。 */
+function HistoryLoading() {
   return (
     <PhoneFrame>
-      <div className="flex flex-1 items-center justify-center text-token-md text-ink-sub">
-        {label}
+      <div className="flex flex-1 items-center justify-center">
+        <Spinner />
       </div>
     </PhoneFrame>
   );
+}
+
+/**
+ * 回転スピナー（Tailwind の animate-spin を使った円）。
+ * 初回ローディング・次ページ取得中の「読み込み中」を、文字ではなく回転円で示す。
+ * 色はアクセント（ローズ系）。淡いリングに濃い1/4を重ねて回転が見えるようにする。
+ * size: 初回ローディングは大きめ（md）、末尾の追加読み込みは控えめ（sm）に分ける。
+ */
+function Spinner({ size = "md" }: { size?: "sm" | "md" }) {
+  // 大きさ・線の太さをサイズで切り替える（初回は存在感、追加読み込みは控えめ）
+  const sizeClass =
+    size === "sm" ? "h-5 w-5 border-2" : "h-7 w-7 border-[2.5px]";
+  return (
+    <span
+      role="status"
+      aria-label="読み込み中"
+      className={`inline-block animate-spin rounded-full border-rose-soft border-t-rose ${sizeClass}`}
+    />
+  );
+}
+
+/**
+ * フィルタ用の小さなセレクト（店舗・期間共通）。
+ * ネイティブ select を「軽やかで押しやすい」ピル型に整える。
+ * - 既定値（すべて/全店舗 = 先頭オプション）以外を選ぶと、効いていると分かるようローズ塗りにする
+ * - 右端に小さな▾（自前 SVG）を重ね、ネイティブの矢印は appearance-none で消す
+ * - 機能（value/onChange）はそのまま。スタイルとマークアップだけ。
+ * インラインスタイルは使わず Tailwind ユーティリティで書く。
+ */
+function FilterSelect({
+  ariaLabel,
+  value,
+  onChange,
+  options,
+}: {
+  ariaLabel: string;
+  value: string;
+  onChange: (value: string) => void;
+  options: { value: string; label: string }[];
+}) {
+  // 先頭オプション（すべて / すべての店舗）が既定。それ以外を選んでいたら「絞り込み中」として強調する
+  const isActive = value !== options[0]?.value;
+
+  // 選択状態に応じてピルの色を切り替える（既定=白枠、絞り込み中=ローズ塗り）
+  const pillClass = isActive
+    ? "border-rose bg-rose text-page"
+    : "border-line bg-page text-ink-label";
+
+  return (
+    <div className="relative inline-flex">
+      <select
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`h-9 appearance-none rounded-pill border-[1.5px] pl-3.5 pr-8 text-token-sm font-semibold focus:outline-none focus:ring-2 focus:ring-rose-spark/60 ${pillClass}`}
+      >
+        {options.map((opt) => (
+          <option key={opt.value} value={opt.value}>
+            {opt.label}
+          </option>
+        ))}
+      </select>
+      {/* 右端の▾（クリックは下の select に通す）。色はピルの状態に合わせる */}
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-y-0 right-2.5 flex items-center ${
+          isActive ? "text-page" : "text-ink-sub"
+        }`}
+      >
+        <ChevronDownIcon />
+      </span>
+    </div>
+  );
+}
+
+// 期間プリセットのキー（thisMonth 等）を i18n キー（...ThisMonth）の語に合わせて先頭大文字化する
+function capitalize(value: string): string {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 /** お客さまアバター枠に置くハート（匿名のお客さまのプレースホルダ）。 */
@@ -273,6 +427,25 @@ function HeartIcon() {
       aria-hidden="true"
     >
       <path d="M12 21s-7.5-4.6-10-9.2C.6 9 1.6 5.5 4.7 4.6 6.8 4 8.8 4.9 10 6.6c.4.5.7 1 .9 1.4.2-.4.5-.9.9-1.4C13 4.9 15 4 17.1 4.6c3.1.9 4.1 4.4 2.7 7.2C19.5 16.4 12 21 12 21z" />
+    </svg>
+  );
+}
+
+/** フィルタピル右端の下向きシェブロン（▾）。 */
+function ChevronDownIcon() {
+  return (
+    <svg
+      width="12"
+      height="12"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2.5"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="m6 9 6 6 6-6" />
     </svg>
   );
 }

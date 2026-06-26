@@ -173,6 +173,16 @@ export const ja = {
       tipsTotalAmountLabel: "総受取金額",
       tipsTotalCountLabel: "総受取件数",
       tipsEmpty: "まだ受け取った投げ銭はありません",
+      // フィルタ（店舗・期間）で1件も該当しないときの空表示（全体0件とは文言を分ける）
+      tipsFilteredEmpty: "この条件の受取はありません",
+      // 店舗・期間フィルタのラベル・選択肢
+      tipsFilterStoreLabel: "店舗",
+      tipsFilterAllStores: "すべての店舗",
+      tipsFilterPeriodLabel: "期間",
+      tipsFilterPeriodAll: "すべて",
+      tipsFilterPeriodThisMonth: "今月",
+      tipsFilterPeriodLastMonth: "先月",
+      tipsFilterPeriodThisYear: "今年",
       // 受取履歴の取得に失敗したとき（空・ローディングと分岐）
       loadError: "受取履歴を読み込めませんでした",
       tipsSettlementHeld: "保留中",
