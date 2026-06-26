@@ -26,7 +26,9 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
   // 保留残高サマリ（本人のみ）。このページはログイン済み＋プロフィール取得済みのときだけ描画されるため有効化する
   const balanceQuery = useStaffBalance(true);
   const balance = balanceQuery.data;
-  // 未取得・ローディング時は 0 として控えめに扱い、レイアウトを崩さない
+  // 残高を取得できたか。読み込み中は 0 を出さずプレースホルダにして、0→実値のチラつきを防ぐ
+  const balanceReady = balance !== undefined;
+  // 未取得・ローディング時は 0 として扱い計算を崩さない（表示は balanceReady で出し分ける）
   const heldAmount = balance?.heldAmount ?? 0;
   const payableAmount = balance?.payableAmount ?? 0;
   // 送金できる額＝Stripe の実 available（#5: 送金可能額の正）。未確認・残高取得前は 0
@@ -45,21 +47,32 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           <div className="text-token-sm font-semibold text-rose/80">
             {t("staff.homeBalanceLabel")}
           </div>
-          <div className="mt-1 text-[30px] font-bold leading-none text-rose">
-            ¥{(heldAmount + payableAmount).toLocaleString()}
-          </div>
+          {balanceReady ? (
+            <div className="mt-1 text-[30px] font-bold leading-none text-rose">
+              ¥{(heldAmount + payableAmount).toLocaleString()}
+            </div>
+          ) : (
+            // 読み込み中はスケルトン（0 をチラ見せしない）
+            <div
+              className="mt-1.5 h-[26px] w-28 animate-pulse rounded-md bg-rose/20"
+              aria-hidden="true"
+            />
+          )}
           {/* 送金できる条件の一言。
               未確認＝本人確認で送金可能に／確認済＝いま送金できる額（Stripe available）を示す。
               残高（受取総額）は隠さず、そのうち今すぐ送れる額が available であることを伝える。 */}
           <div className="mt-2 text-token-xs text-rose/70">
-            {verified
-              ? sendableAmount < heldAmount + payableAmount
-                ? // 受取総額の一部だけが今すぐ送金できる（残りは準備中＝Stripe 確定待ち）
-                  t("staff.homeBalanceSendableNote", {
-                    amount: `¥${sendableAmount.toLocaleString()}`,
-                  })
-                : t("staff.homeBalanceVerifiedNote")
-              : t("staff.homeBalanceToSendNote")}
+            {!balanceReady
+              ? // 読み込み中は一言も出さない（高さは維持してボタン位置をずらさない）
+                " "
+              : verified
+                ? sendableAmount < heldAmount + payableAmount
+                  ? // 受取総額の一部だけが今すぐ送金できる（残りは準備中＝Stripe 確定待ち）
+                    t("staff.homeBalanceSendableNote", {
+                      amount: `¥${sendableAmount.toLocaleString()}`,
+                    })
+                  : t("staff.homeBalanceVerifiedNote")
+                : t("staff.homeBalanceToSendNote")}
           </div>
 
           {/* 残高のすぐ下のアクション。未確認なら本人確認へ、確認済なら送金（送金画面）へ */}
