@@ -639,6 +639,15 @@ export function createStaffRepository(): StaffRepository {
         WHERE s.auth_user_id = ${authUserId}
           AND t.status = 'succeeded'
           AND t.settlement_status = 'payable'
+          -- (c) 送金候補は「Stripe で実際に送金可能(available)になった分」だけに絞る。
+          -- bt_status=available（0077等で即確定）か、available_on を過ぎた（4242等が確定）tip のみ。
+          -- これをしないと pending（確定待ち）の tip まで送金対象に選ばれ、送れるはずの settled tip が
+          -- 残ったり、pending を paid にして DB と Stripe の割り当てがズレる（宙ぶらりんの余りが出る）。
+          -- 最終的な送金額は呼び出し側で Stripe 実 available を上限にキャップする（#5）。
+          AND (
+            t.bt_status = 'available'
+            OR (t.available_on IS NOT NULL AND t.available_on <= now())
+          )
         ORDER BY COALESCE(t.succeeded_at, t.created_at) ASC
       `);
       return rows;
