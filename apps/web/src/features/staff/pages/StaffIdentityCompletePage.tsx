@@ -48,9 +48,6 @@ export function StaffIdentityCompletePage() {
     return <CompleteLoading label={t("staff.loading")} />;
   }
 
-  // 着金可能額（verified 後に payable へ昇格した分）
-  const payableAmount = balance?.payableAmount ?? 0;
-
   return (
     <PhoneFrame>
       {verified ? (
@@ -81,35 +78,15 @@ export function StaffIdentityCompletePage() {
           <div className="mt-7 text-center text-token-4xl font-bold text-ink">
             {t("staff.identityCompleteTitle")}
           </div>
-          <div className="mt-3 text-center text-token-md text-ink-sub">
-            {t("staff.identityCompleteSub")}
-          </div>
 
-          {/* 着金可能額の再掲 */}
-          <div className="mt-7 rounded-[18px] border border-rose-spark/60 bg-rose-soft px-[22px] py-[22px] text-center">
-            <div className="text-token-base text-rose/80">
-              {t("staff.identityCompleteAmountLabel")}
-            </div>
-            <div className="mt-2 text-[34px] font-bold leading-none text-rose">
-              ¥{payableAmount.toLocaleString()}
-            </div>
-          </div>
-
-          {/* 主・副アクション */}
+          {/* アクションはホームに戻るのみ（余計な情報・導線は出さない） */}
           <div className="mt-auto flex flex-col gap-3 pt-8">
             <button
               type="button"
-              onClick={() => navigate({ to: "/staff/balance" })}
+              onClick={() => navigate({ to: "/staff" })}
               className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
             >
-              {t("staff.identityCompleteSeeBalance")}
-            </button>
-            <button
-              type="button"
-              onClick={() => navigate({ to: "/staff/history" })}
-              className="rounded-xl border-[1.5px] border-line bg-page py-4 text-center text-token-md font-semibold text-ink-label"
-            >
-              {t("staff.identityCompleteSeeHistory")}
+              {t("staff.identityCompleteGoHome")}
             </button>
           </div>
         </div>
@@ -126,10 +103,10 @@ export function StaffIdentityCompletePage() {
           </div>
           <button
             type="button"
-            onClick={() => navigate({ to: "/staff/balance" })}
+            onClick={() => navigate({ to: "/staff" })}
             className="mt-8 rounded-xl border-[1.5px] border-line bg-page px-8 py-3.5 text-center text-token-md font-semibold text-ink-label"
           >
-            {t("staff.identityCompleteSeeBalance")}
+            {t("staff.identityCompleteGoHome")}
           </button>
         </div>
       )}

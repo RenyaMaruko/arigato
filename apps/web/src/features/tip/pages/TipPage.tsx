@@ -9,27 +9,28 @@ import { MessageInput } from "../components/MessageInput.js";
 import { PaymentSheet } from "../components/PaymentSheet.js";
 
 /**
- * 投げ銭画面（/tip/:staffId、モック 01/02）。
- * 店員さんの表示情報（顔写真枠・名前・店名・一言）を出し、
+ * 投げ銭画面（/tip/:membershipId、モック 01/02）。
+ * QR が指す所属（membership＝人×店）から、店員さんの表示情報（顔写真枠・名前・店名・一言）を出し、
  * 金額3択・メッセージを選んで「送る」から支払いシートを開く。
  *
  * 「送る」押下で投げ銭の PaymentIntent を作成し（Direct charge）、得られた client_secret を使って
  * シート内にアプリ内決済 UI（Express Checkout Element ＋ Payment Element）を埋め込む。
  * Apple Pay / Google Pay はワンタップのネイティブ決済シート、カードは埋め込み入力で
  * アプリ内のまま決済を確定する（別ページにリダイレクトしない）。
- * 決済成立の確定は Webhook を正とし、完了画面は succeeded を待ってから表示する。
+ * お客さま向けの完了/失敗表示は confirmPayment が返す PaymentIntent ステータスで即時に出す
+ * （Webhook 到着を待たない）。残高・着金などサーバー側の確定は引き続き Webhook を正とする。
  * お客さま向けのため認証は不要（ログイン/登録なしで完結）。
  */
 export function TipPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  // URL パラメータ（/tip/$staffId）
-  const { staffId } = useParams({ from: "/tip/$staffId" });
+  // URL パラメータ（/tip/$membershipId）。QR が指す所属（人×店）
+  const { membershipId } = useParams({ from: "/tip/$membershipId" });
 
-  // サーバー状態: 店員さんの表示情報
-  const { data: staff, isLoading, isError } = useStaffDisplayInfo(staffId);
+  // サーバー状態: membership から解決した店員さん（人）＋店の表示情報
+  const { data: staff, isLoading, isError } = useStaffDisplayInfo(membershipId);
   // 投げ銭作成（PaymentIntent 作成・client_secret 取得）ミューテーション
-  const createIntent = useCreateTipIntent(staffId);
+  const createIntent = useCreateTipIntent(membershipId);
 
   // 決済中フラグの setter（埋め込みフォームの confirm 中・完了遷移時に状態を同期する）。
   // 値自体はシート内のフォームが管理するため、ここでは setter だけ使う。
@@ -58,17 +59,19 @@ export function TipPage() {
     });
   };
 
-  // 決済が（アプリ内で）成立したとき: 完了画面へ遷移する（succeeded の確定は Webhook を正とし、
-  // 完了画面側で status をポーリングして待つ）。tipId は intent 作成結果から取得する。
-  const handlePaid = () => {
+  // 決済が（アプリ内で）成立したとき: 完了画面へ遷移する。
+  // confirm の確定区分（succeeded＝即完了 / processing＝結果は後ほど）を search param で完了画面へ渡し、
+  // succeeded はその場で完了表示する（Webhook を待たない）。processing のみ後続の確定を待つ。
+  // tipId は intent 作成結果から取得する。
+  const handlePaid = (status: "succeeded" | "processing") => {
     const tipId = createIntent.data?.tipId;
     if (!tipId) return;
     closeSheet();
     setPaying(false);
     navigate({
-      to: "/tip/$staffId/complete",
-      params: { staffId },
-      search: { tipId },
+      to: "/tip/$membershipId/complete",
+      params: { membershipId },
+      search: { tipId, status },
     });
   };
 
@@ -78,11 +81,13 @@ export function TipPage() {
     setPaying(false);
   };
 
-  // 決済確定後の戻り先 URL（PayPay 等リダイレクト必須手段でのみ使われる。完了画面で succeeded を待つ）
+  // 決済確定後の戻り先 URL（PayPay 等リダイレクト必須手段でのみ使われる）。
+  // リダイレクト型は基本「後日確定」のため status=processing を初期値として渡し、完了画面側で
+  // Stripe が付ける redirect_status / payment_intent を見て succeeded なら即完了に切り替える。
   const tipId = createIntent.data?.tipId;
   const returnUrl = tipId
-    ? `${window.location.origin}/tip/${staffId}/complete?tipId=${tipId}`
-    : `${window.location.origin}/tip/${staffId}`;
+    ? `${window.location.origin}/tip/${membershipId}/complete?tipId=${tipId}&status=processing`
+    : `${window.location.origin}/tip/${membershipId}`;
 
   return (
     <PhoneFrame>

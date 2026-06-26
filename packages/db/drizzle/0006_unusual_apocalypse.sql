@@ -1,0 +1,1 @@
+ALTER TABLE "staff_invite" ADD COLUMN "label" text;

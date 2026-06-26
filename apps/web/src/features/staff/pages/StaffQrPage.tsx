@@ -1,21 +1,25 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useSearch } from "@tanstack/react-router";
 import { QRCodeSVG } from "qrcode.react";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe } from "../hooks/useStaff.js";
 
 /**
- * 個人QR の発行画面（/staff/qr）。
- * 自分の固定 URL（/tip/:staffId）を指す QR を表示し、印刷できる形にする。
- * QR は固定（再発行・失効なし）。読み取ると Sprint 2 の投げ銭画面が開く。
- * 印刷ボタンは window.print() を呼び、印刷時に QR と名前が出るようにする。
+ * 店ごとのQR 発行画面（/staff/qr?m=:membershipId）。
+ * 所属（membership＝人×店）ごとに別QR を貼るため、?m= で対象の所属を選び、
+ * その所属の固定 URL（/tip/:membershipId）を指す QR を表示・印刷できるようにする。
+ * QR は固定（再発行・失効なし）。読み取ると投げ銭画面が「その人＋その店」で開く。
+ * ?m= が無い・不正なときは最初の所属にフォールバックする。
  */
 export function StaffQrPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
-  // ログイン状態と自分のプロフィール（QR用URL を含む）を取得
+  // ?m= で表示対象の所属（membership）を受け取る
+  const { m: membershipParam } = useSearch({ from: "/staff/qr" });
+  // ログイン状態と自分のプロフィール（所属一覧＝memberships を含む）を取得
   const { isAuthenticated, loading: authLoading } = useAuthSession();
   const meQuery = useStaffMe(isAuthenticated);
 
@@ -34,6 +38,28 @@ export function StaffQrPage() {
       <PhoneFrame>
         <div className="flex flex-1 items-center justify-center text-token-md text-ink-sub">
           {t("staff.loading")}
+        </div>
+      </PhoneFrame>
+    );
+  }
+
+  // 表示対象の所属を決める（?m= 指定があればそれ、無ければ最初の所属）
+  const membership =
+    me.memberships.find((x) => x.membershipId === membershipParam) ?? me.memberships[0];
+
+  // 所属が1件も無いときは QR を出せない（招待からの参加を促す案内をホームで行う）
+  if (!membership) {
+    return (
+      <PhoneFrame>
+        <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+          <p className="text-token-md text-ink-sub">{t("staff.homeNoStores")}</p>
+          <button
+            type="button"
+            onClick={() => navigate({ to: "/staff" })}
+            className="rounded-xl bg-rose px-6 py-3 text-token-md font-bold text-page"
+          >
+            {t("staff.joinedGoHome")}
+          </button>
         </div>
       </PhoneFrame>
     );
@@ -73,9 +99,12 @@ export function StaffQrPage() {
       </div>
 
       <div className="flex flex-1 flex-col overflow-y-auto px-[26px] pb-7 pt-5">
-        {/* 見出し */}
+        {/* 見出し（どの店のQRかを併記する） */}
         <div className="mt-3.5 text-center text-token-lg font-bold text-ink">
           {t("staff.qrHeading")}
+        </div>
+        <div className="mt-1 text-center text-token-sm text-rose print:hidden">
+          {t("staff.qrStoreSub", { store: membership.storeName })}
         </div>
 
         {/* QR 本体（印刷対象）。コーナーブラケットで装飾する */}
@@ -89,7 +118,7 @@ export function StaffQrPage() {
             {/* QR コード（印刷を想定して十分な解像度で描画する SVG）。中央にハートの目印を重ねる */}
             <div className="relative">
               <QRCodeSVG
-                value={me.tipUrl}
+                value={membership.tipUrl}
                 size={220}
                 level="H"
                 marginSize={0}
@@ -108,7 +137,7 @@ export function StaffQrPage() {
           <span className="text-token-xl font-bold text-ink">{me.displayName}</span>
           <span className="text-token-md text-ink"> {t("staff.san")}</span>
         </div>
-        <div className="mt-1 text-center text-token-sm text-ink-sub">{me.storeName}</div>
+        <div className="mt-1 text-center text-token-sm text-ink-sub">{membership.storeName}</div>
 
         {/* 案内（画面のみ・印刷では隠す） */}
         <div className="mt-5 text-center text-token-sm text-muted print:hidden">
@@ -118,7 +147,7 @@ export function StaffQrPage() {
         {/* QR が指す URL（確認用・画面のみ） */}
         <div className="mt-4 break-all rounded-xl border-[1.5px] border-line bg-surface-subtle px-4 py-3 text-center print:hidden">
           <div className="text-token-xs text-ink-sub">{t("staff.qrUrlLabel")}</div>
-          <div className="mt-1 text-token-sm text-ink">{me.tipUrl}</div>
+          <div className="mt-1 text-token-sm text-ink">{membership.tipUrl}</div>
         </div>
 
         {/* 印刷ボタン（画面のみ） */}
@@ -131,6 +160,11 @@ export function StaffQrPage() {
             {t("staff.qrPrint")}
           </button>
         </div>
+      </div>
+
+      {/* 下部ボトムナビ（現在地＝QR。印刷時は隠す） */}
+      <div className="print:hidden">
+        <StaffBottomNav active="qr" />
       </div>
     </PhoneFrame>
   );

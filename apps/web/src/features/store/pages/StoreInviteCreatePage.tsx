@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
+import { STORE_INVITE_LABEL_MAX_LENGTH } from "@arigato/shared";
 import type { StoreProfile, StoreInviteCreated } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StoreBottomNav } from "../components/StoreBottomNav.js";
@@ -8,9 +9,10 @@ import { StoreGuard } from "../components/StoreGuard.js";
 import { useCreateStoreInvite } from "../hooks/useStore.js";
 
 /**
- * スタッフ招待（リンク発行）画面（/store/invites/new）。モック04に対応。
+ * スタッフ招待（リンク発行）画面（/store/invites/new）。
  * 「招待リンクを発行」で一意の招待リンク（/invite/:code）を生成する（方式A）。
  * このリンクから登録した店員さんは自動で自店に所属する。
+ * 発行は1アクションなのでステッパーは置かず、発行後はリンク・コピー・招待中一覧への導線だけを出す。
  */
 export function StoreInviteCreatePage() {
   return <StoreGuard>{(store) => <StoreInviteCreateContent store={store} />}</StoreGuard>;
@@ -24,11 +26,14 @@ function StoreInviteCreateContent({ store }: { store: StoreProfile }) {
   const [issued, setIssued] = useState<StoreInviteCreated | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // 招待者名（任意メモ・label）。空欄でも発行できる（無記名の招待）
+  const [label, setLabel] = useState("");
 
-  // 招待リンクを発行する
+  // 招待リンクを発行する（招待者名があれば label として送る。空欄は無記名）
   const handleIssue = () => {
     setError(null);
-    createMutation.mutate(undefined, {
+    const trimmed = label.trim();
+    createMutation.mutate(trimmed === "" ? undefined : trimmed, {
       onSuccess: (invite) => setIssued(invite),
       onError: () => setError(t("store.inviteError")),
     });
@@ -73,15 +78,6 @@ function StoreInviteCreateContent({ store }: { store: StoreProfile }) {
         <span className="text-token-2xl font-bold text-ink">{t("store.inviteTitle")}</span>
       </div>
 
-      {/* ステップインジケータ */}
-      <div className="flex flex-none items-center justify-center gap-2 px-5 pb-5 pt-1.5">
-        <Step n={1} label={t("store.inviteStep1")} active={!issued} />
-        <span className="h-px w-[18px] bg-handle" />
-        <Step n={2} label={t("store.inviteStep2")} active={Boolean(issued)} />
-        <span className="h-px w-[18px] bg-handle" />
-        <Step n={3} label={t("store.inviteStep3")} active={false} />
-      </div>
-
       <div className="flex flex-1 flex-col overflow-y-auto px-7 pb-6 pt-2.5">
         {/* 封筒アイコン */}
         <div className="mt-6 flex justify-center">
@@ -95,7 +91,7 @@ function StoreInviteCreateContent({ store }: { store: StoreProfile }) {
               strokeLinecap="round"
               strokeLinejoin="round"
             />
-            {/* 折り返しの側面ライン（モック04の封筒） */}
+            {/* 折り返しの側面ライン（封筒） */}
             <path
               d="M10 90 L48 56 M110 90 L72 56"
               stroke="#ec3a6d"
@@ -124,6 +120,25 @@ function StoreInviteCreateContent({ store }: { store: StoreProfile }) {
               {t("store.inviteLead")}
             </div>
 
+            {/* 招待者名（任意メモ・label）。招待中一覧で誰宛か見分けるためのメモ。空欄でも発行可 */}
+            <div className="mt-7">
+              <label htmlFor="invite-label" className="block text-token-base font-bold text-ink-label">
+                {t("store.inviteLabelLabel")}
+              </label>
+              <input
+                id="invite-label"
+                type="text"
+                value={label}
+                onChange={(e) => setLabel(e.target.value)}
+                maxLength={STORE_INVITE_LABEL_MAX_LENGTH}
+                placeholder={t("store.inviteLabelPlaceholder")}
+                className="mt-2 w-full rounded-lg border-[1.5px] border-line bg-page px-3.5 py-3 text-token-md text-ink placeholder:text-muted-soft focus:border-rose focus:outline-none"
+              />
+              <div className="mt-2 text-token-xs leading-relaxed text-muted">
+                {t("store.inviteLabelHelp")}
+              </div>
+            </div>
+
             <div className="mt-auto flex flex-col gap-3 pt-9">
               <button
                 type="button"
@@ -141,6 +156,12 @@ function StoreInviteCreateContent({ store }: { store: StoreProfile }) {
             <div className="mt-6 text-center text-token-2xl font-bold text-ink">
               {t("store.inviteIssuedTitle")}
             </div>
+            {/* 招待者名（入れていれば表示。無記名なら出さない） */}
+            {issued.label && (
+              <div className="mt-2 text-center text-token-md font-semibold text-ink-label">
+                {issued.label}
+              </div>
+            )}
             {/* 発行された招待リンク */}
             <div className="mt-5 break-all rounded-xl border-[1.5px] border-line bg-surface-subtle px-4 py-4 text-token-sm text-ink">
               {issued.inviteUrl}
@@ -154,9 +175,10 @@ function StoreInviteCreateContent({ store }: { store: StoreProfile }) {
               >
                 {copied ? t("store.inviteCopied") : t("store.inviteCopy")}
               </button>
+              {/* スタッフ一覧の「招待中」タブへ遷移する */}
               <button
                 type="button"
-                onClick={() => navigate({ to: "/store/invites" })}
+                onClick={() => navigate({ to: "/store/staff", search: { tab: "invited" } })}
                 className="rounded-xl border-[1.5px] border-line bg-page py-4 text-center text-token-md font-semibold text-ink-label"
               >
                 {t("store.inviteSeeList")}
@@ -168,25 +190,5 @@ function StoreInviteCreateContent({ store }: { store: StoreProfile }) {
 
       <StoreBottomNav active="staff" />
     </PhoneFrame>
-  );
-}
-
-/**
- * 招待フローのステップ表示（番号バッジ＋ラベル）。
- */
-function Step({ n, label, active }: { n: number; label: string; active: boolean }) {
-  return (
-    <span className="flex items-center gap-1.5">
-      <span
-        className={`flex h-5 w-5 items-center justify-center rounded-full text-token-xs font-bold ${
-          active ? "bg-rose text-page" : "border-[1.5px] border-handle text-muted"
-        }`}
-      >
-        {n}
-      </span>
-      <span className={`text-token-sm ${active ? "font-bold text-rose" : "text-muted"}`}>
-        {label}
-      </span>
-    </span>
   );
 }

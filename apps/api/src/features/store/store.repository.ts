@@ -1,5 +1,5 @@
 import { getDb, sql } from "@arigato/db";
-import type { StoreStatus, StoreInviteStatus } from "./store.model.js";
+import type { StoreInviteStatus } from "./store.model.js";
 
 /**
  * store feature の Repository 層（DB アクセス専用・生 SQL）。
@@ -20,11 +20,21 @@ export type StoreRow = {
   description: string | null;
   industry: string | null;
   logoUrl: string | null;
-  status: StoreStatus;
-  // 承認日時（未承認は null。ISO 文字列）
-  approvedAt: string | null;
-  // 店アカウントの所有者（Supabase auth.users の UUID。未紐付けは null）
+  // 導入承認に同意した日時（未同意は null。ISO 文字列）
+  adoptionAgreedAt: string | null;
+  // 店アカウントの所有者（Supabase auth.users の UUID。移行用の既存行は null）
   ownerAuthUserId: string | null;
+};
+
+// 店舗のセルフサーブ作成で Repository が受け取る値
+export type CreateStoreParams = {
+  // 作成者（＝所有者。Supabase auth.users の UUID）
+  ownerAuthUserId: string;
+  name: string;
+  description: string | null;
+  industry: string | null;
+  logoUrl: string | null;
+  // 導入承認に同意した日時（作成時刻。ISO 文字列でなく Date を渡し SQL 側で now() でも可）
 };
 
 // 招待行（招待中一覧・発行結果に使う）
@@ -37,6 +47,8 @@ export type StoreInviteRow = {
   acceptedStaffName: string | null;
   // 消費（所属確定）日時（未消費は null。ISO 文字列）
   acceptedAt: string | null;
+  // 誰宛かの任意メモ（発行時に入れた識別用ラベル。未入力は null）
+  label: string | null;
 };
 
 // 所属スタッフ行（在籍管理。金額・件数のランキングは持たない）
@@ -88,17 +100,18 @@ export type StoreRepository = {
   findStoreById: (storeId: string) => Promise<StoreRow | null>;
   // 所有者（auth ユーザー）から自店を取得する（店ホーム・設定の起点）
   findStoreByOwner: (authUserId: string) => Promise<StoreRow | null>;
-  // 未所有の店に所有者を紐付ける（導入セットアップ）。
-  // 既に別の所有者がいる行は更新しない（横取り防止）。紐付けできなければ null
-  setStoreOwner: (storeId: string, authUserId: string) => Promise<StoreRow | null>;
-  // 店を承認する（pending→approved・approved_at 設定）。承認後の行を返す。既に approved なら据え置く（冪等）
-  approveStore: (storeId: string) => Promise<StoreRow | null>;
+  // 店舗をセルフサーブで新規作成する（作成者＝所有者・導入承認に同意済み）。作成した行を返す
+  createStore: (params: CreateStoreParams) => Promise<StoreRow>;
   // 店プロフィールを更新する。更新後の行を返す
   updateStore: (storeId: string, params: UpdateStoreParams) => Promise<StoreRow | null>;
-  // 招待を発行する（pending で新規作成）。発行した招待行を返す
-  createInvite: (storeId: string, code: string) => Promise<StoreInviteRow>;
-  // 自店の招待を新しい順に取得する（招待中一覧）
+  // 招待を発行する（pending で新規作成）。label は誰宛かの任意メモ（未入力は null）。発行した招待行を返す
+  createInvite: (storeId: string, code: string, label: string | null) => Promise<StoreInviteRow>;
+  // 自店の招待中（pending）だけを新しい順に取得する（招待中一覧。accepted/revoked は返さない）
   listInvites: (storeId: string) => Promise<StoreInviteRow[]>;
+  // 自店の招待 1 件を取得する（再コピー画面・取り消しの対象確認に使う）。見つからなければ null
+  findInviteByCode: (storeId: string, code: string) => Promise<StoreInviteRow | null>;
+  // 自店の招待中（pending）を失効（revoked）にする。更新できた件数を返す（0 なら対象なし）
+  revokeInvite: (storeId: string, code: string) => Promise<number>;
   // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（在籍管理。中立な並び）
   listStaff: (storeId: string) => Promise<StoreStaffRow[]>;
   // 自店宛の「お客さまの声」（メッセージのある成立済み投げ銭）を新しい順に取得する（金額なし）
@@ -111,14 +124,13 @@ export type StoreRepository = {
 
 // 共通の SELECT 句（店プロフィール行。金額・残高カラムは一切含めない）
 const STORE_SELECT = sql`
-  id                                                                          AS "id",
-  name                                                                        AS "name",
-  description                                                                 AS "description",
-  industry                                                                    AS "industry",
-  logo_url                                                                    AS "logoUrl",
-  status                                                                      AS "status",
-  to_char(approved_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')       AS "approvedAt",
-  owner_auth_user_id                                                          AS "ownerAuthUserId"
+  id                                                                                AS "id",
+  name                                                                              AS "name",
+  description                                                                       AS "description",
+  industry                                                                          AS "industry",
+  logo_url                                                                          AS "logoUrl",
+  to_char(adoption_agreed_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')      AS "adoptionAgreedAt",
+  owner_auth_user_id                                                                AS "ownerAuthUserId"
 `;
 
 /**
@@ -152,35 +164,25 @@ export function createStoreRepository(): StoreRepository {
       return rows[0] ?? null;
     },
 
-    // 未所有の店に所有者を紐付ける（導入セットアップ）。
-    // WHERE owner_auth_user_id IS NULL OR = 自分 のときだけ更新し、他者所有の横取りを防ぐ。
-    async setStoreOwner(storeId, authUserId) {
+    // 店舗をセルフサーブで新規作成する。作成者を所有者にし、導入承認の同意日時（now）を記録する。
+    async createStore(params) {
       const db = getDb();
       const rows = await db.execute<StoreRow>(sql`
-        UPDATE store
-        SET owner_auth_user_id = ${authUserId}
-        WHERE id = ${storeId}
-          AND (owner_auth_user_id IS NULL OR owner_auth_user_id = ${authUserId})
+        INSERT INTO store (name, description, industry, logo_url, owner_auth_user_id, adoption_agreed_at)
+        VALUES (
+          ${params.name},
+          ${params.description},
+          ${params.industry},
+          ${params.logoUrl},
+          ${params.ownerAuthUserId},
+          now()
+        )
         RETURNING ${STORE_SELECT}
       `);
-      return rows[0] ?? null;
+      return rows[0]!;
     },
 
-    // 店を承認する（pending→approved）。承認日時を設定する。
-    // 既に approved の場合は approved_at を据え置き（COALESCE）にして冪等にする。
-    async approveStore(storeId) {
-      const db = getDb();
-      const rows = await db.execute<StoreRow>(sql`
-        UPDATE store
-        SET status = 'approved',
-            approved_at = COALESCE(approved_at, now())
-        WHERE id = ${storeId}
-        RETURNING ${STORE_SELECT}
-      `);
-      return rows[0] ?? null;
-    },
-
-    // 店プロフィールを更新する（名前・紹介・業種・ロゴ）。ステータス・承認は変更しない
+    // 店プロフィールを更新する（名前・紹介・業種・ロゴ）。導入承認の同意は変更しない
     async updateStore(storeId, params) {
       const db = getDb();
       const rows = await db.execute<StoreRow>(sql`
@@ -195,23 +197,26 @@ export function createStoreRepository(): StoreRepository {
       return rows[0] ?? null;
     },
 
-    // 招待を発行する（pending で新規作成）。code は Service/Model で生成済みの一意トークン
-    async createInvite(storeId, code) {
+    // 招待を発行する（pending で新規作成）。code は Service/Model で生成済みの一意トークン。
+    // label は誰宛かの任意メモ（未入力は null で保存する）
+    async createInvite(storeId, code, label) {
       const db = getDb();
       const rows = await db.execute<StoreInviteRow>(sql`
-        INSERT INTO staff_invite (store_id, code, status)
-        VALUES (${storeId}, ${code}, 'pending')
+        INSERT INTO staff_invite (store_id, code, status, label)
+        VALUES (${storeId}, ${code}, 'pending', ${label})
         RETURNING
           code      AS "code",
           status    AS "status",
           to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')   AS "createdAt",
           NULL      AS "acceptedStaffName",
-          NULL      AS "acceptedAt"
+          NULL      AS "acceptedAt",
+          label     AS "label"
       `);
       return rows[0]!;
     },
 
-    // 自店の招待を新しい順に取得する。消費済みなら所属した店員名・消費日時も結合する
+    // 自店の招待中（pending）だけを新しい順に取得する。
+    // accepted（在籍中タブに出る）・revoked（履歴管理しない）は二重表示を避けるため返さない。
     async listInvites(storeId) {
       const db = getDb();
       const rows = await db.execute<StoreInviteRow>(sql`
@@ -219,28 +224,66 @@ export function createStoreRepository(): StoreRepository {
           i.code        AS "code",
           i.status      AS "status",
           to_char(i.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')   AS "createdAt",
-          s.display_name AS "acceptedStaffName",
-          to_char(i.accepted_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')  AS "acceptedAt"
+          NULL          AS "acceptedStaffName",
+          NULL          AS "acceptedAt",
+          i.label        AS "label"
         FROM staff_invite i
-        LEFT JOIN staff s ON s.id = i.accepted_staff_id
         WHERE i.store_id = ${storeId}
+          AND i.status = 'pending'
         ORDER BY i.created_at DESC
       `);
       return rows;
     },
 
-    // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（中立な並び・金額や件数では並べない）
+    // 自店の招待 1 件（pending）を取得する（再コピー画面・取り消しの対象確認）。pending 以外は対象外
+    async findInviteByCode(storeId, code) {
+      const db = getDb();
+      const rows = await db.execute<StoreInviteRow>(sql`
+        SELECT
+          i.code        AS "code",
+          i.status      AS "status",
+          to_char(i.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')   AS "createdAt",
+          NULL          AS "acceptedStaffName",
+          NULL          AS "acceptedAt",
+          i.label        AS "label"
+        FROM staff_invite i
+        WHERE i.store_id = ${storeId}
+          AND i.code = ${code}
+          AND i.status = 'pending'
+        LIMIT 1
+      `);
+      return rows[0] ?? null;
+    },
+
+    // 自店の招待中（pending）を失効（revoked）にする。自店・pending のみ更新し、件数を返す
+    async revokeInvite(storeId, code) {
+      const db = getDb();
+      const rows = await db.execute<{ code: string }>(sql`
+        UPDATE staff_invite
+        SET status = 'revoked'
+        WHERE store_id = ${storeId}
+          AND code = ${code}
+          AND status = 'pending'
+        RETURNING code AS "code"
+      `);
+      return rows.length;
+    },
+
+    // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（中立な並び・金額や件数では並べない）。
+    // 多対多モデル: 所属は staff_store（membership）で表すため、staff_store 経由でこの店のメンバーを引く。
+    // 並びは在籍（staff_store.created_at）が古い順にして、件数・金額では並べ替えない（中立）。
     async listStaff(storeId) {
       const db = getDb();
       const rows = await db.execute<StoreStaffRow>(sql`
         SELECT
-          id            AS "id",
-          display_name  AS "displayName",
-          headline      AS "headline",
-          avatar_url    AS "avatarUrl"
-        FROM staff
-        WHERE store_id = ${storeId}
-        ORDER BY created_at ASC
+          s.id            AS "id",
+          s.display_name  AS "displayName",
+          s.headline      AS "headline",
+          s.avatar_url    AS "avatarUrl"
+        FROM staff_store ss
+        JOIN staff s ON s.id = ss.staff_id
+        WHERE ss.store_id = ${storeId}
+        ORDER BY ss.created_at ASC
       `);
       return rows;
     },
@@ -282,7 +325,9 @@ export function createStoreRepository(): StoreRepository {
     },
 
     // 自店のスタッフ別「ありがとう件数」を名簿順（在籍が古い順）で取得する。
-    // COUNT のみで金額は扱わず、ORDER BY も created_at（名簿順）にして件数では並べ替えない（中立）。
+    // COUNT のみで金額は扱わず、ORDER BY も在籍（名簿順）にして件数では並べ替えない（中立）。
+    // 多対多モデル: この店のメンバー（staff_store）を引き、その店での成立済み tip だけを数える
+    // （t.store_id でこの店分に限定するため、掛け持ちの他店分は混ざらない）。
     async listGratitudePerStaff(storeId) {
       const db = getDb();
       const rows = await db.execute<GratitudePerStaffRow>(sql`
@@ -290,13 +335,15 @@ export function createStoreRepository(): StoreRepository {
           s.id            AS "staffId",
           s.display_name  AS "staffName",
           COUNT(t.id)::int AS "count"
-        FROM staff s
+        FROM staff_store ss
+        JOIN staff s ON s.id = ss.staff_id
         LEFT JOIN tip t
           ON t.staff_id = s.id
+          AND t.store_id = ${storeId}
           AND t.status = 'succeeded'
-        WHERE s.store_id = ${storeId}
-        GROUP BY s.id, s.display_name, s.created_at
-        ORDER BY s.created_at ASC
+        WHERE ss.store_id = ${storeId}
+        GROUP BY s.id, s.display_name, ss.created_at
+        ORDER BY ss.created_at ASC
       `);
       return rows;
     },

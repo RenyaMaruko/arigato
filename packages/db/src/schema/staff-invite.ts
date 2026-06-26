@@ -16,6 +16,9 @@ export const staffInvite = pgTable("staff_invite", {
     .references(() => store.id),
   // 招待コード/リンク用トークン（一意）
   code: text("code").notNull().unique(),
+  // 招待の任意メモ（誰宛か。例「佐藤さん」「ホール担当」）。空なら null。
+  // 無記名リンクの手軽さを壊さないため任意項目とし、招待中一覧での識別だけに使う。
+  label: text("label"),
   // 招待ステータス（pending: 未消費 / accepted: 消費済み / revoked: 失効）
   status: text("status").notNull().default("pending"),
   // 招待を消費した店員さん（未消費は null）

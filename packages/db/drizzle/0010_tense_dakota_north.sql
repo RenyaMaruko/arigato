@@ -1,0 +1,1 @@
+ALTER TABLE "payout_ledger" ALTER COLUMN "payout_id" DROP NOT NULL;

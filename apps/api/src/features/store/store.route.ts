@@ -2,16 +2,25 @@ import { Hono } from "hono";
 import { zValidator } from "@hono/zod-validator";
 import {
   UpdateStoreProfileInputSchema,
+  CreateStoreInputSchema,
+  CreateStoreInviteInputSchema,
   type StoreProfile,
   type StoreInviteCreated,
   type StoreInvitesResponse,
   type StoreStaffResponse,
   type StoreGratitude,
   type UpdateStoreProfileInput,
+  type CreateStoreInput,
+  type CreateStoreInviteInput,
 } from "@arigato/shared";
 import type { MiddlewareHandler } from "hono";
 import type { AuthVariables } from "../../middleware/auth.js";
-import { StoreNotFoundError, StoreForbiddenError } from "./store.service.js";
+import {
+  StoreNotFoundError,
+  StoreForbiddenError,
+  StoreAlreadyExistsError,
+  StoreInviteNotFoundError,
+} from "./store.service.js";
 
 /**
  * store feature の Route 層（HTTP 入口・薄く保つ）。
@@ -26,24 +35,28 @@ import { StoreNotFoundError, StoreForbiddenError } from "./store.service.js";
 type StoreDeps = {
   // 認証ミドルウェア（JWKS 検証）。全ルートに前置する
   authMiddleware: MiddlewareHandler;
-  // ログイン中の店アカウントが所有する店を取得（未所有なら null）
+  // ログイン中の店アカウントが所有する店を取得（未作成なら null）
   getMyStore: (authUserId: string) => Promise<StoreProfile | null>;
-  // 未所有の店を引き受ける（導入セットアップ）
-  claimStore: (authUserId: string, storeId: string) => Promise<StoreProfile>;
+  // 店舗をセルフサーブで新規作成（店名＋導入承認の同意。作成者＝所有者）
+  createStore: (authUserId: string, input: CreateStoreInput) => Promise<StoreProfile>;
   // 自店プロフィールの取得（店スコープ）
   getStore: (authUserId: string, storeId: string) => Promise<StoreProfile>;
-  // 導入承認（pending→approved・店スコープ）
-  approveStore: (authUserId: string, storeId: string) => Promise<StoreProfile>;
   // 自店プロフィールの更新（店スコープ）
   updateStore: (
     authUserId: string,
     storeId: string,
     input: UpdateStoreProfileInput,
   ) => Promise<StoreProfile>;
-  // スタッフ招待の発行（方式A・店スコープ）
-  createStoreInvite: (authUserId: string, storeId: string) => Promise<StoreInviteCreated>;
-  // 発行済み招待の一覧（店スコープ）
+  // スタッフ招待の発行（方式A・店スコープ）。input.label は誰宛かの任意メモ
+  createStoreInvite: (
+    authUserId: string,
+    storeId: string,
+    input: CreateStoreInviteInput,
+  ) => Promise<StoreInviteCreated>;
+  // 招待中（pending）の招待一覧（店スコープ）
   listStoreInvites: (authUserId: string, storeId: string) => Promise<StoreInvitesResponse>;
+  // 招待中（pending）の招待を取り消す（revoke・店スコープ）
+  revokeStoreInvite: (authUserId: string, storeId: string, code: string) => Promise<void>;
   // 所属スタッフ一覧（在籍管理・店スコープ）
   listStoreStaff: (authUserId: string, storeId: string) => Promise<StoreStaffResponse>;
   // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）
@@ -75,17 +88,18 @@ export function createStoreRoute(deps: StoreDeps) {
       }
       return c.json(store);
     })
-    // 未所有の店を引き受ける（導入セットアップ。店アカウントと store を紐付ける）
-    .post("/:storeId/claim", async (c) => {
+    // 店舗をセルフサーブで新規作成する（店名＋導入承認の同意。作成者＝所有者・adoption_agreed_at 記録）
+    .post("/", zValidator("json", CreateStoreInputSchema), async (c) => {
       const authUser = c.get("authUser");
-      const storeId = c.req.param("storeId");
+      const input = c.req.valid("json");
       try {
-        const store = await deps.claimStore(authUser.id, storeId);
-        return c.json(store);
+        const store = await deps.createStore(authUser.id, input);
+        return c.json(store, 201);
       } catch (err) {
-        // 店が無いか、既に他者が所有している（横取り不可）
-        const mapped = handleStoreScopeError(err);
-        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        // 1アカウント1店舗（既に作成済み）は 409 で返す
+        if (err instanceof StoreAlreadyExistsError) {
+          return c.json({ error: "store_already_exists" }, 409);
+        }
         throw err;
       }
     })
@@ -116,25 +130,13 @@ export function createStoreRoute(deps: StoreDeps) {
         throw err;
       }
     })
-    // 導入承認（pending→approved・店スコープ）
-    .post("/:storeId/approve", async (c) => {
+    // スタッフ招待の発行（方式A・店スコープ）。body の任意 label（誰宛かのメモ）を受ける
+    .post("/:storeId/invites", zValidator("json", CreateStoreInviteInputSchema), async (c) => {
       const authUser = c.get("authUser");
       const storeId = c.req.param("storeId");
+      const input = c.req.valid("json");
       try {
-        const store = await deps.approveStore(authUser.id, storeId);
-        return c.json(store);
-      } catch (err) {
-        const mapped = handleStoreScopeError(err);
-        if (mapped) return c.json({ error: mapped.error }, mapped.status);
-        throw err;
-      }
-    })
-    // スタッフ招待の発行（方式A・店スコープ）
-    .post("/:storeId/invites", async (c) => {
-      const authUser = c.get("authUser");
-      const storeId = c.req.param("storeId");
-      try {
-        const invite = await deps.createStoreInvite(authUser.id, storeId);
+        const invite = await deps.createStoreInvite(authUser.id, storeId, input);
         return c.json(invite, 201);
       } catch (err) {
         const mapped = handleStoreScopeError(err);
@@ -142,7 +144,7 @@ export function createStoreRoute(deps: StoreDeps) {
         throw err;
       }
     })
-    // 発行済み招待の一覧（招待中・所属確定・失効。店スコープ）
+    // 招待中（pending）の招待一覧（店スコープ）
     .get("/:storeId/invites", async (c) => {
       const authUser = c.get("authUser");
       const storeId = c.req.param("storeId");
@@ -150,6 +152,24 @@ export function createStoreRoute(deps: StoreDeps) {
         const invites = await deps.listStoreInvites(authUser.id, storeId);
         return c.json(invites);
       } catch (err) {
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // 招待中（pending）の招待を取り消す（revoke・店スコープ）。自店・pending のみ操作可
+    .post("/:storeId/invites/:code/revoke", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      const code = c.req.param("code");
+      try {
+        await deps.revokeStoreInvite(authUser.id, storeId, code);
+        return c.json({ ok: true });
+      } catch (err) {
+        // 対象の招待が無い（既に消費・失効・他店）は 404 で返す
+        if (err instanceof StoreInviteNotFoundError) {
+          return c.json({ error: "store_invite_not_found" }, 404);
+        }
         const mapped = handleStoreScopeError(err);
         if (mapped) return c.json({ error: mapped.error }, mapped.status);
         throw err;

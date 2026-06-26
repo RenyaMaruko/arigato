@@ -12,18 +12,17 @@ import { z } from "zod";
 // 店名・紹介の文字数上限（フォームの体験上の上限）
 export const STORE_NAME_MAX_LENGTH = 60;
 export const STORE_DESCRIPTION_MAX_LENGTH = 200;
-
-// 店の導入ステータス（pending: 承認待ち / approved: 承認済み）
-export const StoreStatusSchema = z.enum(["pending", "approved"]);
-export type StoreStatus = z.infer<typeof StoreStatusSchema>;
+// 招待ラベル（誰宛かの任意メモ）の文字数上限
+export const STORE_INVITE_LABEL_MAX_LENGTH = 60;
 
 // 招待ステータス（pending: 招待中 / accepted: 所属確定 / revoked: 失効）
 export const StoreInviteStatusSchema = z.enum(["pending", "accepted", "revoked"]);
 export type StoreInviteStatus = z.infer<typeof StoreInviteStatusSchema>;
 
 /**
- * GET /store/:storeId（店プロフィール・店ホームの基盤）の応答。
- * 名前・紹介・業種・ロゴ・導入ステータス・承認日時を返す。金額・残高は一切含めない。
+ * GET /store/me・GET /store/:storeId（店プロフィール・店ホームの基盤）の応答。
+ * 名前・紹介・業種・ロゴ・導入承認の同意日時を返す。金額・残高は一切含めない。
+ * 運営審査ゲート（status の pending→approved）は廃止し、店がセルフサーブで作成する。
  */
 export const StoreProfileSchema = z.object({
   id: z.string().uuid(),
@@ -31,11 +30,25 @@ export const StoreProfileSchema = z.object({
   description: z.string().nullable(),
   industry: z.string().nullable(),
   logoUrl: z.string().nullable(),
-  status: StoreStatusSchema,
-  // 承認日時（未承認は null。ISO 文字列）
-  approvedAt: z.string().nullable(),
+  // 導入承認に同意した日時（作成時に記録。未同意は null。ISO 文字列）
+  adoptionAgreedAt: z.string().nullable(),
 });
 export type StoreProfile = z.infer<typeof StoreProfileSchema>;
+
+/**
+ * POST /store（店舗のセルフサーブ新規作成）の入力。
+ * 店名（必須）と「導入承認の同意」（必須 true）。任意で紹介・業種・ロゴも受ける。
+ * 同意は店自身の一手間（就業規則との整合）として求め、作成時に adoption_agreed_at を記録する。
+ */
+export const CreateStoreInputSchema = z.object({
+  name: z.string().min(1).max(STORE_NAME_MAX_LENGTH),
+  // 導入承認の同意（true でなければ作成を受け付けない）
+  adoptionAgreed: z.literal(true),
+  description: z.string().max(STORE_DESCRIPTION_MAX_LENGTH).optional(),
+  industry: z.string().max(STORE_NAME_MAX_LENGTH).optional(),
+  logoUrl: z.string().url().optional(),
+});
+export type CreateStoreInput = z.infer<typeof CreateStoreInputSchema>;
 
 /**
  * PATCH /store/:storeId（店プロフィール編集）の入力。
@@ -50,6 +63,17 @@ export const UpdateStoreProfileInputSchema = z.object({
 export type UpdateStoreProfileInput = z.infer<typeof UpdateStoreProfileInputSchema>;
 
 /**
+ * POST /store/:storeId/invites（スタッフ招待の発行・方式A）の入力。
+ * label（誰宛かの任意メモ）だけを受ける。無記名リンクの手軽さを壊さないため任意とし、
+ * 未入力なら従来どおり無記名の招待として発行する。
+ */
+export const CreateStoreInviteInputSchema = z.object({
+  // 誰宛かの任意メモ（例「佐藤さん」「ホール担当」）。空・未入力は無記名扱い。
+  label: z.string().max(STORE_INVITE_LABEL_MAX_LENGTH).optional(),
+});
+export type CreateStoreInviteInput = z.infer<typeof CreateStoreInviteInputSchema>;
+
+/**
  * POST /store/:storeId/invites（スタッフ招待の発行・方式A）の応答。
  * 発行した招待コードと、店員さんが登録に使う招待リンク URL（/invite/:code）を返す。
  */
@@ -60,6 +84,8 @@ export const StoreInviteCreatedSchema = z.object({
   status: StoreInviteStatusSchema,
   // 発行日時（ISO 文字列）
   createdAt: z.string(),
+  // 誰宛かの任意メモ（未入力は null）
+  label: z.string().nullable(),
 });
 export type StoreInviteCreated = z.infer<typeof StoreInviteCreatedSchema>;
 
@@ -78,6 +104,8 @@ export const StoreInviteItemSchema = z.object({
   acceptedStaffName: z.string().nullable(),
   // 消費（所属確定）日時（未消費は null。ISO 文字列）
   acceptedAt: z.string().nullable(),
+  // 誰宛かの任意メモ（発行時に入れた識別用ラベル。未入力は null）
+  label: z.string().nullable(),
 });
 export type StoreInviteItem = z.infer<typeof StoreInviteItemSchema>;
 

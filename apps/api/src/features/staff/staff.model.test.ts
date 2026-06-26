@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { MIN_PAYOUT_AMOUNT } from "@arigato/shared";
 import {
   canPayout,
   isInviteUsable,
@@ -9,6 +10,8 @@ import {
   summarizeBalance,
   buildTaxReportCsv,
   escapeCsvCell,
+  evaluatePayoutEligibility,
+  selectPayoutTipsWithinAvailable,
 } from "./staff.model.js";
 
 /**
@@ -32,22 +35,35 @@ describe("staff.model", () => {
     expect(deriveIdentityStatus("verified", false)).toBe("verified");
   });
 
+  it("evaluatePayoutEligibility: verified必須・最低送金額（全額）の判定", () => {
+    // verified でなければ送金不可（本人確認・口座登録が必要）
+    expect(evaluatePayoutEligibility("none", 10000)).toBe("not_verified");
+    expect(evaluatePayoutEligibility("pending", 10000)).toBe("not_verified");
+    // verified でも着金可能額が最低送金額未満なら不可（残高0を含む）
+    expect(evaluatePayoutEligibility("verified", 0)).toBe("below_minimum");
+    expect(evaluatePayoutEligibility("verified", MIN_PAYOUT_AMOUNT - 1)).toBe("below_minimum");
+    // verified かつ最低送金額以上なら送金可（全額送金）
+    expect(evaluatePayoutEligibility("verified", MIN_PAYOUT_AMOUNT)).toBe("ok");
+    expect(evaluatePayoutEligibility("verified", 7650)).toBe("ok");
+  });
+
   it("nextSettlementOnVerified: held のみ payable へ。payable / paid は据え置き（二重遷移しない）", () => {
     expect(nextSettlementOnVerified("held")).toBe("payable");
     expect(nextSettlementOnVerified("payable")).toBe("payable");
     expect(nextSettlementOnVerified("paid")).toBe("paid");
   });
 
-  it("summarizeBalance: settlement 別に金額を合算する（保留 / 着金可能 / 着金済）", () => {
+  it("summarizeBalance: settlement 別に金額を合算する（手取り型: 額面→手取り約85%へ変換して合算）", () => {
+    // amount は額面。店員さんに見せる残高は手取り（floor(額面×0.85)）へ変換してから合算する
     const summary = summarizeBalance([
-      { amount: 300, settlementStatus: "held" },
-      { amount: 500, settlementStatus: "held" },
-      { amount: 100, settlementStatus: "payable" },
-      { amount: 1000, settlementStatus: "paid" },
+      { amount: 300, settlementStatus: "held" }, // floor(255)=255
+      { amount: 500, settlementStatus: "held" }, // floor(425)=425
+      { amount: 100, settlementStatus: "payable" }, // floor(85)=85
+      { amount: 1000, settlementStatus: "paid" }, // floor(850)=850
     ]);
-    expect(summary.heldAmount).toBe(800);
-    expect(summary.payableAmount).toBe(100);
-    expect(summary.paidAmount).toBe(1000);
+    expect(summary.heldAmount).toBe(255 + 425);
+    expect(summary.payableAmount).toBe(85);
+    expect(summary.paidAmount).toBe(850);
   });
 
   it("summarizeBalance: 空配列はすべて 0", () => {
@@ -64,26 +80,71 @@ describe("staff.model", () => {
     expect(escapeCsvCell('say "hi"')).toBe('"say ""hi"""');
   });
 
-  it("buildTaxReportCsv: 受取日 / 金額 / 店名 の列を含み、行を持つ", () => {
+  it("buildTaxReportCsv: 受取日 / 金額 / 店名 の列を含み、金額は手取り（約85%）で出力する", () => {
+    // amount は額面で受け取り、CSV では店員手取り（floor(額面×0.85)）へ変換して出力する
     const csv = buildTaxReportCsv([
-      { receivedDate: "2025-05-15", amount: 300, storeName: "カフェ Arigato" },
-      { receivedDate: "2025-05-14", amount: 100, storeName: "居酒屋, 花" },
+      { receivedDate: "2025-05-15", amount: 300, storeName: "カフェ Arigato" }, // floor(255)=255
+      { receivedDate: "2025-05-14", amount: 100, storeName: "居酒屋, 花" }, // floor(85)=85
     ]);
     // ヘッダに3列がある
     expect(csv).toContain("受取日,金額,店名");
-    // 受取記録の行が含まれる
-    expect(csv).toContain("2025-05-15,300,カフェ Arigato");
-    // カンマを含む店名はクオートで囲まれる
-    expect(csv).toContain('2025-05-14,100,"居酒屋, 花"');
+    // 受取記録の行が含まれる（金額は手取り）
+    expect(csv).toContain("2025-05-15,255,カフェ Arigato");
+    // カンマを含む店名はクオートで囲まれる（金額は手取り）
+    expect(csv).toContain('2025-05-14,85,"居酒屋, 花"');
   });
 
-  it("isInviteUsable は pending かつ店 approved のときだけ true", () => {
-    expect(isInviteUsable("pending", "approved")).toBe(true);
-    // 店が未承認なら使えない（店承認を招待で担保）
-    expect(isInviteUsable("pending", "pending")).toBe(false);
+  it("selectPayoutTipsWithinAvailable は available に収まる範囲（FIFO）の手取り合計だけを選ぶ（#5）", () => {
+    // 額面 1000(手取り850) / 500(手取り425) / 300(手取り255) の 3件（古い順）。手取り合計は 1530。
+    const tips = [
+      { tipId: "t1", amount: 1000 },
+      { tipId: "t2", amount: 500 },
+      { tipId: "t3", amount: 300 },
+    ];
+
+    // available=1530 → 全件選ぶ（DB payable 全額が available 以下）
+    const all = selectPayoutTipsWithinAvailable(tips, 1530);
+    expect(all.amount).toBe(1530);
+    expect(all.tipIds).toEqual(["t1", "t2", "t3"]);
+
+    // available=850 → 先頭(850)だけ。次(425)を足すと 1275>850 のため打ち切る（古い分を優先）
+    const capped = selectPayoutTipsWithinAvailable(tips, 850);
+    expect(capped.amount).toBe(850);
+    expect(capped.tipIds).toEqual(["t1"]);
+
+    // available=1300 → 850+425=1275 まで（+255=1530 は超過のため打ち切る）。必ず available 以下
+    const partial = selectPayoutTipsWithinAvailable(tips, 1300);
+    expect(partial.amount).toBe(1275);
+    expect(partial.tipIds).toEqual(["t1", "t2"]);
+
+    // available=0 → 何も選ばない（送金額 0・残高不足を構造的に回避）
+    const none = selectPayoutTipsWithinAvailable(tips, 0);
+    expect(none.amount).toBe(0);
+    expect(none.tipIds).toEqual([]);
+
+    // payable が空（held しか無い等）→ 何も選ばない
+    expect(selectPayoutTipsWithinAvailable([], 1000)).toEqual({ tipIds: [], amount: 0 });
+  });
+
+  it("先頭(古い)tip が available を超えても打ち切らず、available に収まる後ろの tip を選ぶ（送金できる額>0 なのに送金不可になるバグの回帰）", () => {
+    // 古い ¥5000(手取り4250・Stripeはpending) → 新しい ¥1000(手取り850・available)。
+    // available=850。先頭の4250は超過するが break せずスキップし、後ろの850を選べること。
+    const tips = [
+      { tipId: "old", amount: 5000 },
+      { tipId: "new", amount: 1000 },
+    ];
+    const sel = selectPayoutTipsWithinAvailable(tips, 850);
+    expect(sel.amount).toBe(850);
+    expect(sel.tipIds).toEqual(["new"]);
+  });
+
+  it("isInviteUsable は pending かつ店が導入承認に同意済みのときだけ true", () => {
+    expect(isInviteUsable("pending", true)).toBe(true);
+    // 店が導入承認に同意していなければ使えない（店承認を招待で担保）
+    expect(isInviteUsable("pending", false)).toBe(false);
     // 招待が消費済み・失効なら使えない
-    expect(isInviteUsable("accepted", "approved")).toBe(false);
-    expect(isInviteUsable("revoked", "approved")).toBe(false);
+    expect(isInviteUsable("accepted", true)).toBe(false);
+    expect(isInviteUsable("revoked", true)).toBe(false);
   });
 
   it("buildTipUrl は /tip/:staffId の固定 URL を作る", () => {

@@ -48,19 +48,20 @@ export function quoteTip(amount: number) {
 }
 
 /**
- * 投げ銭画面の表示情報（顔写真・名前・店名・一言）を取得する。
+ * 投げ銭画面の表示情報（顔写真・名前・店名・一言）を membership（人×店）から解決して取得する。
  * 金額・履歴は返さない（横断ルール: 金額は本人のみ閲覧可）。
  */
 export async function getStaffDisplayInfo(
   repo: TipRepository,
-  staffId: string,
+  membershipId: string,
 ): Promise<StaffDisplayInfo | null> {
-  // staff + store を結合して表示情報を取得
-  const row = await repo.findStaffDisplay(staffId);
+  // membership から staff(人)＋store(店) を解決して表示情報を取得
+  const row = await repo.findMembershipDisplay(membershipId);
   if (!row) return null;
 
   // 表示に必要な項目だけに絞って返す
   return {
+    membershipId: row.membershipId,
     staffId: row.staffId,
     displayName: row.displayName,
     headline: row.headline,
@@ -98,11 +99,11 @@ export class StaffNotChargeableError extends Error {
 export async function createTipIntent(
   repo: TipRepository,
   deps: CreateTipIntentDeps,
-  staffId: string,
+  membershipId: string,
   input: CreateTipInput,
 ): Promise<TipIntentResult | null> {
-  // 送り先 staff の存在と所属店を確認（送信時点の所属を tip に固定保存するため）
-  const staffRow = await repo.findStaffDisplay(staffId);
+  // 送り先 membership（人×店）を解決（送信時点の店を tip に固定保存するため）
+  const staffRow = await repo.findMembershipDisplay(membershipId);
   if (!staffRow) return null;
 
   // Connected Account が無いと Direct charge の課金先が存在しない（着金口の準備が未了）
@@ -114,10 +115,12 @@ export async function createTipIntent(
   const amounts = buildTipAmounts(input.amount);
 
   // まず tip を pending で記録する（決済確定は Webhook を正とするため succeeded にしない）。
+  // staff_id（人）＋ store_id（membership の店を固定）＋ membership_id（追跡用）を記録する。
   // PaymentIntent ID は Direct charge 作成後に後付けする。
   const saved = await repo.insertTip({
     staffId: staffRow.staffId,
     storeId: staffRow.storeId,
+    membershipId: staffRow.membershipId,
     amount: amounts.amount,
     platformFee: amounts.platformFee,
     customerTotal: amounts.customerTotal,
@@ -166,29 +169,81 @@ export async function createTipIntent(
  * 完了画面の表示情報を取得する。
  * 当該 tip の送金額・メッセージと、送り先店員さんの名前を再掲する。
  * amount は「当該 tip の送金額のみ」を返す（履歴・合算は返さない）。
+ * URL は membership（人×店）を指すため、membership を解決して当該 tip の店員(人)と照合する。
  */
 export async function getTipComplete(
   repo: TipRepository,
-  staffId: string,
+  membershipId: string,
   tipId: string,
 ): Promise<TipComplete | null> {
   // tip を ID で取得
   const tip = await repo.findTipById(tipId);
   if (!tip) return null;
 
-  // URL の staffId と tip の staffId が一致しない場合は取り違えとして拒否する
-  if (tip.staffId !== staffId) return null;
+  // 完了 URL の membership を解決し、送り先店員さん（人）を特定する
+  const membership = await repo.findMembershipDisplay(membershipId);
+  if (!membership) return null;
 
-  // 送り先店員さんの表示名を取得（誰に送ったかの再掲）
-  const staffRow = await repo.findStaffDisplay(staffId);
-  if (!staffRow) return null;
+  // URL の membership の店員（人）と tip の staffId が一致しない場合は取り違えとして拒否する
+  if (tip.staffId !== membership.staffId) return null;
 
   return {
     tipId: tip.id,
-    staffDisplayName: staffRow.displayName,
+    staffDisplayName: membership.displayName,
     amount: tip.amount,
     message: tip.message,
     // 完了表示は succeeded 確定後に成立させるため、決済ステータスも返す（Webhook を正とする）
     status: tip.status,
   };
+}
+
+// (c) charge の確定見込み（balance_transaction）を取得する infrastructure 関数の型（コンポジションルートで注入）。
+// charge を expand して available_on / status を読む（PI 直後は未付与のことがあるため null 可）。
+export type RetrieveChargeSettlement = (
+  chargeId: string,
+  connectedAccountId: string,
+) => Promise<{
+  chargeId: string;
+  balanceTransactionId: string | null;
+  availableOn: Date | null;
+  btStatus: "pending" | "available" | null;
+}>;
+
+/**
+ * (c) 受取 tip の確定見込み（charge / balance_transaction）を tip へ鏡保存する（Webhook 経由）。
+ * Stripe を残高の真実の源泉とし、自前 DB は「鏡」を持つ。
+ * webhook feature から直接 import せず、コンポジションルートでこの関数を注入して使う。
+ *
+ * 流れ:
+ *  1. charge を expand して balance_transaction（available_on / status）を取得する（infra 注入）。
+ *  2. tipId（主）/ PaymentIntent ID（従）で対象 tip を特定し、
+ *     stripe_charge_id / balance_transaction_id / available_on / bt_status を保存する（null は既存維持）。
+ *
+ * 用途: UI 表示（「◯日後に送金できます」を tip 単位で正確化）・送金候補の事前フィルタ。
+ *   送金可否の最終判定は必ず送金直前の balance.retrieve（実 available）で行う（これは予測・並べ替え用）。
+ * 保存できたか（boolean）を返す（該当 tip 無しなら false）。
+ */
+export async function recordTipChargeSettlement(
+  repo: TipRepository,
+  retrieveChargeSettlement: RetrieveChargeSettlement,
+  params: {
+    tipId: string | null;
+    paymentIntentId: string | null;
+    chargeId: string;
+    connectedAccountId: string;
+  },
+): Promise<boolean> {
+  // 【1】charge を expand して確定見込み（available_on / status）を取得する
+  const snapshot = await retrieveChargeSettlement(params.chargeId, params.connectedAccountId);
+
+  // 【2】tip へ鏡保存する（tipId 主・PaymentIntent ID 従。null の項目は既存維持で後続イベントが埋める）
+  const updated = await repo.saveTipChargeSettlement({
+    tipId: params.tipId,
+    paymentIntentId: params.paymentIntentId,
+    chargeId: snapshot.chargeId,
+    balanceTransactionId: snapshot.balanceTransactionId,
+    availableOn: snapshot.availableOn,
+    btStatus: snapshot.btStatus,
+  });
+  return updated > 0;
 }

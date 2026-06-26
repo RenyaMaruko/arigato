@@ -3,6 +3,7 @@ import type {
   StaffRepository,
   InviteRow,
   StaffProfileRow,
+  StaffMembershipRow,
   StaffConnectRow,
 } from "./staff.repository.js";
 import type { IdentityStatus } from "./staff.model.js";
@@ -12,21 +13,28 @@ import type { IdentityStatus } from "./staff.model.js";
  * DATABASE_URL が無い環境（ローカル疎通・一部テスト）でも Service を動かせるようにする。
  * 実 DB 実装（createStaffRepository）と同じ契約（StaffRepository）を満たす差し替え。
  *
+ * 多対多モデル: staff（人）はプロフィールを1つ持ち、所属（membership）を複数持てる。
+ *
  * 招待・店の初期データは環境変数 SEED_INVITE_CODE / SEED_STORE_NAME から最小限を投入できる
  * （未設定なら空。実運用は実 DB を使う）。
  */
 export function createInMemoryStaffRepository(): StaffRepository {
   // 招待の簡易ストア（code をキー）
   const invites = new Map<string, InviteRow>();
-  // staff の簡易ストア（authUserId をキー）
-  const staffByAuth = new Map<string, StaffProfileRow>();
+  // staff プロフィールの簡易ストア（authUserId をキー）
+  const profileByAuth = new Map<string, StaffProfileRow>();
+  // 所属（membership）の簡易ストア（membershipId をキー）。staff(人)＝authUserId と店を結ぶ
+  const memberships = new Map<
+    string,
+    { authUserId: string; storeId: string; storeName: string; createdAt: number }
+  >();
   // Connect 連携状態（authUserId をキー）。Stripe Account ID と identity_status を持つ
   const connectByAuth = new Map<
     string,
     { stripeAccountId: string | null; identityStatus: IdentityStatus }
   >();
 
-  // 開発用シード招待（任意）。承認済み店の pending 招待を1件用意する
+  // 開発用シード招待（任意）。導入承認に同意済みの店の pending 招待を1件用意する
   const seedCode = process.env.SEED_INVITE_CODE;
   if (seedCode) {
     invites.set(seedCode, {
@@ -34,7 +42,7 @@ export function createInMemoryStaffRepository(): StaffRepository {
       storeId: randomUUID(),
       storeName: process.env.SEED_STORE_NAME ?? "テスト店",
       inviteStatus: "pending",
-      storeStatus: "approved",
+      storeAdopted: true,
     });
   }
 
@@ -44,35 +52,76 @@ export function createInMemoryStaffRepository(): StaffRepository {
     },
 
     async findStaffByAuthUserId(authUserId) {
-      return staffByAuth.get(authUserId) ?? null;
+      return profileByAuth.get(authUserId) ?? null;
     },
 
-    async createStaffWithInvite(code, params) {
-      const invite = invites.get(code);
-      // 二重消費の防止（pending 以外は使えない）
-      if (!invite || invite.inviteStatus !== "pending") {
-        throw new Error("invite_not_usable");
-      }
+    async listMembershipsByAuthUserId(authUserId) {
+      const list = [...memberships.entries()]
+        .filter(([, m]) => m.authUserId === authUserId)
+        .sort((a, b) => a[1].createdAt - b[1].createdAt);
+      return list.map<StaffMembershipRow>(([id, m]) => ({
+        membershipId: id,
+        storeId: m.storeId,
+        storeName: m.storeName,
+      }));
+    },
+
+    async createStaffProfile(params) {
       const id = randomUUID();
       const row: StaffProfileRow = {
         id,
         displayName: params.displayName,
         headline: params.headline,
         avatarUrl: params.avatarUrl,
-        storeId: params.storeId,
-        storeName: invite.storeName,
         identityStatus: "none",
       };
-      // 招待を消費し、staff を登録する
-      invites.set(code, { ...invite, inviteStatus: "accepted" });
-      staffByAuth.set(params.authUserId, row);
+      profileByAuth.set(params.authUserId, row);
       // Connect 連携状態は初期値（未連携・identity_status=none）で持つ
       connectByAuth.set(params.authUserId, { stripeAccountId: null, identityStatus: "none" });
       return row;
     },
 
+    async joinStoreByInvite(authUserId, code) {
+      const invite = invites.get(code);
+      // 招待が pending かつ店承認済みでなければ使えない
+      if (!invite || invite.inviteStatus !== "pending" || !invite.storeAdopted) {
+        throw new Error("invite_not_usable");
+      }
+      const profile = profileByAuth.get(authUserId);
+      if (!profile) {
+        throw new Error("staff_not_found");
+      }
+      // 既に同じ店に所属していないか（多重参加不可）
+      const existing = [...memberships.entries()].find(
+        ([, m]) => m.authUserId === authUserId && m.storeId === invite.storeId,
+      );
+      if (existing) {
+        return {
+          outcome: "already_member" as const,
+          membershipId: existing[0],
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      }
+      // 新規所属を作成し、招待を消費する
+      const membershipId = randomUUID();
+      memberships.set(membershipId, {
+        authUserId,
+        storeId: invite.storeId,
+        storeName: invite.storeName,
+        createdAt: Date.now(),
+      });
+      invites.set(code, { ...invite, inviteStatus: "accepted" });
+      return {
+        outcome: "joined" as const,
+        membershipId,
+        storeId: invite.storeId,
+        storeName: invite.storeName,
+      };
+    },
+
     async updateStaffProfile(authUserId, params) {
-      const existing = staffByAuth.get(authUserId);
+      const existing = profileByAuth.get(authUserId);
       if (!existing) return null;
       const updated: StaffProfileRow = {
         ...existing,
@@ -80,13 +129,13 @@ export function createInMemoryStaffRepository(): StaffRepository {
         headline: params.headline,
         avatarUrl: params.avatarUrl,
       };
-      staffByAuth.set(authUserId, updated);
+      profileByAuth.set(authUserId, updated);
       return updated;
     },
 
     // 本人の Connect 連携状態を返す（オンボーディングの起点）
     async findStaffConnect(authUserId) {
-      const profile = staffByAuth.get(authUserId);
+      const profile = profileByAuth.get(authUserId);
       if (!profile) return null;
       const connect = connectByAuth.get(authUserId) ?? {
         stripeAccountId: null,
@@ -108,6 +157,54 @@ export function createInMemoryStaffRepository(): StaffRepository {
         identityStatus: "none" as IdentityStatus,
       };
       connectByAuth.set(authUserId, { ...existing, stripeAccountId });
+    },
+
+    // 送金（payout）の本人・Connect 連携状態を返す（送金可否判定・Stripe payout の実行先）
+    async findPayoutContext(authUserId) {
+      const profile = profileByAuth.get(authUserId);
+      if (!profile) return null;
+      const connect = connectByAuth.get(authUserId) ?? {
+        stripeAccountId: null,
+        identityStatus: profile.identityStatus,
+      };
+      return {
+        staffId: profile.id,
+        stripeAccountId: connect.stripeAccountId,
+        identityStatus: connect.identityStatus,
+      };
+    },
+
+    // インメモリ実装は tip を保持しないため着金可能な tip は空（実 DB 環境で本実装が動く）
+    async listPayableTipsByAuthUserId() {
+      return [];
+    },
+
+    // インメモリ実装は payout を永続化しないため、記録は擬似的に返すのみ（実 DB 環境で本実装が動く）
+    async createPendingPayoutAndMarkTipsPaid(params) {
+      return { id: randomUUID(), amount: params.amount, status: "pending" as const };
+    },
+
+    // 同上。永続化しないため stripe_payout_id 補完は no-op（実 DB 環境で本実装が動く）
+    async attachStripePayoutId() {
+      // no-op
+    },
+
+    // 同上。永続化しないため revert は no-op（実 DB 環境で本実装が動く）
+    async revertPayoutByPayoutId() {
+      // no-op
+    },
+
+    // 同上。送金履歴も空
+    async listPayoutsByAuthUserId() {
+      return [];
+    },
+
+    // 同上。payout を保持しないため照合できず、反映なし（false）
+    async markPayoutPaid() {
+      return false;
+    },
+    async markPayoutFailedAndRevertTips() {
+      return false;
     },
 
     // インメモリ実装は tip を保持しないため受取履歴は空（実 DB 環境で本実装が動く）
@@ -147,9 +244,34 @@ export function createInMemoryStaffRepository(): StaffRepository {
       }
       // verified へ確定し、プロフィールの identity_status も同期する
       connectByAuth.set(foundAuth, { ...connect, identityStatus: "verified" });
-      const profile = staffByAuth.get(foundAuth);
-      if (profile) staffByAuth.set(foundAuth, { ...profile, identityStatus: "verified" });
+      const profile = profileByAuth.get(foundAuth);
+      if (profile) profileByAuth.set(foundAuth, { ...profile, identityStatus: "verified" });
       return { found: true, verified: true, promotedTips: 0 };
+    },
+
+    // (d) payout を保持しないインメモリでは照合できず null（実 DB 環境で本実装が動く）
+    async findPayoutForLedger() {
+      return null;
+    },
+    // (d) tip を保持しないインメモリでは紐づく tip 無し（実 DB 環境で本実装が動く）
+    async listPaidTipsForPayout() {
+      return [];
+    },
+    // (d) tip を保持しないインメモリでは charge→tip 逆引きできず null
+    async findTipIdByChargeId() {
+      return null;
+    },
+    // (d) 台帳を保持しないインメモリでは追記なし（0 件）
+    async appendPayoutLedgerEntries() {
+      return 0;
+    },
+    // (f) 台帳を保持しないインメモリでは補正追記はダミー id を返す（実 DB 環境で本実装が動く）
+    async appendLedgerCorrection() {
+      return "00000000-0000-0000-0000-000000000000";
+    },
+    // (e) tip / Connected Account を保持しないインメモリでは照合対象なし（実 DB 環境で本実装が動く）
+    async listReconcileTotalsByStaff() {
+      return [];
     },
   };
 }

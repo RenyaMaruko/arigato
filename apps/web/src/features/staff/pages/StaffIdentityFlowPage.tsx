@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
-import { useNavigate } from "@tanstack/react-router";
+import { useNavigate, useRouter } from "@tanstack/react-router";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe, useStartConnectOnboard } from "../hooks/useStaff.js";
@@ -14,7 +14,19 @@ import { useStaffMe, useStartConnectOnboard } from "../hooks/useStaff.js";
 export function StaffIdentityFlowPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const router = useRouter();
   const { isAuthenticated, loading: authLoading } = useAuthSession();
+
+  // 戻る: 来た元（ホーム/残高など）へ履歴で戻す。履歴が無い（直リンク）ときはホームへ。
+  // 以前は /staff/balance に固定していたため、ホームの「本人確認をする」から来ても残高画面に
+  // 飛んでしまっていた。実際の遷移元へ戻すことで自然な挙動にする。
+  const handleBack = () => {
+    if (router.history.canGoBack()) {
+      router.history.back();
+    } else {
+      navigate({ to: "/staff" });
+    }
+  };
   const meQuery = useStaffMe(isAuthenticated);
   const onboard = useStartConnectOnboard();
 
@@ -59,7 +71,7 @@ export function StaffIdentityFlowPage() {
       <div className="flex flex-none items-center gap-3.5 px-[22px] pb-[18px] pt-2">
         <button
           type="button"
-          onClick={() => navigate({ to: "/staff/balance" })}
+          onClick={handleBack}
           aria-label={t("staff.back")}
           className="flex h-6 w-6 items-center justify-center text-ink"
         >

@@ -5,18 +5,15 @@ import type {
   StoreStaffResponse,
   StoreGratitude,
   UpdateStoreProfileInput,
+  CreateStoreInput,
+  CreateStoreInviteInput,
 } from "@arigato/shared";
-import {
-  isApproved,
-  generateInviteCode,
-  summarizeGratitudeCounts,
-  type StoreStatus,
-} from "./store.model.js";
+import { generateInviteCode, summarizeGratitudeCounts } from "./store.model.js";
 import type { StoreRepository, StoreRow } from "./store.repository.js";
 
 /**
  * store feature の Service 層（ユースケースの指揮者・アクセス制御）。
- * Model（承認判定・招待コード生成・件数集計）と Repository（DB）を組み合わせて店のユースケースを実現する。
+ * Model（招待コード生成・件数集計）と Repository（DB）を組み合わせて店のユースケースを実現する。
  * Repository は引数で受け取り（注入）、feature から infrastructure を直接 import しない。
  *
  * アクセス制御はこの層で守る。店スコープの全 API は、認証済みの authUserId が「その店の所有者」である
@@ -28,13 +25,6 @@ import type { StoreRepository, StoreRow } from "./store.repository.js";
 
 // お客さまの声フィードの表示上限（件数。金額とは無関係）
 const GRATITUDE_VOICES_LIMIT = 30;
-
-/**
- * 店が承認済みかを返すユースケース（Sprint 1 から残す薄いラッパ）。
- */
-export function resolveApproval(status: StoreStatus): boolean {
-  return isApproved(status);
-}
 
 // 店スコープのアクセス制御で起こりうるエラー（Route で HTTP ステータスに変換する）
 // 店が存在しない／自分の所有でない場合に投げる。情報秘匿のため両方を区別なく 404 扱いにできる。
@@ -59,8 +49,7 @@ function toStoreProfile(row: StoreRow): StoreProfile {
     description: row.description,
     industry: row.industry,
     logoUrl: row.logoUrl,
-    status: row.status,
-    approvedAt: row.approvedAt,
+    adoptionAgreedAt: row.adoptionAgreedAt,
   };
 }
 
@@ -89,8 +78,8 @@ async function requireOwnedStore(
 
 /**
  * 自分（ログイン中の店アカウント）が所有する店を取得する（GET /store/me）。
- * 店ホーム・設定の起点。未紐付け（どの店も所有していない）なら null を返し、
- * フロントは導入承認（claim）導線へ誘導する。
+ * 店ホーム・設定の起点。未作成（どの店も所有していない）なら null を返し、
+ * フロントは店舗作成（セルフサーブ）導線へ誘導する。
  */
 export async function getMyStore(
   repo: StoreRepository,
@@ -101,36 +90,48 @@ export async function getMyStore(
   return toStoreProfile(store);
 }
 
+// 店舗の重複作成（1アカウント1店舗）を防ぐためのエラー（Route で 409 に変換する）
+export class StoreAlreadyExistsError extends Error {
+  constructor() {
+    super("store_already_exists");
+    this.name = "StoreAlreadyExistsError";
+  }
+}
+
 /**
- * 店アカウントが未所有の店を引き受ける（導入のセットアップ・POST /store/:storeId/claim）。
- * 運営が用意した（pending の）店に、ログイン中の店アカウントを所有者として紐付ける。
- * これにより店アカウントの Supabase ユーザーと store が結びつき、以降は店スコープで操作できる。
- * - 店が無ければ StoreNotFoundError。
- * - 既に別の所有者がいる場合は StoreForbiddenError（横取りを防ぐ）。自分が所有者なら冪等に成功。
+ * 店舗をセルフサーブで新規作成する（POST /store）。
+ * ログイン中の店アカウントを所有者にし、店名等と「導入承認の同意」を受けて作成する。
+ * 同意（adoption_agreed_at）は Repository が作成時刻で記録する（店自身の一手間）。
+ * 運営の事前発行・claim・承認ゲートは廃止し、ここで自己登録を完結させる。
+ *
+ * - 既に自分の店があれば多重作成を防ぐ（StoreAlreadyExistsError・1アカウント1店舗）。
  */
-export async function claimStore(
+export async function createStore(
   repo: StoreRepository,
   authUserId: string,
-  storeId: string,
+  input: CreateStoreInput,
 ): Promise<StoreProfile> {
-  const store = await repo.findStoreById(storeId);
-  if (!store) {
-    throw new StoreNotFoundError();
+  // 多重作成の防止（同じ auth ユーザーは1つの店のみ所有する）
+  const existing = await repo.findStoreByOwner(authUserId);
+  if (existing) {
+    throw new StoreAlreadyExistsError();
   }
-  // 既に所有者がいて自分でなければ拒否（他人の店は引き受けられない）
-  if (store.ownerAuthUserId !== null && store.ownerAuthUserId !== authUserId) {
-    throw new StoreForbiddenError();
-  }
-  // 自分が所有者なら据え置き（冪等）。未所有なら紐付ける
-  if (store.ownerAuthUserId === authUserId) {
-    return toStoreProfile(store);
-  }
-  const claimed = await repo.setStoreOwner(storeId, authUserId);
-  if (!claimed) {
-    // 紐付け直前に他者が所有した場合の競合
-    throw new StoreForbiddenError();
-  }
-  return toStoreProfile(claimed);
+
+  // 空文字の任意項目は未入力（null）に正規化して保存する
+  const normalize = (v: string | undefined): string | null => {
+    if (v == null) return null;
+    const trimmed = v.trim();
+    return trimmed === "" ? null : trimmed;
+  };
+
+  const created = await repo.createStore({
+    ownerAuthUserId: authUserId,
+    name: input.name.trim(),
+    description: normalize(input.description),
+    industry: normalize(input.industry),
+    logoUrl: input.logoUrl ?? null,
+  });
+  return toStoreProfile(created);
 }
 
 /**
@@ -147,26 +148,8 @@ export async function getStore(
 }
 
 /**
- * 導入を承認する（POST /store/:storeId/approve）。店スコープ。
- * 自店の status を pending→approved に遷移し、承認日時を設定する（既に approved なら冪等に据え置く）。
- */
-export async function approveStore(
-  repo: StoreRepository,
-  authUserId: string,
-  storeId: string,
-): Promise<StoreProfile> {
-  // 所有確認（自店のみ承認できる）
-  await requireOwnedStore(repo, authUserId, storeId);
-  const approved = await repo.approveStore(storeId);
-  if (!approved) {
-    throw new StoreNotFoundError();
-  }
-  return toStoreProfile(approved);
-}
-
-/**
  * 店プロフィールを更新する（PATCH /store/:storeId）。店スコープ。
- * 名前・紹介・業種・ロゴのみ更新する。ステータス・承認・金額は変更しない。
+ * 名前・紹介・業種・ロゴのみ更新する。導入承認の同意・金額は変更しない。
  */
 export async function updateStore(
   repo: StoreRepository,
@@ -200,28 +183,37 @@ export type BuildInviteUrl = (code: string) => string;
  * スタッフ招待を発行する（POST /store/:storeId/invites・方式A）。店スコープ。
  * 一意の招待コードを生成して保存し、店員さんに渡す招待リンク URL（/invite/:code）を返す。
  * この招待リンクから登録した店員さんは自動で自店に所属する（招待で店承認を担保）。
+ *
+ * input.label は「誰宛か」の任意メモ（招待中一覧での識別に使う）。空・未入力は null に正規化し、
+ * 無記名の招待として発行する（手軽さを壊さない）。
  */
 export async function createStoreInvite(
   repo: StoreRepository,
   buildInviteUrl: BuildInviteUrl,
   authUserId: string,
   storeId: string,
+  input?: CreateStoreInviteInput,
 ): Promise<StoreInviteCreated> {
   await requireOwnedStore(repo, authUserId, storeId);
+  // ラベル（誰宛かの任意メモ）を正規化する。空白のみ・未入力は無記名（null）にする
+  const rawLabel = input?.label;
+  const label = rawLabel != null && rawLabel.trim() !== "" ? rawLabel.trim() : null;
   // 一意の招待コードを生成する（Model の純粋関数）
   const code = generateInviteCode();
-  const invite = await repo.createInvite(storeId, code);
+  const invite = await repo.createInvite(storeId, code, label);
   return {
     code: invite.code,
     inviteUrl: buildInviteUrl(invite.code),
     status: invite.status,
     createdAt: invite.createdAt,
+    label: invite.label,
   };
 }
 
 /**
- * 発行済み招待の一覧を取得する（GET /store/:storeId/invites）。店スコープ。
- * pending（招待中）/ accepted（所属確定）/ revoked（失効）を新しい順に返す。
+ * 招待中（pending）の招待一覧を取得する（GET /store/:storeId/invites）。店スコープ。
+ * accepted（所属確定）は在籍中タブに出るため、revoked（失効）は履歴管理しないため返さない。
+ * よって全 item が pending であり、各行はリンク再コピー・取り消しの対象になる。
  */
 export async function listStoreInvites(
   repo: StoreRepository,
@@ -239,10 +231,38 @@ export async function listStoreInvites(
       inviteUrl: buildInviteUrl(i.code),
       acceptedStaffName: i.acceptedStaffName,
       acceptedAt: i.acceptedAt,
+      label: i.label,
     })),
-    // 招待中（pending）の件数
+    // 招待中（pending）の件数。listInvites が pending のみ返すので全件が pending
     pendingCount: invites.filter((i) => i.status === "pending").length,
   };
+}
+
+// 取り消し対象の招待が見つからない（既に消費・失効・他店）ときのエラー（Route で 404 に変換する）
+export class StoreInviteNotFoundError extends Error {
+  constructor() {
+    super("store_invite_not_found");
+    this.name = "StoreInviteNotFoundError";
+  }
+}
+
+/**
+ * 自店の招待中（pending）の招待を取り消す（POST /store/:storeId/invites/:code/revoke）。店スコープ。
+ * pending を revoked にするだけで、取り消した招待は招待中一覧（pending のみ）から自然に消える。
+ * 自店・pending のみが対象。対象が無ければ StoreInviteNotFoundError（既に消費・失効・他店）。
+ */
+export async function revokeStoreInvite(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+  code: string,
+): Promise<void> {
+  // 自店の所有者であることを先に確認する（他店の招待は触れない）
+  await requireOwnedStore(repo, authUserId, storeId);
+  const revoked = await repo.revokeInvite(storeId, code);
+  if (revoked === 0) {
+    throw new StoreInviteNotFoundError();
+  }
 }
 
 /**

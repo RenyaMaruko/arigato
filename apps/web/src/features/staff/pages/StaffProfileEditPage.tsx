@@ -50,7 +50,7 @@ function EditForm({
   me,
   updateMutation,
 }: {
-  me: { displayName: string; headline: string | null; storeName: string; avatarUrl: string | null };
+  me: { displayName: string; headline: string | null; avatarUrl: string | null };
   updateMutation: ReturnType<typeof useUpdateStaffProfile>;
 }) {
   const { t } = useTranslation();
@@ -157,16 +157,8 @@ function EditForm({
             className="mt-2 rounded-xl border-[1.5px] border-line px-3.5 py-3.5 text-token-lg text-ink outline-none focus:border-rose"
           />
 
-          {/* 所属店（読み取り専用・招待で確定済み） */}
-          <label className="mt-[18px] text-token-sm text-ink-sub" htmlFor="edit-store">
-            {t("staff.editStoreLabel")}
-          </label>
-          <div
-            id="edit-store"
-            className="mt-2 rounded-xl border-[1.5px] border-line bg-surface-subtle px-3.5 py-3.5 text-token-lg text-ink-sub"
-          >
-            {me.storeName}
-          </div>
+          {/* 所属店は複数（掛け持ち）になりうるため、編集画面では一覧をホームに任せる
+              （プロフィールは人ごと1つ・全所属店で共通のため、ここでは表示名・一言のみ編集する） */}
 
           {/* 保存ボタン */}
           <button

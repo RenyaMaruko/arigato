@@ -16,8 +16,9 @@ import type {
  */
 
 // 評価・デモ用に最初から入っている店員さんのサンプル表示情報
-// （URL の :staffId が未知でも、安心して投げ銭フローを試せるようにする）
+// （URL の :membershipId が未知でも、安心して投げ銭フローを試せるようにする）
 const sampleStaff: StaffDisplayRow = {
+  membershipId: "00000000-0000-0000-0000-000000000100",
   staffId: "00000000-0000-0000-0000-000000000001",
   displayName: "山田 さくら",
   headline: "笑顔で接客します",
@@ -30,8 +31,8 @@ const sampleStaff: StaffDisplayRow = {
 
 /**
  * インメモリの TipRepository を生成する。
- * findStaffDisplay は「どの staffId でもサンプル店員さんを返す」フォールバック挙動にして、
- * 任意の /tip/:staffId（例: /tip/test-staff-id）でも画面が成立するようにする。
+ * findMembershipDisplay は「どの membershipId でもサンプル店員さんを返す」フォールバック挙動にして、
+ * 任意の /tip/:membershipId（例: /tip/test-membership-id）でも画面が成立するようにする。
  */
 export function createInMemoryTipRepository(): TipRepository {
   // tipId → 保存済み tip 行
@@ -40,9 +41,9 @@ export function createInMemoryTipRepository(): TipRepository {
   const piIndex = new Map<string, string>();
 
   return {
-    // どんな staffId でもサンプル店員さんの表示情報を返す（URL の id を採用して整合させる）
-    async findStaffDisplay(staffId) {
-      return { ...sampleStaff, staffId };
+    // どんな membershipId でもサンプル店員さんの表示情報を返す（URL の id を採用して整合させる）
+    async findMembershipDisplay(membershipId) {
+      return { ...sampleStaff, membershipId };
     },
 
     // tip をメモリに1件保存し、保存後の行を返す
@@ -116,6 +117,30 @@ export function createInMemoryTipRepository(): TipRepository {
     // インメモリ実装は Connected Account を持たないため、突合対象は基本的に空になる。
     async listPendingTipsForReconcile() {
       return [];
+    },
+
+    // (c) 確定見込み（charge / balance_transaction）をメモリ上の tip 行へ鏡保存する。
+    //   実 DB と同じく tipId 主・PaymentIntent ID 従で特定する。インメモリ行は最小情報のみ保持する。
+    async saveTipChargeSettlement(params) {
+      // tipId か PaymentIntent ID から対象の tipId を解決する
+      const tipId = params.tipId ?? (params.paymentIntentId ? piIndex.get(params.paymentIntentId) : undefined);
+      if (!tipId) return 0;
+      const row = tips.get(tipId);
+      if (!row) return 0;
+      // TipRow は鏡列を持たないため、保存できたことだけを件数で返す（DB 接続時のみ列に反映）
+      return 1;
+    },
+
+    // (f) 返金・チャージバックでメモリ上の tip を refunded / disputed へ遷移する。
+    //   charge ID を保持しないインメモリでは PaymentIntent ID 経由で特定する（charge は DB 接続時のみ逆引き）。
+    async applySettlementCorrectionToTip(params) {
+      const tipId = params.paymentIntentId ? piIndex.get(params.paymentIntentId) : undefined;
+      if (!tipId) return null;
+      const row = tips.get(tipId);
+      if (!row) return null;
+      if (row.settlementStatus === "refunded" || row.settlementStatus === "disputed") return null;
+      tips.set(tipId, { ...row, settlementStatus: params.settlementStatus });
+      return { tipId, staffId: row.staffId, amount: row.amount };
     },
   };
 }

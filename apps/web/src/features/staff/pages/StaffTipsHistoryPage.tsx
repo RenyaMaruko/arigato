@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import type { StaffTipItem, SettlementStatus } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe, useStaffTips } from "../hooks/useStaff.js";
 
@@ -64,8 +65,8 @@ export function StaffTipsHistoryPage() {
           </div>
         ) : (
           <>
-            {/* 合計（本人のみ） */}
-            <div className="flex items-baseline justify-between px-0.5 pb-3">
+            {/* 合計（本人のみ・手取りベース） */}
+            <div className="flex items-baseline justify-between px-0.5 pb-1">
               <span className="text-token-md font-bold text-ink">
                 {tips.items.length} 件
               </span>
@@ -74,6 +75,10 @@ export function StaffTipsHistoryPage() {
                 <span className="font-bold text-ink">¥{tips.totalAmount.toLocaleString()}</span>
               </span>
             </div>
+            {/* 手取り型の補足: 表示金額は手取り（投げ銭の約85%・手数料15%・決済料込み） */}
+            <p className="px-0.5 pb-3 text-token-xs leading-relaxed text-muted">
+              {t("staff.balanceTakeNote")}
+            </p>
 
             {/* 受取一覧（カード内に区切り線で並べる） */}
             <ul className="overflow-hidden rounded-2xl bg-page shadow-[0_2px_10px_rgba(20,20,40,.05)]">
@@ -87,6 +92,9 @@ export function StaffTipsHistoryPage() {
           </>
         )}
       </div>
+
+      {/* 下部ボトムナビ（現在地＝履歴） */}
+      <StaffBottomNav active="history" />
     </PhoneFrame>
   );
 }
@@ -155,6 +163,15 @@ function SettlementBadge({ status }: { status: SettlementStatus }) {
     paid: {
       label: t("staff.tipsSettlementPaid"),
       className: "bg-surface-subtle text-ink-sub",
+    },
+    // (f) 返金・異議は終端状態。残高・送金候補から除外済みであることをバッジで示す
+    refunded: {
+      label: t("staff.tipsSettlementRefunded"),
+      className: "bg-surface-subtle text-muted",
+    },
+    disputed: {
+      label: t("staff.tipsSettlementDisputed"),
+      className: "bg-surface-subtle text-muted",
     },
   };
   const { label, className } = map[status];

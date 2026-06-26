@@ -22,7 +22,7 @@ export function createInMemoryStoreRepository(): StoreRepository {
   // スタッフの簡易ストア（store_id ごとに保持）
   const staffByStore = new Map<string, StoreStaffRow[]>();
 
-  // 開発用シード店（任意）。owner 未紐付けの pending 店を1件用意する
+  // 開発用シード店（任意）。owner 未紐付け・導入承認未同意の移行相当の店を1件用意する
   const seedStoreId = process.env.SEED_STORE_ID;
   if (seedStoreId) {
     stores.set(seedStoreId, {
@@ -31,8 +31,7 @@ export function createInMemoryStoreRepository(): StoreRepository {
       description: null,
       industry: null,
       logoUrl: null,
-      status: "pending",
-      approvedAt: null,
+      adoptionAgreedAt: null,
       ownerAuthUserId: null,
     });
   }
@@ -49,29 +48,20 @@ export function createInMemoryStoreRepository(): StoreRepository {
       return null;
     },
 
-    async setStoreOwner(storeId, authUserId) {
-      const store = stores.get(storeId);
-      if (!store) return null;
-      // 既に別の所有者がいれば横取りしない
-      if (store.ownerAuthUserId !== null && store.ownerAuthUserId !== authUserId) {
-        return null;
-      }
-      const updated = { ...store, ownerAuthUserId: authUserId };
-      stores.set(storeId, updated);
-      return updated;
-    },
-
-    async approveStore(storeId) {
-      const store = stores.get(storeId);
-      if (!store) return null;
-      const updated: StoreRow = {
-        ...store,
-        status: "approved",
-        // 既に承認済みなら据え置き（冪等）
-        approvedAt: store.approvedAt ?? new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+    async createStore(params) {
+      // セルフサーブ作成（作成者＝所有者・導入承認に同意済み）
+      const id = randomUUID();
+      const created: StoreRow = {
+        id,
+        name: params.name,
+        description: params.description,
+        industry: params.industry,
+        logoUrl: params.logoUrl,
+        adoptionAgreedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+        ownerAuthUserId: params.ownerAuthUserId,
       };
-      stores.set(storeId, updated);
-      return updated;
+      stores.set(id, created);
+      return created;
     },
 
     async updateStore(storeId, params) {
@@ -88,13 +78,15 @@ export function createInMemoryStoreRepository(): StoreRepository {
       return updated;
     },
 
-    async createInvite(storeId, code) {
+    async createInvite(storeId, code, label) {
       const invite: StoreInviteRow = {
         code,
         status: "pending",
         createdAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
         acceptedStaffName: null,
         acceptedAt: null,
+        // 誰宛かの任意メモ（未入力は null）
+        label: label ?? null,
       };
       const list = invitesByStore.get(storeId) ?? [];
       // 新しい順に保つため先頭に積む
@@ -104,8 +96,23 @@ export function createInMemoryStoreRepository(): StoreRepository {
     },
 
     async listInvites(storeId) {
-      // 既に新しい順で保持している
-      return [...(invitesByStore.get(storeId) ?? [])];
+      // 招待中（pending）だけを新しい順に返す（accepted/revoked は二重表示・履歴管理しないため除く）
+      return (invitesByStore.get(storeId) ?? []).filter((i) => i.status === "pending");
+    },
+
+    async findInviteByCode(storeId, code) {
+      // 自店の pending 招待だけを対象にする（再コピー・取り消しの対象確認）
+      const list = invitesByStore.get(storeId) ?? [];
+      return list.find((i) => i.code === code && i.status === "pending") ?? null;
+    },
+
+    async revokeInvite(storeId, code) {
+      // 自店の pending 招待を revoked に更新する。更新できた件数を返す
+      const list = invitesByStore.get(storeId) ?? [];
+      const target = list.find((i) => i.code === code && i.status === "pending");
+      if (!target) return 0;
+      target.status = "revoked";
+      return 1;
     },
 
     async listStaff(storeId) {

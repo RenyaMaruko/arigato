@@ -52,9 +52,19 @@ export const ja = {
       completeDelivered: "を届けました",
       sendAgain: "もう一度送る",
       close: "閉じる",
+      // 後日確定手段（PayPay 等）で受け付けたとき（confirm が processing を返したとき）。
+      // 完了表示はせず「受け付けました（結果は後ほど）」として後続の確定を待つ
+      paymentProcessing: "お支払いを受け付けました",
+      paymentProcessingNote:
+        "決済の確定までしばらくお待ちください。結果が確定するとこの画面が完了表示に切り替わります。",
       // 決済確定（Webhook を正とするため、確定待ち・失敗の状態を持つ）
       confirming: "決済を確認しています…",
       confirmingNote: "決済が成立すると、この画面が完了表示に切り替わります。",
+      // 確認が長引いたとき（タイムアウト）の案内。二重送信を防ぐ文言を添える
+      confirmTimeout: "確認に時間がかかっています",
+      confirmTimeoutNote:
+        "通信状況により確認が遅れることがあります。すでにお支払いが完了している場合があるため、もう一度送らずにお待ちいただくか、再確認してください。",
+      recheck: "もう一度確認する",
       paymentFailed: "決済が成立しませんでした",
       paymentFailedNote: "お手数ですが、もう一度お試しください。",
       retry: "もう一度試す",
@@ -90,6 +100,17 @@ export const ja = {
       inviteLead: "このお店の店員さんとして登録します",
       inviteStoreLabel: "所属するお店",
       inviteStart: "はじめる",
+      // 参加（join）の処理中・完了・既に所属
+      joining: "参加処理中…",
+      joinErrorInvite: "招待が無効です。コードを確認してください。",
+      joinErrorGeneric: "参加できませんでした。もう一度お試しください。",
+      // 参加完了画面（「〇〇店に参加しました！」）。{{store}} に店名が入る
+      joinedTitle: "{{store}} に参加しました！",
+      joinedLead: "お店のQRを表示して、ありがとうを受け取りましょう",
+      // 既に同じ店に所属していた場合の案内
+      alreadyMemberTitle: "すでに {{store}} に所属しています",
+      alreadyMemberLead: "ホームからこのお店のQRを表示できます",
+      joinedGoHome: "ホームへ",
       displayNameLabel: "表示名",
       displayNamePlaceholder: "例）山田 さくら",
       headlineLabel: "一言（任意）",
@@ -103,6 +124,24 @@ export const ja = {
       homeQr: "QRを表示",
       homeProfile: "プロフィール",
       homeWelcome: "ようこそ",
+      // 所属店一覧（複数可・掛け持ち）。各店ごとにQRへ導く
+      homeStoresLabel: "所属しているお店",
+      homeStoreQr: "QRを表示",
+      homeNoStores: "まだお店に所属していません。招待リンクから参加してください。",
+      homeAccount: "口座登録",
+      // ホームの残高カード（残高を1つにまとめて表示し、すぐ下に本人確認の導線を置く）
+      homeBalanceLabel: "残高",
+      // 未確認: 本人確認すれば送金できる、という一言
+      homeBalanceToSendNote: "本人確認を済ませると送金できます",
+      // 確認済み: 送金できる状態
+      homeBalanceVerifiedNote: "送金できます",
+      // 確認済み: 今すぐ送金できる額（Stripe available）。{{amount}} に金額（残りは準備中＝数日後）
+      homeBalanceSendableNote: "いま送金できる額 {{amount}}（残りは準備中です）",
+      // 残高のすぐ下のアクション（未確認＝本人確認へ／確認済＝残高の詳細へ）
+      homeVerifyCta: "本人確認をする",
+      homeBalanceDetailCta: "残高の詳細を見る",
+      // 確認済みのホームの主アクション（送金画面へ）
+      homePayoutCta: "送金する",
       identityNone: "本人確認はまだです（後でOK）",
       identityPending: "本人確認を確認中です",
       identityVerified: "本人確認済み",
@@ -110,6 +149,8 @@ export const ja = {
       // QR
       qrTitle: "QRコード",
       qrHeading: "あなた専用の投げ銭QR",
+      // 店ごとのQR であることを示すサブ見出し（{{store}} に店名）
+      qrStoreSub: "{{store}} 用のQR",
       qrNote: "このQRをお客さまに見せてください",
       qrPrint: "印刷する",
       qrUrlLabel: "QRが指すURL",
@@ -120,9 +161,9 @@ export const ja = {
       editSubmit: "保存する",
       editSaved: "保存しました",
       editError: "保存に失敗しました。もう一度お試しください。",
-      // ホームの導線（受取履歴・残高）
+      // ホームの導線（受取履歴・送金）
       homeHistory: "受取履歴",
-      homeBalance: "残高・ステータス",
+      homePayout: "送金",
       // 受取履歴（04）
       tipsTitle: "受取履歴",
       tipsTotalLabel: "合計",
@@ -130,6 +171,8 @@ export const ja = {
       tipsSettlementHeld: "保留中",
       tipsSettlementPayable: "着金可能",
       tipsSettlementPaid: "着金済",
+      tipsSettlementRefunded: "返金済",
+      tipsSettlementDisputed: "異議申立",
       tipsNoMessage: "メッセージはありません",
       // 残高・ステータス（05）
       balanceTitle: "残高・ステータス",
@@ -141,6 +184,50 @@ export const ja = {
       balanceRegisterAccount: "口座を登録する",
       balanceSeeFlow: "本人確認の流れを見る",
       balanceVerifiedNote: "本人確認が完了しています。着金可能額をご確認ください。",
+      // 手取り型の補足（店員さんに届くのは受取の約85%。手数料15%・決済料込み）
+      balanceTakeNote: "表示金額は手取り額です（投げ銭の約85%。手数料15%・決済料込み）",
+      // 送金（振込申請・手動送金）
+      payoutTitle: "送金",
+      payoutAvailableLabel: "送金できる額",
+      payoutAvailableSub: "（いま登録口座へ送金できる金額）",
+      // 着金タイミングの明示（数営業日）
+      payoutArrivalNote: "送金すると、申請から数営業日で登録口座に着金します。",
+      // 3段残高: 準備中（Stripe 確定待ち）・本人確認待ち（held）
+      payoutPendingLabel: "準備中",
+      payoutPendingSub: "（受け取り後、数日で送金できるようになります）",
+      // {{date}} に available になる日付（例: 7月1日）。available_on が取れたときだけ出す
+      payoutPendingDate: "{{date}}から送金できます",
+      payoutHeldLabel: "本人確認待ち",
+      payoutHeldSub: "（本人確認を済ませると送金できるようになります）",
+      // 準備中で「送金できる額」が0のときの理由
+      payoutPendingOnly: "受け取った投げ銭は準備中です。数日後に送金できるようになります。",
+      // 送金ボタン・確認シート
+      payoutCta: "送金する",
+      payoutConfirmTitle: "送金の確認",
+      // {{amount}} に送金額（例: ¥7,650）
+      payoutConfirmBody: "{{amount}} を登録口座へ送金します。申請から数営業日で着金します。",
+      payoutConfirmCta: "送金する",
+      payoutCancel: "キャンセル",
+      payoutSending: "送金中…",
+      // {{amount}} に送金額
+      payoutDone: "{{amount}} を送金しました。数営業日で着金します。",
+      // 送金できない理由
+      payoutNoBalance: "送金できる残高がありません。",
+      // {{min}} に最低送金額（例: ¥100）
+      payoutBelowMinimum: "最低送金額（{{min}}）に達していません。",
+      // verified でないとき
+      payoutNeedVerify: "送金には本人確認・口座登録が必要です。",
+      payoutGoVerify: "本人確認・口座登録をする",
+      // エラー表示
+      payoutError: "送金できませんでした。もう一度お試しください。",
+      payoutErrorNotVerified: "送金には本人確認・口座登録が必要です。",
+      payoutErrorBelowMinimum: "最低送金額に達していないため送金できません。",
+      // 送金履歴
+      payoutHistoryTitle: "送金履歴",
+      payoutHistoryEmpty: "まだ送金はありません",
+      payoutStatusPending: "申請中",
+      payoutStatusPaid: "着金済",
+      payoutStatusFailed: "失敗",
       // 本人確認の流れ（06）
       identityTitle: "本人確認・口座登録",
       identityStep1Title: "1. 基本情報の入力",
@@ -162,6 +249,7 @@ export const ja = {
       identityCompletePendingNote: "完了が反映されると、この画面が切り替わります。",
       identityCompleteSeeBalance: "残高を確認する",
       identityCompleteSeeHistory: "履歴を見る",
+      identityCompleteGoHome: "ホームに戻る",
       // 申告データ出力（08）
       exportTitle: "データ出力",
       exportLead: "受取記録をCSVで出力できます\n確定申告にご利用いただけます",
@@ -170,6 +258,16 @@ export const ja = {
       exportDownloading: "出力中…",
       exportError: "出力に失敗しました。もう一度お試しください。",
       exportLink: "申告データ（CSV）",
+      // ボトムナビ（モック01）。ホーム / 履歴 / QR / 設定
+      navHome: "ホーム",
+      navHistory: "履歴",
+      navQr: "QR",
+      navSettings: "設定",
+      // 設定画面（10）。プロフィール・本人確認/口座・申告データ・ログアウトへの導線
+      settingsTitle: "設定",
+      settingsProfile: "プロフィール編集",
+      settingsIdentity: "本人確認・口座登録",
+      settingsExport: "申告データ（CSV）",
       // 共通
       loading: "読み込み中…",
     },
@@ -178,7 +276,6 @@ export const ja = {
       san: "さん",
       // ログイン
       loginTitle: "店舗ログイン",
-      loginLead: "お店に届く「ありがとう」を見守りましょう",
       continueWithGoogle: "Google で続ける",
       emailLabel: "メールアドレス",
       emailPlaceholder: "store@example.com",
@@ -189,14 +286,16 @@ export const ja = {
       loginError: "ログインに失敗しました。もう一度お試しください。",
       logout: "ログアウト",
       loading: "読み込み中…",
-      // 導入セットアップ（claim）
-      setupTitle: "お店を引き受ける",
-      setupLead: "運営から案内された店舗IDを入力して、\nこのアカウントにお店を紐付けます。",
-      setupStoreIdLabel: "店舗ID",
-      setupStoreIdPlaceholder: "運営から受け取った店舗ID",
-      setupSubmit: "このお店を引き受ける",
-      setupError: "お店を引き受けられませんでした。店舗IDをご確認ください。",
-      setupNotFound: "そのお店は見つからないか、既に別のアカウントが利用中です。",
+      // 店舗作成（セルフサーブ登録）
+      createTitle: "お店を作成する",
+      createLead: "あなたのお店の名前を入力して、\n導入承認に同意するとはじめられます。",
+      createNameLabel: "店名",
+      createNamePlaceholder: "例）カフェ Arigato",
+      createAgreeLabel:
+        "このお店で投げ銭を導入することに同意します（就業規則との整合は店舗側で確認します）。",
+      createSubmit: "このお店を作成する",
+      createError: "お店を作成できませんでした。もう一度お試しください。",
+      createAlreadyExists: "このアカウントには既にお店があります。",
       // ホーム（01）
       homeBell: "通知",
       homeHeroTitle: "お店全体に届いた\n「ありがとう」",
@@ -210,17 +309,13 @@ export const ja = {
       navStaff: "スタッフ",
       navGratitude: "感謝の可視化",
       navSettings: "設定",
-      // 導入・承認（08）
+      // 導入・承認（08）— 作成時に同意済みの記録を表示する読み取り専用画面
       approvalTitle: "導入・承認",
       approvalApprovedTitle: "導入済み",
       approvalApprovedSub: "この店舗ではサービスを\n利用中です",
-      approvalPendingTitle: "承認待ち",
-      approvalPendingSub: "導入を承認すると、\nスタッフの招待ができます",
       approvalCardTitle: "就業規則との整合確認",
-      approvalCardBody: "就業規則との整合のため、\n導入を承認してください。",
-      approvalButton: "導入を承認する",
-      approvalApproving: "承認中…",
-      approvalError: "承認に失敗しました。もう一度お試しください。",
+      approvalCardBody: "お店の作成時に、就業規則との整合のため\n導入承認に同意いただいています。",
+      approvalAgreedAt: "同意日：{{date}}",
       // スタッフ一覧（03）
       staffTitle: "スタッフ一覧",
       staffTabActive: "在籍中",
@@ -229,11 +324,12 @@ export const ja = {
       staffInviteCta: "スタッフを招待する",
       // スタッフ招待（04）
       inviteTitle: "スタッフ招待",
-      inviteStep1: "リンク発行",
-      inviteStep2: "招待中",
-      inviteStep3: "完了",
       inviteHeading: "スタッフを招待するための\nリンクを発行します",
       inviteLead: "このリンクから新規登録したスタッフは、\n自動でこのお店に所属します。",
+      // 招待者名（任意メモ。誰宛の招待かを見分けるため）
+      inviteLabelLabel: "招待者名",
+      inviteLabelPlaceholder: "例：佐藤さん／ホール担当",
+      inviteLabelHelp: "招待中の一覧で、誰宛の招待かを見分けるためのメモです。空欄でも発行できます。",
       inviteIssue: "招待リンクを発行",
       inviteIssuing: "発行中…",
       inviteError: "招待リンクの発行に失敗しました。もう一度お試しください。",
@@ -241,15 +337,16 @@ export const ja = {
       inviteCopy: "リンクをコピー",
       inviteCopied: "コピーしました",
       inviteSeeList: "招待中の一覧へ",
-      // 招待中の一覧（05）
-      invitesTitle: "招待中の一覧",
+      // 招待リンクの再コピー画面（招待中の行タップ）
+      inviteResendTitle: "招待リンク",
+      inviteRevoke: "この招待を取り消す",
+      inviteRevoking: "取り消し中…",
+      inviteRevokeError: "招待の取り消しに失敗しました。もう一度お試しください。",
+      inviteNotFoundResend: "この招待は見つかりませんでした（取り消し済み・使用済みの可能性があります）",
+      // 招待中の一覧（スタッフ一覧の招待中タブ）
       invitesEmpty: "招待中のスタッフはいません",
       invitesIssuedAt: "招待日：{{date}}",
-      invitesNewInvite: "新しく招待する",
       inviteStatusPending: "招待中",
-      inviteStatusAccepted: "所属確定",
-      inviteStatusRevoked: "失効",
-      invitesAcceptedBy: "{{name}} さんが所属しました",
       // 感謝の可視化（06）
       gratitudeTitle: "感謝の記録",
       gratitudeTabStore: "お店全体",

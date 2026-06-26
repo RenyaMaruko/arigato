@@ -10,6 +10,7 @@ import {
   type StoreStaffResponse,
   type StoreGratitude,
   type UpdateStoreProfileInput,
+  type CreateStoreInput,
 } from "@arigato/shared";
 import { apiClient } from "../../../lib/api-client.js";
 
@@ -27,7 +28,7 @@ export const STORE_NOT_FOUND = "store_not_found" as const;
 
 /**
  * GET /store/me — ログイン中の店アカウントが所有する店を取得する。
- * 未紐付け（初回ログイン）なら null を返す（フロントは導入セットアップへ誘導）。
+ * 未作成（初回ログイン）なら null を返す（フロントは店舗作成へ誘導）。
  */
 export async function fetchMyStore(): Promise<StoreProfile | null> {
   const res = await apiClient.store.me.$get();
@@ -41,10 +42,11 @@ export async function fetchMyStore(): Promise<StoreProfile | null> {
 }
 
 /**
- * POST /store/:storeId/claim — 未所有の店を引き受けて自アカウントに紐付ける（導入セットアップ）。
+ * POST /store — 店舗をセルフサーブで新規作成する（店名＋導入承認の同意。作成者＝所有者）。
+ * 同意（adoptionAgreed=true）は店自身の一手間として送る。エラーはコード文字列で投げ分ける。
  */
-export async function claimStore(storeId: string): Promise<StoreProfile> {
-  const res = await apiClient.store[":storeId"].claim.$post({ param: { storeId } });
+export async function createStore(input: CreateStoreInput): Promise<StoreProfile> {
+  const res = await apiClient.store.$post({ json: input });
   if (!res.ok) {
     let code = `status_${res.status}`;
     try {
@@ -84,21 +86,17 @@ export async function updateStore(
 }
 
 /**
- * POST /store/:storeId/approve — 導入を承認する（pending→approved）。
- */
-export async function approveStore(storeId: string): Promise<StoreProfile> {
-  const res = await apiClient.store[":storeId"].approve.$post({ param: { storeId } });
-  if (!res.ok) {
-    throw new Error(`store approve failed: ${res.status}`);
-  }
-  return StoreProfileSchema.parse(await res.json());
-}
-
-/**
  * POST /store/:storeId/invites — スタッフ招待リンクを発行する（方式A）。
+ * label は「誰宛か」の任意メモ。未入力なら無記名の招待として発行する。
  */
-export async function createStoreInvite(storeId: string): Promise<StoreInviteCreated> {
-  const res = await apiClient.store[":storeId"].invites.$post({ param: { storeId } });
+export async function createStoreInvite(
+  storeId: string,
+  label?: string,
+): Promise<StoreInviteCreated> {
+  const res = await apiClient.store[":storeId"].invites.$post({
+    param: { storeId },
+    json: { label },
+  });
   if (!res.ok) {
     throw new Error(`store invite create failed: ${res.status}`);
   }
@@ -114,6 +112,19 @@ export async function fetchStoreInvites(storeId: string): Promise<StoreInvitesRe
     throw new Error(`store invites request failed: ${res.status}`);
   }
   return StoreInvitesResponseSchema.parse(await res.json());
+}
+
+/**
+ * POST /store/:storeId/invites/:code/revoke — 招待中（pending）の招待を取り消す。
+ * 取り消すと招待中一覧（pending のみ）から自然に消える。自店・pending のみ操作可。
+ */
+export async function revokeStoreInvite(storeId: string, code: string): Promise<void> {
+  const res = await apiClient.store[":storeId"].invites[":code"].revoke.$post({
+    param: { storeId, code },
+  });
+  if (!res.ok) {
+    throw new Error(`store invite revoke failed: ${res.status}`);
+  }
 }
 
 /**

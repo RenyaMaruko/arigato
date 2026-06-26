@@ -36,6 +36,48 @@
       "when": 1782143312170,
       "tag": "0004_married_starjammers",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1782271161514,
+      "tag": "0005_shocking_kitty_pryde",
+      "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1782273605076,
+      "tag": "0006_unusual_apocalypse",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1782283085836,
+      "tag": "0007_nervous_harrier",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1782314490441,
+      "tag": "0008_worthless_natasha_romanoff",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1782470372119,
+      "tag": "0009_known_gladiator",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1782470756445,
+      "tag": "0010_tense_dakota_north",
+      "breakpoints": true
     }
   ]
 }

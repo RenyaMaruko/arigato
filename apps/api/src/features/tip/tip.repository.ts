@@ -12,15 +12,19 @@ import { initialSettlementStatusOnSucceeded } from "./tip.model.js";
  * 確認可能にする。
  */
 
-// 投げ銭画面の表示情報（staff + store を結合した行）
+// 投げ銭画面の表示情報（membership=staff_store から staff(人)＋store(店) を結合した行）
 export type StaffDisplayRow = {
+  // QR が指す所属（membership＝staff_store.id）
+  membershipId: string;
+  // 送り先の店員さん（人）の ID
   staffId: string;
   displayName: string;
   headline: string | null;
   avatarUrl: string | null;
+  // membership の店（送信時に tip へ固定保存する）
   storeId: string;
   storeName: string;
-  // Direct charge の課金先（Connected Account）。未連携は null
+  // Direct charge の課金先（人の Connected Account）。未連携は null
   stripeAccountId: string | null;
 };
 
@@ -28,6 +32,8 @@ export type StaffDisplayRow = {
 export type InsertTipParams = {
   staffId: string;
   storeId: string;
+  // 送信元の所属（membership）。追跡用
+  membershipId: string;
   amount: number;
   platformFee: number;
   customerTotal: number;
@@ -70,8 +76,9 @@ export type TipRow = {
  * 実装は下の createTipRepository（実 DB）。テストではこの型を満たすモックを渡す。
  */
 export type TipRepository = {
-  // 投げ銭画面の表示情報（staff の名前・一言・顔写真＋所属店名 + Connected Account）を取得
-  findStaffDisplay: (staffId: string) => Promise<StaffDisplayRow | null>;
+  // 投げ銭画面の表示情報を membership（staff_store.id）から取得する。
+  // membership → staff(人)＋store(店) を解決し、名前・一言・顔写真・店名・Connected Account を返す
+  findMembershipDisplay: (membershipId: string) => Promise<StaffDisplayRow | null>;
   // tip を1件保存し、保存された行を返す
   insertTip: (params: InsertTipParams) => Promise<TipRow>;
   // tip を ID で取得（完了画面の再掲に使う）
@@ -101,6 +108,26 @@ export type TipRepository = {
   // 突合ジョブ用: 決済未確定（pending）かつ PaymentIntent 作成済みの tip を列挙する。
   // Webhook 取りこぼし対策で、Stripe の実ステータスと突合するための入口。
   listPendingTipsForReconcile: () => Promise<PendingTipForReconcile[]>;
+  // (c) 確定見込み（charge / balance_transaction）を tip に鏡保存する（Stripe を正・自前は鏡）。
+  //   tipId か PaymentIntent ID で対象 tip を特定し、stripe_charge_id / balance_transaction_id /
+  //   available_on / bt_status を更新する。null の項目は既存値を維持する（COALESCE。後続イベントで埋め直せる）。
+  //   更新できた件数を返す。
+  saveTipChargeSettlement: (params: {
+    tipId: string | null;
+    paymentIntentId: string | null;
+    chargeId: string;
+    balanceTransactionId: string | null;
+    availableOn: Date | null;
+    btStatus: "pending" | "available" | null;
+  }) => Promise<number>;
+  // (f) 返金・チャージバックで tip を refunded / disputed へ遷移する（残高・履歴・送金候補から除外）。
+  //   charge ID（主）または PaymentIntent ID（従）で対象 tip を特定する。
+  //   既に同じ終端状態なら 0 件（冪等）。遷移できた tip の id・staff_id・amount を返す（台帳補正・逆引き用）。
+  applySettlementCorrectionToTip: (params: {
+    settlementStatus: "refunded" | "disputed";
+    chargeId: string | null;
+    paymentIntentId: string | null;
+  }) => Promise<{ tipId: string; staffId: string; amount: number } | null>;
 };
 
 /**
@@ -109,11 +136,12 @@ export type TipRepository = {
  */
 export function createTipRepository(): TipRepository {
   return {
-    // staff と store を結合し、投げ銭画面の表示情報を1件返す
-    async findStaffDisplay(staffId) {
+    // membership（staff_store）から staff(人)＋store(店) を解決し、投げ銭画面の表示情報を1件返す
+    async findMembershipDisplay(membershipId) {
       const db = getDb();
       const rows = await db.execute<StaffDisplayRow>(sql`
         SELECT
+          ss.id               AS "membershipId",
           s.id                AS "staffId",
           s.display_name      AS "displayName",
           s.headline          AS "headline",
@@ -121,9 +149,10 @@ export function createTipRepository(): TipRepository {
           s.stripe_account_id AS "stripeAccountId",
           st.id               AS "storeId",
           st.name             AS "storeName"
-        FROM staff s
-        JOIN store st ON st.id = s.store_id
-        WHERE s.id = ${staffId}
+        FROM staff_store ss
+        JOIN staff s ON s.id = ss.staff_id
+        JOIN store st ON st.id = ss.store_id
+        WHERE ss.id = ${membershipId}
         LIMIT 1
       `);
       return rows[0] ?? null;
@@ -134,11 +163,11 @@ export function createTipRepository(): TipRepository {
       const db = getDb();
       const rows = await db.execute<TipRow>(sql`
         INSERT INTO tip (
-          staff_id, store_id, amount, platform_fee, customer_total,
+          staff_id, store_id, membership_id, amount, platform_fee, customer_total,
           message, status, settlement_status,
           stripe_payment_intent_id, stripe_checkout_session_id, succeeded_at
         ) VALUES (
-          ${params.staffId}, ${params.storeId}, ${params.amount},
+          ${params.staffId}, ${params.storeId}, ${params.membershipId}, ${params.amount},
           ${params.platformFee}, ${params.customerTotal},
           ${params.message}, ${params.status},
           ${params.settlementStatus}, ${params.stripePaymentIntentId},
@@ -310,6 +339,64 @@ export function createTipRepository(): TipRepository {
                OR t.stripe_checkout_session_id IS NOT NULL)
       `);
       return rows;
+    },
+
+    // (c) 確定見込み（charge / balance_transaction）を tip へ鏡保存する。
+    //   tipId（主）か PaymentIntent ID（従）で対象を特定。null の項目は既存値を維持（COALESCE）し、
+    //   後続イベントで埋め直せるようにする（PI 直後は balance_transaction 未付与のことがある）。
+    //   availableOn は postgres-js が Date を直接束縛できないため ISO 文字列＋timestamptz キャストで渡す。
+    async saveTipChargeSettlement(params) {
+      const db = getDb();
+      const availableOnIso = params.availableOn ? params.availableOn.toISOString() : null;
+      // tipId があれば tipId で、無ければ PaymentIntent ID で対象 tip を特定する
+      if (params.tipId) {
+        const rows = await db.execute<{ id: string }>(sql`
+          UPDATE tip
+          SET stripe_charge_id = COALESCE(${params.chargeId}, stripe_charge_id),
+              balance_transaction_id = COALESCE(${params.balanceTransactionId}, balance_transaction_id),
+              available_on = COALESCE(${availableOnIso}::timestamptz, available_on),
+              bt_status = COALESCE(${params.btStatus}, bt_status)
+          WHERE id = ${params.tipId}::uuid
+          RETURNING id
+        `);
+        return rows.length;
+      }
+      if (params.paymentIntentId) {
+        const rows = await db.execute<{ id: string }>(sql`
+          UPDATE tip
+          SET stripe_charge_id = COALESCE(${params.chargeId}, stripe_charge_id),
+              balance_transaction_id = COALESCE(${params.balanceTransactionId}, balance_transaction_id),
+              available_on = COALESCE(${availableOnIso}::timestamptz, available_on),
+              bt_status = COALESCE(${params.btStatus}, bt_status)
+          WHERE stripe_payment_intent_id = ${params.paymentIntentId}
+          RETURNING id
+        `);
+        return rows.length;
+      }
+      return 0;
+    },
+
+    // (f) 返金・チャージバックで tip を refunded / disputed へ遷移する（残高・履歴・送金候補から除外）。
+    //   charge ID（主）または PaymentIntent ID（従）で対象 tip を特定する。
+    //   既に refunded/disputed なら更新しない（冪等）。遷移した tip の id・staff_id・amount を返す（台帳補正・逆引き用）。
+    async applySettlementCorrectionToTip(params) {
+      const db = getDb();
+      // charge ID（主）/ PaymentIntent ID（従）のどちらかで照合する。両方無ければ対象なし。
+      if (!params.chargeId && !params.paymentIntentId) {
+        return null;
+      }
+      // 番兵: null だと = で一致しないため、照合に使わない側は影響しない（COALESCE で番兵化）
+      const rows = await db.execute<{ tipId: string; staffId: string; amount: number }>(sql`
+        UPDATE tip
+        SET settlement_status = ${params.settlementStatus}
+        WHERE (
+            stripe_charge_id = ${params.chargeId}
+            OR stripe_payment_intent_id = ${params.paymentIntentId}
+          )
+          AND settlement_status NOT IN ('refunded', 'disputed')
+        RETURNING id AS "tipId", staff_id AS "staffId", amount AS "amount"
+      `);
+      return rows[0] ?? null;
     },
   };
 }

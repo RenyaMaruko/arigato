@@ -16,13 +16,12 @@ export const DISPLAY_NAME_MAX_LENGTH = 40;
 export const HEADLINE_MAX_LENGTH = 60;
 
 /**
- * 初回プロフィール作成（POST /staff/me）でお客さま…ではなく店員さん本人から受け取る入力。
- * display_name・headline（任意）・avatar_url（任意）と、所属を確定する招待コードを受け取る。
+ * 初回プロフィール作成（POST /staff/me）で店員さん本人から受け取る入力。
+ * display_name・headline（任意）・avatar_url（任意）のみ。プロフィールは人ごとに1つ。
+ * 所属の確定は別途 POST /staff/me/join（招待コード）に集約するため、ここでは招待コードを受け取らない。
  * 本人確認・口座登録・Stripe Connect 連携は一切求めない（体験を登録の前に）。
  */
 export const CreateStaffProfileInputSchema = z.object({
-  // 招待コード（店が発行。これで store_id が確定する＝店承認を招待で担保）
-  inviteCode: z.string().min(1),
   displayName: z.string().min(1).max(DISPLAY_NAME_MAX_LENGTH),
   // 一言（任意・空文字は未入力扱い）
   headline: z.string().max(HEADLINE_MAX_LENGTH).optional(),
@@ -30,6 +29,37 @@ export const CreateStaffProfileInputSchema = z.object({
   avatarUrl: z.string().url().optional(),
 });
 export type CreateStaffProfileInput = z.infer<typeof CreateStaffProfileInputSchema>;
+
+/**
+ * 招待コードで所属（staff_store）を追加する（POST /staff/me/join）の入力。
+ * 新規/既存問わず「参加の確定点」。招待コードからその店への所属を1件作る（多対多・掛け持ち）。
+ */
+export const JoinStoreInputSchema = z.object({
+  // 店が発行した招待コード（これで所属する店が確定する＝店承認を招待で担保）
+  inviteCode: z.string().min(1),
+});
+export type JoinStoreInput = z.infer<typeof JoinStoreInputSchema>;
+
+// 参加（join）の結果区分。
+// joined: 新たに所属が追加された（参加完了画面へ）/ already_member: 既に同店所属（案内へ）
+export const JoinResultStatusSchema = z.enum(["joined", "already_member"]);
+export type JoinResultStatus = z.infer<typeof JoinResultStatusSchema>;
+
+/**
+ * POST /staff/me/join の応答。
+ * 参加結果（joined / already_member）と、参加した（または既に所属している）店の情報・membership を返す。
+ * フロントは status で「参加しました！」と「すでに所属しています」を出し分ける。
+ */
+export const JoinStoreResultSchema = z.object({
+  status: JoinResultStatusSchema,
+  // 参加した（または既存の）所属（membership）ID。QR用URL の組み立てにも使える
+  membershipId: z.string().uuid(),
+  storeId: z.string().uuid(),
+  storeName: z.string(),
+  // この membership の QR が指す固定 URL（/tip/:membershipId）
+  tipUrl: z.string(),
+});
+export type JoinStoreResult = z.infer<typeof JoinStoreResultSchema>;
 
 /**
  * プロフィール編集（PATCH /staff/me）の入力。
@@ -43,20 +73,33 @@ export const UpdateStaffProfileInputSchema = z.object({
 export type UpdateStaffProfileInput = z.infer<typeof UpdateStaffProfileInputSchema>;
 
 /**
+ * 所属（membership＝人×店）1件分。店ごとの QR を出すための単位。
+ * 店ごとに別 QR を貼るため、QR が指す固定 URL（/tip/:membershipId）を含む。
+ */
+export const StaffMembershipSchema = z.object({
+  // 所属（staff_store）の ID。QR の単位
+  membershipId: z.string().uuid(),
+  storeId: z.string().uuid(),
+  storeName: z.string(),
+  // この所属（人×店）の QR が指す固定 URL（/tip/:membershipId）。一度発行したら不変
+  tipUrl: z.string(),
+});
+export type StaffMembership = z.infer<typeof StaffMembershipSchema>;
+
+/**
  * GET /staff/me の応答。
- * 自分のプロフィール・所属店・identity_status・QR用URL（/tip/:staffId）を返す。
- * 金額・残高は含めない（本実装は Sprint 5。本人スコープの集計は別経路）。
+ * 自分のプロフィール（人ごと1つ）・identity_status・所属店一覧（各 membership と店ごとQR用URL）を返す。
+ * 掛け持ち（複数店所属）に対応するため、所属は配列で返す。
+ * 金額・残高は含めない（本人スコープの集計は別経路）。
  */
 export const StaffMeSchema = z.object({
   id: z.string().uuid(),
   displayName: z.string(),
   headline: z.string().nullable(),
   avatarUrl: z.string().nullable(),
-  storeId: z.string().uuid(),
-  storeName: z.string(),
   identityStatus: IdentityStatusSchema,
-  // QR が指す固定 URL（/tip/:staffId）。一度発行したら不変
-  tipUrl: z.string(),
+  // 所属店一覧（複数可）。各所属に店ごとの QR用URL を含む。在籍が古い順（中立）
+  memberships: z.array(StaffMembershipSchema),
 });
 export type StaffMe = z.infer<typeof StaffMeSchema>;
 
@@ -72,6 +115,7 @@ export const InviteInfoSchema = z.object({
   // 招待が今すぐ使えるか（pending かつ店が承認済み）
   valid: z.boolean(),
 });
+// storeId は、ログイン済みユーザーが「既にこの店に所属しているか」を判定する材料にも使う
 export type InviteInfo = z.infer<typeof InviteInfoSchema>;
 
 /**
@@ -107,13 +151,21 @@ export type StaffTipsResponse = z.infer<typeof StaffTipsResponseSchema>;
 
 /**
  * GET /staff/me/balance の応答（保留残高サマリ・本人のみ）。
- * 保留残高（held 合計）と着金可能額（payable 合計）を本人に返す。
+ *
+ * 残高は「3段」に分けて本人に返す（受取総額は隠さない）:
+ *  - **送金できる額（sendableAmount）**＝本人確認済み かつ Stripe の実 available 残高。「送金する」の対象額・payout 上限。
+ *    DB の payable 合計ではなく Stripe の実 available を正とする（#5: 残高不足の構造的回避）。
+ *  - **準備中（pendingStripeAmount）**＝受け取ったが Stripe 確定待ち。available になるまで送金できない。
+ *    nextAvailableOn（◯月◯日から送金できる）を併記する。
+ *  - **本人確認待ち（held）＝heldAmount**＝未確認分（まず本人確認へ）。
+ *
+ * 旧フィールド（heldAmount / payableAmount / paidAmount / canPayout / identityStatus）は受取総額・互換のため維持する。
  * 金額を含むのは本人スコープのこの経路だけ（店・他スタッフには返さない）。
  */
 export const StaffBalanceSchema = z.object({
-  // 保留残高（本人確認前に成立した held の合計・円）
+  // 保留残高（本人確認前に成立した held の合計・円）。＝「本人確認待ち額」
   heldAmount: z.number().int(),
-  // 着金可能額（本人確認後の payable の合計・円）
+  // 着金可能額（本人確認後の DB payable の合計・円。受取総額・参考表示。送金可否は sendableAmount を正とする）
   payableAmount: z.number().int(),
   // 着金済（paid の合計・円。参考表示）
   paidAmount: z.number().int(),
@@ -121,6 +173,14 @@ export const StaffBalanceSchema = z.object({
   canPayout: z.boolean(),
   // 本人確認の状態（none / pending / verified）
   identityStatus: IdentityStatusSchema,
+  // 【送金できる額】本人確認済み かつ Stripe の実 available 残高（円）。「送金する」の対象額。
+  // 未確認・連結アカウント未作成・残高取得失敗時は 0。
+  sendableAmount: z.number().int(),
+  // 【準備中（pending）額】Stripe 確定待ちの残高（円）。available になるまで送金できない
+  pendingStripeAmount: z.number().int(),
+  // 準備中の資金が最も早く available になる日時（ISO 文字列・「◯月◯日から送金できます」表示用）。
+  // 準備中が無い／available_on を拾えない場合は null
+  nextAvailableOn: z.string().nullable(),
 });
 export type StaffBalance = z.infer<typeof StaffBalanceSchema>;
 

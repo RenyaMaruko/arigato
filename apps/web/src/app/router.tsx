@@ -13,17 +13,19 @@ import { StaffProfileCreatePage } from "../features/staff/pages/StaffProfileCrea
 import { StaffQrPage } from "../features/staff/pages/StaffQrPage.js";
 import { StaffProfileEditPage } from "../features/staff/pages/StaffProfileEditPage.js";
 import { StaffInviteAcceptPage } from "../features/staff/pages/StaffInviteAcceptPage.js";
+import { StaffJoinCompletePage } from "../features/staff/pages/StaffJoinCompletePage.js";
 import { StaffTipsHistoryPage } from "../features/staff/pages/StaffTipsHistoryPage.js";
-import { StaffBalancePage } from "../features/staff/pages/StaffBalancePage.js";
+import { StaffPayoutPage } from "../features/staff/pages/StaffPayoutPage.js";
 import { StaffIdentityFlowPage } from "../features/staff/pages/StaffIdentityFlowPage.js";
 import { StaffIdentityCompletePage } from "../features/staff/pages/StaffIdentityCompletePage.js";
 import { StaffTaxExportPage } from "../features/staff/pages/StaffTaxExportPage.js";
+import { StaffSettingsPage } from "../features/staff/pages/StaffSettingsPage.js";
 import { StorePage } from "../features/store/pages/StorePage.js";
 import { StoreLoginPage } from "../features/store/pages/StoreLoginPage.js";
 import { StoreApprovalPage } from "../features/store/pages/StoreApprovalPage.js";
 import { StoreStaffPage } from "../features/store/pages/StoreStaffPage.js";
 import { StoreInviteCreatePage } from "../features/store/pages/StoreInviteCreatePage.js";
-import { StoreInvitesPage } from "../features/store/pages/StoreInvitesPage.js";
+import { StoreInviteResendPage } from "../features/store/pages/StoreInviteResendPage.js";
 import { StoreGratitudePage } from "../features/store/pages/StoreGratitudePage.js";
 import { StoreSettingsPage } from "../features/store/pages/StoreSettingsPage.js";
 import { StoreProfilePage } from "../features/store/pages/StoreProfilePage.js";
@@ -31,13 +33,13 @@ import { StoreProfilePage } from "../features/store/pages/StoreProfilePage.js";
 /**
  * TanStack Router のルーティング定義。
  * ホーム（疎通確認）に加え、お客さま投げ銭フローと店員さんアカウント系の画面を登録する。
- *  - /tip/$staffId          投げ銭画面（金額・メッセージ・スタンプ・支払いシート）
- *  - /tip/$staffId/complete 完了画面（?tipId= で当該 tip の再掲情報を引く）
- *  - /staff                 店員さん入口（認証ゲート: 未ログイン→ログイン / 未作成→作成 / 作成済→ホーム）
- *  - /staff/setup           プロフィール作成（?invite= で招待コードを引き継ぐ）
- *  - /staff/qr              個人QR の発行（/tip/:staffId を指す QR・印刷）
- *  - /staff/profile         プロフィール編集
- *  - /invite/$code          招待受け入れ（招待検証→ログイン/作成へ）
+ *  - /tip/$membershipId          投げ銭画面（membership＝人×店。金額・メッセージ・支払いシート）
+ *  - /tip/$membershipId/complete 完了画面（?tipId= で当該 tip の再掲情報を引く）
+ *  - /staff                      店員さん入口（認証ゲート: 未ログイン→ログイン / 未作成→作成 / 作成済→ホーム）
+ *  - /staff/setup                プロフィール作成（?invite= で招待コードを引き継ぐ・作成済はガードで弾く）
+ *  - /staff/qr                   店ごとのQR の発行（?m= で membership を指定・/tip/:membershipId を指す QR・印刷）
+ *  - /staff/profile              プロフィール編集
+ *  - /invite/$code               招待受け入れ（招待検証→ログイン/作成/参加→参加完了へ）
  * 認証ガードは StaffPage 系の各画面で session を見て出し分ける（未ログインはログインへ誘導）。
  */
 
@@ -53,21 +55,40 @@ const indexRoute = createRoute({
   component: HomePage,
 });
 
-// "/tip/$staffId" に投げ銭画面を割り当てる（staffId は URL パラメータ）
+// "/tip/$membershipId" に投げ銭画面を割り当てる（membership＝人×店。URL パラメータ）
 const tipRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/tip/$staffId",
+  path: "/tip/$membershipId",
   component: TipPage,
 });
 
-// "/tip/$staffId/complete" に完了画面を割り当てる。?tipId= を検証して受け取る
+// "/tip/$membershipId/complete" に完了画面を割り当てる。?tipId= と ?status= を検証して受け取る
 const tipCompleteRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/tip/$staffId/complete",
+  path: "/tip/$membershipId/complete",
   component: TipCompletePage,
-  // 完了画面は tipId クエリで当該 tip を引く（文字列・任意）
-  validateSearch: (search: Record<string, unknown>): { tipId: string } => ({
+  // 完了画面は tipId クエリで当該 tip を引く（文字列・任意）。
+  // status は confirmPayment の即時結果（succeeded＝即完了 / processing＝結果は後ほど）。
+  // redirectStatus / paymentIntentParam は PayPay 等リダイレクト型の戻りで Stripe が付ける
+  // クエリ（redirect_status / payment_intent）を受けるためのもの（完了画面で即完了判定に使う）。
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): {
+    tipId: string;
+    status?: "succeeded" | "processing";
+    redirect_status?: string;
+    payment_intent?: string;
+  } => ({
     tipId: typeof search.tipId === "string" ? search.tipId : "",
+    status:
+      search.status === "succeeded"
+        ? "succeeded"
+        : search.status === "processing"
+          ? "processing"
+          : undefined,
+    redirect_status:
+      typeof search.redirect_status === "string" ? search.redirect_status : undefined,
+    payment_intent: typeof search.payment_intent === "string" ? search.payment_intent : undefined,
   }),
 });
 
@@ -106,11 +127,15 @@ const staffOnboardRoute = createRoute({
   validateSearch: inviteSearch,
 });
 
-// "/staff/qr" 個人QR の発行画面
+// "/staff/qr" 店ごとのQR 発行画面。?m= でどの所属（membership）のQRかを指定する
 const staffQrRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/staff/qr",
   component: StaffQrPage,
+  // 表示対象の membership ID（未指定なら最初の所属を使う）
+  validateSearch: (search: Record<string, unknown>): { m?: string } => ({
+    m: typeof search.m === "string" ? search.m : undefined,
+  }),
 });
 
 // "/staff/profile" プロフィール編集画面
@@ -127,11 +152,11 @@ const staffHistoryRoute = createRoute({
   component: StaffTipsHistoryPage,
 });
 
-// "/staff/balance" 残高・ステータス画面（保留残高・着金可能額。本人のみ）
-const staffBalanceRoute = createRoute({
+// "/staff/payout" 送金（振込申請）画面（着金可能額の全額を登録口座へ。本人のみ）
+const staffPayoutRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/staff/balance",
-  component: StaffBalancePage,
+  path: "/staff/payout",
+  component: StaffPayoutPage,
 });
 
 // "/staff/identity" 本人確認・口座登録の流れ（Connect オンボーディングへ遷移）
@@ -153,6 +178,26 @@ const staffExportRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/staff/export",
   component: StaffTaxExportPage,
+});
+
+// "/staff/settings" 設定（プロフィール・本人確認/口座・申告データ・ログアウトへの導線）
+const staffSettingsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/settings",
+  component: StaffSettingsPage,
+});
+
+// "/staff/joined" 参加完了画面。?store= 店名・?status= 結果区分（joined / already）を受け取る
+const staffJoinedRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/joined",
+  component: StaffJoinCompletePage,
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { store: string; status: "joined" | "already" } => ({
+    store: typeof search.store === "string" ? search.store : "",
+    status: search.status === "already" ? "already" : "joined",
+  }),
 });
 
 // "/invite/$code" 招待受け入れ画面（招待コードは URL パラメータ）
@@ -183,11 +228,15 @@ const storeApprovalRoute = createRoute({
   component: StoreApprovalPage,
 });
 
-// "/store/staff" スタッフ一覧（在籍管理）
+// "/store/staff" スタッフ一覧（在籍管理）。?tab=invited で招待中タブを初期表示できる
 const storeStaffRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/store/staff",
   component: StoreStaffPage,
+  // 初期タブ（在籍中=active / 招待中=invited）。それ以外は active 扱い
+  validateSearch: (search: Record<string, unknown>): { tab?: "active" | "invited" } => ({
+    tab: search.tab === "invited" ? "invited" : search.tab === "active" ? "active" : undefined,
+  }),
 });
 
 // "/store/invites/new" スタッフ招待（リンク発行）
@@ -197,11 +246,11 @@ const storeInviteCreateRoute = createRoute({
   component: StoreInviteCreatePage,
 });
 
-// "/store/invites" 招待中の一覧
-const storeInvitesRoute = createRoute({
+// "/store/invites/$code" 招待リンクの再コピー画面（招待者名・リンク・コピー・取り消し）
+const storeInviteResendRoute = createRoute({
   getParentRoute: () => rootRoute,
-  path: "/store/invites",
-  component: StoreInvitesPage,
+  path: "/store/invites/$code",
+  component: StoreInviteResendPage,
 });
 
 // "/store/gratitude" 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし）
@@ -237,17 +286,19 @@ const routeTree = rootRoute.addChildren([
   staffQrRoute,
   staffProfileRoute,
   staffHistoryRoute,
-  staffBalanceRoute,
+  staffPayoutRoute,
   staffIdentityRoute,
   staffIdentityCompleteRoute,
   staffExportRoute,
+  staffSettingsRoute,
+  staffJoinedRoute,
   inviteRoute,
   storeRoute,
   storeLoginRoute,
   storeApprovalRoute,
   storeStaffRoute,
   storeInviteCreateRoute,
-  storeInvitesRoute,
+  storeInviteResendRoute,
   storeGratitudeRoute,
   storeSettingsRoute,
   storeProfileRoute,

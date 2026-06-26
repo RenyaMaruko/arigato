@@ -12,9 +12,10 @@ import { getAccessToken } from "./auth.js";
  */
 const apiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
 
-// fetch をラップし、ログイン中ならアクセストークンを Authorization ヘッダに載せる
+// fetch をラップし、ログイン中ならアクセストークンを Authorization ヘッダに載せる。
+// トークンはメモリ保持のセッションから同期取得する（毎回 getSession() を呼ばずロック競合を避ける）。
 async function authedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const token = await getAccessToken();
+  const token = getAccessToken();
   const headers = new Headers(init?.headers);
   if (token) {
     headers.set("Authorization", `Bearer ${token}`);

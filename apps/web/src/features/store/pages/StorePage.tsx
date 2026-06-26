@@ -10,8 +10,8 @@ import { StoreHomePage } from "./StoreHomePage.js";
  * 店画面の入口（/store）と認証ゲート。
  * セッションと所有する店（GET /store/me）の状態を見て、出す画面を一元的に出し分ける:
  *  - 未ログイン              → ログイン画面
- *  - ログイン済み・店未紐付け  → 導入セットアップ（claim）画面
- *  - ログイン済み・紐付け済み  → 店ホーム
+ *  - ログイン済み・店未作成    → 店舗作成（セルフサーブ）画面
+ *  - ログイン済み・作成済み    → 店ホーム
  * 認証情報の取得中はローディング表示にして、画面のちらつきを防ぐ。
  */
 export function StorePage() {
@@ -36,12 +36,12 @@ export function StorePage() {
     return <StoreLoading label={t("store.loading")} />;
   }
 
-  // 未紐付け（初回ログイン）なら導入セットアップへ
+  // 未作成（初回ログイン）なら店舗作成画面へ
   if (!storeQuery.data) {
     return <StoreSetupPage />;
   }
 
-  // 紐付け済みならホームを表示
+  // 作成済みならホームを表示
   return <StoreHomePage store={storeQuery.data} />;
 }
 
