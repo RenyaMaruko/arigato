@@ -118,11 +118,17 @@ export async function fetchInviteInfo(code: string): Promise<InviteInfo | null> 
 }
 
 /**
- * GET /staff/me/tips — 自分の受取履歴（金額・メッセージ・受取日時）を取得する（本人のみ）。
+ * GET /staff/me/tips — 自分の受取履歴（金額・メッセージ・受取日時）を1ページ取得する（本人のみ）。
+ * 無限スクロール用にキーセットページングを使う。cursor（次ページの基点）を渡すと続きを取得する
+ * （先頭ページは cursor 省略）。応答の nextCursor が次ページの基点（無ければ null＝最後のページ）。
+ * 合計（totalAmount / totalCount）は全受取の集計値で、ページに依らず一定。
  * 未作成（404）の場合は null。
  */
-export async function fetchStaffTips(): Promise<StaffTipsResponse | null> {
-  const res = await apiClient.staff.me.tips.$get();
+export async function fetchStaffTips(cursor?: string): Promise<StaffTipsResponse | null> {
+  // cursor がある場合だけクエリに載せる（先頭ページは付けない）
+  const res = await apiClient.staff.me.tips.$get({
+    query: cursor ? { cursor } : {},
+  });
   if (res.status === 404) {
     return null;
   }

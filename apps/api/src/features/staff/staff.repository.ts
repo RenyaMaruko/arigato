@@ -83,6 +83,24 @@ export type StaffTipRow = {
   settlementStatus: SettlementStatus;
 };
 
+// 受取履歴のキーセットページング取得に渡すパラメータ（本人のみ）。
+// cursor が無ければ先頭ページ。limit+1 件取って「次があるか」を判定するのは Service。
+export type ListTipsPageParams = {
+  authUserId: string;
+  // 次ページの基点（最後に取得した行の受取日時・id）。先頭ページは null
+  cursor: { receivedAt: string; id: string } | null;
+  // 取得件数（Service が limit+1 を渡し、次ページの有無を判定する）
+  take: number;
+};
+
+// 受取履歴の全件集計（合計金額・件数）。ページに依らず一定（必ず全件の別集計）。
+export type StaffTipsTotals = {
+  // 全受取の件数（成立済み・返金/異議を除く）
+  totalCount: number;
+  // 全受取の手取り合計（FLOOR(amount*0.85) の総和・円）。本人のみ
+  totalAmount: number;
+};
+
 // 保留残高サマリの集計に使う成立済み tip の最小情報（本人のみ）
 export type SettlementRow = {
   amount: number;
@@ -168,8 +186,12 @@ export type StaffRepository = {
   findStaffConnect: (authUserId: string) => Promise<StaffConnectRow | null>;
   // 新規作成した Connected Account を本人の staff に保存する（オンボーディング開始時に1度だけ）
   setStripeAccountId: (authUserId: string, stripeAccountId: string) => Promise<void>;
-  // 本人の受取履歴（成立済み）を新しい順に取得する（金額・メッセージ含む・本人のみ）
-  listTipsByAuthUserId: (authUserId: string) => Promise<StaffTipRow[]>;
+  // 本人の受取履歴（成立済み）を新しい順に「1ページ分」取得する（キーセットページング・本人のみ）。
+  // cursor 以降を COALESCE(succeeded_at,created_at) DESC, id DESC で take 件返す（金額・メッセージ含む）。
+  listTipsPageByAuthUserId: (params: ListTipsPageParams) => Promise<StaffTipRow[]>;
+  // 本人の受取履歴の「全件集計」（合計金額・件数）を取得する（ページに依らず一定・本人のみ）。
+  // ページの items から計算せず、必ず同じ WHERE 条件で全件を SUM/COUNT する。
+  getStaffTipsTotalsByAuthUserId: (authUserId: string) => Promise<StaffTipsTotals>;
   // 本人の保留残高集計に使う、成立済み tip の settlement 状態と金額を取得する（本人のみ）
   listSettlementsByAuthUserId: (authUserId: string) => Promise<SettlementRow[]>;
   // 本人の申告データ（受取記録）を年で絞って取得する（本人のみ）。year は西暦
@@ -495,30 +517,63 @@ export function createStaffRepository(): StaffRepository {
       `);
     },
 
-    // 本人の受取履歴（成立済み）を新しい順に取得する（金額・メッセージ含む・本人のみ）。
+    // 本人の受取履歴（成立済み）を新しい順に「1ページ分」取得する（キーセットページング・本人のみ）。
     // 自分の auth_user_id をキーに staff を結合し、他人の行は決して返さない。
     // 店ラベルは tip に固定保存した store_id から引く（退店後も文脈が残る）。
-    async listTipsByAuthUserId(authUserId) {
+    //
+    // 並びは COALESCE(succeeded_at,created_at) DESC, id DESC を維持する（同一日時の同点も安定）。
+    // cursor がある場合は (受取日時, id) < (cursorTs, cursorId) の行だけを返す（DESC 並びの「続き」）。
+    // 比較は row-value 比較で行い、第1キー（受取日時）の同点は第2キー（id）で割る。
+    async listTipsPageByAuthUserId(params) {
       const db = getDb();
+      // cursor の受取日時は ISO 文字列。SQL では timestamptz として比較するためキャストする。
+      // 受取日時の式（COALESCE(succeeded_at, created_at)）はソートと比較で同一にする。
+      const orderExpr = sql`COALESCE(t.succeeded_at, t.created_at)`;
+      // cursor 条件（先頭ページは無条件）。row-value 比較で (日時, id) < (基点日時, 基点id) を表す。
+      const cursorCondition = params.cursor
+        ? sql`AND (${orderExpr}, t.id) < (${params.cursor.receivedAt}::timestamptz, ${params.cursor.id}::uuid)`
+        : sql``;
       const rows = await db.execute<StaffTipRow>(sql`
         SELECT
           t.id                AS "id",
           t.amount            AS "amount",
           t.message           AS "message",
-          to_char(COALESCE(t.succeeded_at, t.created_at) AT TIME ZONE 'UTC',
+          to_char(${orderExpr} AT TIME ZONE 'UTC',
                   'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "receivedAt",
           st.name             AS "storeName",
           t.settlement_status AS "settlementStatus"
         FROM tip t
         JOIN staff s ON s.id = t.staff_id
         JOIN store st ON st.id = t.store_id
-        WHERE s.auth_user_id = ${authUserId}
+        WHERE s.auth_user_id = ${params.authUserId}
           AND t.status = 'succeeded'
           -- (f) 返金・チャージバックの tip は受取履歴から除外する
           AND t.settlement_status NOT IN ('refunded', 'disputed')
-        ORDER BY COALESCE(t.succeeded_at, t.created_at) DESC
+          ${cursorCondition}
+        ORDER BY ${orderExpr} DESC, t.id DESC
+        LIMIT ${params.take}
       `);
       return rows;
+    },
+
+    // 本人の受取履歴の「全件集計」（合計金額・件数）を取得する（ページに依らず一定・本人のみ）。
+    // ページの items から計算せず、受取履歴と同じ WHERE 条件で全件を SUM/COUNT する。
+    // 手取り合計は FLOOR(amount * 0.85)（＝JS の calculateStaffTakeAmount=Math.floor(amount*0.85)）と一致させる。
+    async getStaffTipsTotalsByAuthUserId(authUserId) {
+      const db = getDb();
+      const rows = await db.execute<StaffTipsTotals>(sql`
+        SELECT
+          COUNT(*)::int                                  AS "totalCount",
+          COALESCE(SUM(FLOOR(t.amount * 0.85)), 0)::int  AS "totalAmount"
+        FROM tip t
+        JOIN staff s ON s.id = t.staff_id
+        WHERE s.auth_user_id = ${authUserId}
+          AND t.status = 'succeeded'
+          -- (f) 返金・チャージバックの tip は合計集計から除外する（受取履歴と同じ条件）
+          AND t.settlement_status NOT IN ('refunded', 'disputed')
+      `);
+      // COUNT/SUM は必ず1行返る（0件でも 0）。念のためフォールバックを置く
+      return rows[0] ?? { totalCount: 0, totalAmount: 0 };
     },
 
     // 本人の保留残高集計に使う、成立済み tip の settlement 状態と金額を取得する（本人のみ・人ごと集約）

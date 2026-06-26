@@ -169,7 +169,12 @@ export const ja = {
       // 受取履歴（04）
       tipsTitle: "受取履歴",
       tipsTotalLabel: "合計",
+      // 受取サマリー（全店・全期間の累計）の2指標ラベル
+      tipsTotalAmountLabel: "総受取金額",
+      tipsTotalCountLabel: "総受取件数",
       tipsEmpty: "まだ受け取った投げ銭はありません",
+      // 受取履歴の取得に失敗したとき（空・ローディングと分岐）
+      loadError: "受取履歴を読み込めませんでした",
       tipsSettlementHeld: "保留中",
       tipsSettlementPayable: "着金可能",
       tipsSettlementPaid: "着金済",
@@ -187,7 +192,7 @@ export const ja = {
       balanceSeeFlow: "本人確認の流れを見る",
       balanceVerifiedNote: "本人確認が完了しています。着金可能額をご確認ください。",
       // 手取り型の補足（店員さんに届くのは受取の約85%。手数料15%・決済料込み）
-      balanceTakeNote: "表示金額は手取り額です（投げ銭の約85%。手数料15%・決済料込み）",
+      balanceTakeNote: "金額はすべて手数料15%を引いた額です",
       // 送金（振込申請・手動送金）
       payoutTitle: "送金",
       payoutAvailableLabel: "送金できる額",
@@ -262,7 +267,7 @@ export const ja = {
       exportLink: "申告データ（CSV）",
       // ボトムナビ（モック01）。ホーム / 履歴 / 所属店舗 / 設定
       navHome: "ホーム",
-      navHistory: "履歴",
+      navHistory: "受取履歴",
       navStores: "所属店舗",
       navSettings: "設定",
       // 設定画面（10）。プロフィール・本人確認/口座・申告データ・ログアウトへの導線

@@ -152,7 +152,8 @@ export function createApp() {
     updateStaffProfile: (authUserId, input) =>
       updateStaffProfile(staffRepo, buildStaffTipUrl, authUserId, input),
     // 受取履歴・保留残高・申告 CSV は本人スコープのユースケースを注入する
-    getStaffTips: (authUserId) => getStaffTips(staffRepo, authUserId),
+    // 受取履歴は20件ずつのキーセットページング。cursor/limit を Service へ渡す（合計は全件の別集計）
+    getStaffTips: (authUserId, query) => getStaffTips(staffRepo, authUserId, query),
     // 残高3段（送金できる＝Stripe available / 準備中 pending / 本人確認待ち held）。
     // 送金可能額の正は Stripe の実 available。infrastructure の残高取得を注入する（feature は Stripe を直接知らない）。
     getStaffBalance: (authUserId) =>

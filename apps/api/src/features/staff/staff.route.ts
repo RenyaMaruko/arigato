@@ -4,6 +4,7 @@ import {
   CreateStaffProfileInputSchema,
   UpdateStaffProfileInputSchema,
   JoinStoreInputSchema,
+  StaffTipsQuerySchema,
   type StaffMe,
   type InviteInfo,
   type JoinStoreResult,
@@ -48,8 +49,12 @@ type StaffDeps = {
     authUserId: string,
     input: UpdateStaffProfileInput,
   ) => Promise<StaffMe | null>;
-  // 受取履歴（金額・メッセージ含む・本人のみ）。未作成なら null
-  getStaffTips: (authUserId: string) => Promise<StaffTipsResponse | null>;
+  // 受取履歴を1ページ取得する（金額・メッセージ含む・本人のみ・キーセットページング）。未作成なら null。
+  // cursor（次ページの基点）・limit（1ページ件数・既定20）を受け取る。
+  getStaffTips: (
+    authUserId: string,
+    query: { cursor?: string; limit?: number },
+  ) => Promise<StaffTipsResponse | null>;
   // 保留残高サマリ（held 合計・着金可能額・本人のみ）。未作成なら null
   getStaffBalance: (authUserId: string) => Promise<StaffBalance | null>;
   // 申告データ CSV（受取記録）。未作成なら null
@@ -122,10 +127,13 @@ export function createStaffRoute(deps: StaffDeps) {
       }
       return c.json(me);
     })
-    // 受取履歴（金額・メッセージ・受取日時。本人のみ）
-    .get("/me/tips", async (c) => {
+    // 受取履歴（金額・メッセージ・受取日時。本人のみ・20件ずつの無限スクロール）。
+    // cursor（次ページの基点）・limit（既定20・上限50）はクエリで受ける。
+    // cursor が不正でも Service が先頭ページ扱いにフォールバックする（落とさない）。
+    .get("/me/tips", zValidator("query", StaffTipsQuerySchema), async (c) => {
       const authUser = c.get("authUser");
-      const tips = await deps.getStaffTips(authUser.id);
+      const { cursor, limit } = c.req.valid("query");
+      const tips = await deps.getStaffTips(authUser.id, { cursor, limit });
       if (!tips) {
         return c.json({ error: "staff_not_found" }, 404);
       }

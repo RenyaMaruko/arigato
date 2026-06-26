@@ -219,6 +219,53 @@ export function selectPayoutTipsWithinAvailable(
   return { tipIds, amount };
 }
 
+// 受取履歴のキーセットページングで使うカーソル（最後に取得した行の位置）。
+// 並び順は COALESCE(succeeded_at, created_at) DESC, id DESC のため、
+// 「最後の行の受取日時(receivedAt・ISO)」と「id」の2要素で次ページの基点を表す。
+export type TipCursor = {
+  // 最後に取得した行の受取日時（ISO 文字列。SQL の比較に使う）
+  receivedAt: string;
+  // 最後に取得した行の id（同一日時の同点を割るための第2キー）
+  id: string;
+};
+
+// カーソルの内部表現とエンコード文字列の区切り（ISO に含まれない文字を選ぶ）。
+const CURSOR_DELIMITER = "__";
+
+/**
+ * カーソル（受取日時・id）を不透明文字列（base64url）へエンコードする純粋関数。
+ * 「<ISO>__<uuid>」を base64url にして、フロントには中身を意識させない不透明トークンにする。
+ * デコードと対で単体テストし、往復で元に戻ることを担保する。
+ */
+export function encodeTipCursor(cursor: TipCursor): string {
+  // 受取日時と id を区切り文字で連結し、base64url にする（URL クエリで安全に運べる形）
+  const raw = `${cursor.receivedAt}${CURSOR_DELIMITER}${cursor.id}`;
+  return Buffer.from(raw, "utf8").toString("base64url");
+}
+
+/**
+ * 不透明文字列（base64url）をカーソル（受取日時・id）へデコードする純粋関数。
+ * 不正・欠損・壊れたトークンは null を返す（呼び出し側は先頭ページ扱いにし、決して落とさない）。
+ * encodeTipCursor と対で単体テストする。
+ */
+export function decodeTipCursor(token: string | undefined | null): TipCursor | null {
+  if (!token) return null;
+  try {
+    // base64url をデコードし、区切りで受取日時と id に分ける
+    const raw = Buffer.from(token, "base64url").toString("utf8");
+    const idx = raw.indexOf(CURSOR_DELIMITER);
+    if (idx < 0) return null;
+    const receivedAt = raw.slice(0, idx);
+    const id = raw.slice(idx + CURSOR_DELIMITER.length);
+    // どちらか欠ければ不正カーソル（先頭ページ扱い）
+    if (receivedAt === "" || id === "") return null;
+    return { receivedAt, id };
+  } catch {
+    // base64 として壊れている等。安全側に倒して null（先頭ページ扱い）
+    return null;
+  }
+}
+
 /**
  * 招待が「今すぐ所属確定に使えるか」を判定する純粋関数。
  * 招待が未消費（pending）かつ、発行元の店が導入承認に同意済み（storeAdopted）のときのみ有効。

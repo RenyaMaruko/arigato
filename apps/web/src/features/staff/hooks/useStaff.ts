@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type {
   CreateStaffProfileInput,
   UpdateStaffProfileInput,
@@ -97,12 +102,21 @@ export function useUpdateStaffProfile() {
 }
 
 /**
- * 受取履歴（GET /staff/me/tips）を取得する。本人のみ・ログイン済みのときだけ走らせる。
+ * 受取履歴（GET /staff/me/tips）を「20件ずつの無限スクロール」で取得する。
+ * 本人のみ・ログイン済みのときだけ走らせる。
+ * キーセットページング: getNextPageParam で前ページの nextCursor を次ページの基点に使う
+ * （null なら次ページなし＝末尾）。サマリー（totalAmount/totalCount）は全件集計のため
+ * 各ページに同じ値が入る（画面は最初のページの値を使う）。
  */
 export function useStaffTips(enabled: boolean) {
-  return useQuery({
+  return useInfiniteQuery({
     queryKey: ["staff", "tips"],
-    queryFn: fetchStaffTips,
+    // pageParam は次ページの基点 cursor（先頭ページは undefined）
+    queryFn: ({ pageParam }) => fetchStaffTips(pageParam),
+    // 先頭ページは cursor 無し
+    initialPageParam: undefined as string | undefined,
+    // 前ページの nextCursor を次の pageParam にする（null/未作成なら undefined＝停止）
+    getNextPageParam: (lastPage) => lastPage?.nextCursor ?? undefined,
     enabled,
     retry: false,
   });
