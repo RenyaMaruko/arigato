@@ -8,7 +8,7 @@ import { defineConfig } from "drizzle-kit";
 export default defineConfig({
   dialect: "postgresql",
   // 個別のスキーマファイルを直接読む（index.ts の再エクスポートは含めない）
-  schema: ["./src/schema/store.ts", "./src/schema/staff.ts", "./src/schema/staff-store.ts", "./src/schema/staff-invite.ts", "./src/schema/tip.ts", "./src/schema/payout.ts", "./src/schema/webhook-event.ts"],
+  schema: ["./src/schema/store.ts", "./src/schema/staff.ts", "./src/schema/staff-store.ts", "./src/schema/staff-invite.ts", "./src/schema/tip.ts", "./src/schema/payout.ts", "./src/schema/payout-ledger.ts", "./src/schema/webhook-event.ts"],
   out: "./drizzle",
   // public スキーマのみ管理（auth.* は Supabase 任せ）
   schemaFilter: ["public"],

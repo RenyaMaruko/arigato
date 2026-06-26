@@ -108,6 +108,26 @@ export type TipRepository = {
   // 突合ジョブ用: 決済未確定（pending）かつ PaymentIntent 作成済みの tip を列挙する。
   // Webhook 取りこぼし対策で、Stripe の実ステータスと突合するための入口。
   listPendingTipsForReconcile: () => Promise<PendingTipForReconcile[]>;
+  // (c) 確定見込み（charge / balance_transaction）を tip に鏡保存する（Stripe を正・自前は鏡）。
+  //   tipId か PaymentIntent ID で対象 tip を特定し、stripe_charge_id / balance_transaction_id /
+  //   available_on / bt_status を更新する。null の項目は既存値を維持する（COALESCE。後続イベントで埋め直せる）。
+  //   更新できた件数を返す。
+  saveTipChargeSettlement: (params: {
+    tipId: string | null;
+    paymentIntentId: string | null;
+    chargeId: string;
+    balanceTransactionId: string | null;
+    availableOn: Date | null;
+    btStatus: "pending" | "available" | null;
+  }) => Promise<number>;
+  // (f) 返金・チャージバックで tip を refunded / disputed へ遷移する（残高・履歴・送金候補から除外）。
+  //   charge ID（主）または PaymentIntent ID（従）で対象 tip を特定する。
+  //   既に同じ終端状態なら 0 件（冪等）。遷移できた tip の id・staff_id・amount を返す（台帳補正・逆引き用）。
+  applySettlementCorrectionToTip: (params: {
+    settlementStatus: "refunded" | "disputed";
+    chargeId: string | null;
+    paymentIntentId: string | null;
+  }) => Promise<{ tipId: string; staffId: string; amount: number } | null>;
 };
 
 /**
@@ -319,6 +339,64 @@ export function createTipRepository(): TipRepository {
                OR t.stripe_checkout_session_id IS NOT NULL)
       `);
       return rows;
+    },
+
+    // (c) 確定見込み（charge / balance_transaction）を tip へ鏡保存する。
+    //   tipId（主）か PaymentIntent ID（従）で対象を特定。null の項目は既存値を維持（COALESCE）し、
+    //   後続イベントで埋め直せるようにする（PI 直後は balance_transaction 未付与のことがある）。
+    //   availableOn は postgres-js が Date を直接束縛できないため ISO 文字列＋timestamptz キャストで渡す。
+    async saveTipChargeSettlement(params) {
+      const db = getDb();
+      const availableOnIso = params.availableOn ? params.availableOn.toISOString() : null;
+      // tipId があれば tipId で、無ければ PaymentIntent ID で対象 tip を特定する
+      if (params.tipId) {
+        const rows = await db.execute<{ id: string }>(sql`
+          UPDATE tip
+          SET stripe_charge_id = COALESCE(${params.chargeId}, stripe_charge_id),
+              balance_transaction_id = COALESCE(${params.balanceTransactionId}, balance_transaction_id),
+              available_on = COALESCE(${availableOnIso}::timestamptz, available_on),
+              bt_status = COALESCE(${params.btStatus}, bt_status)
+          WHERE id = ${params.tipId}::uuid
+          RETURNING id
+        `);
+        return rows.length;
+      }
+      if (params.paymentIntentId) {
+        const rows = await db.execute<{ id: string }>(sql`
+          UPDATE tip
+          SET stripe_charge_id = COALESCE(${params.chargeId}, stripe_charge_id),
+              balance_transaction_id = COALESCE(${params.balanceTransactionId}, balance_transaction_id),
+              available_on = COALESCE(${availableOnIso}::timestamptz, available_on),
+              bt_status = COALESCE(${params.btStatus}, bt_status)
+          WHERE stripe_payment_intent_id = ${params.paymentIntentId}
+          RETURNING id
+        `);
+        return rows.length;
+      }
+      return 0;
+    },
+
+    // (f) 返金・チャージバックで tip を refunded / disputed へ遷移する（残高・履歴・送金候補から除外）。
+    //   charge ID（主）または PaymentIntent ID（従）で対象 tip を特定する。
+    //   既に refunded/disputed なら更新しない（冪等）。遷移した tip の id・staff_id・amount を返す（台帳補正・逆引き用）。
+    async applySettlementCorrectionToTip(params) {
+      const db = getDb();
+      // charge ID（主）/ PaymentIntent ID（従）のどちらかで照合する。両方無ければ対象なし。
+      if (!params.chargeId && !params.paymentIntentId) {
+        return null;
+      }
+      // 番兵: null だと = で一致しないため、照合に使わない側は影響しない（COALESCE で番兵化）
+      const rows = await db.execute<{ tipId: string; staffId: string; amount: number }>(sql`
+        UPDATE tip
+        SET settlement_status = ${params.settlementStatus}
+        WHERE (
+            stripe_charge_id = ${params.chargeId}
+            OR stripe_payment_intent_id = ${params.paymentIntentId}
+          )
+          AND settlement_status NOT IN ('refunded', 'disputed')
+        RETURNING id AS "tipId", staff_id AS "staffId", amount AS "amount"
+      `);
+      return rows[0] ?? null;
     },
   };
 }

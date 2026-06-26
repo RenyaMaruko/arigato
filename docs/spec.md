@@ -198,6 +198,14 @@ QR読取（QR は membership＝人×店 を指す）
 - 送金手数料は店員から取らない（日本の payout は無料前提）。着金は申請から数営業日。
 - 参考：受取直後に残高反映・銀行送金は数日、はメルカリ等と同じ業界標準。即時銀行着金は日本の Stripe では提供しない。
 
+### 決済整合の本番堅牢化（c〜f・Stripeを残高の真実の源泉とする）
+お金の残高・送金可否は **Stripe を真実の源泉**とし、自前DBは「業務状態＋Stripeデータの鏡＋不変の照合台帳」を持つ。
+- **(c) 受取tipの確定見込みを保存**：`charge.updated`/`payment_intent.succeeded` で balance_transaction を取得し、tip に `stripe_charge_id` / `balance_transaction_id` / `available_on`（確定見込み時刻）/ `bt_status`（pending/available）を保存。表示（「◯日後に送金できます」）・送金候補の事前フィルタに使う。**送金可否の最終判定は必ず送金直前の `balance.retrieve`（実 available）**で行う（available_on は予測・並べ替え用）。
+- **(d) 送金の照合台帳（append-only）**：手動送金は Stripe が「どの取引を含むか」を自動識別しない（公式）。payout 作成後に `balance_transactions?payout=po_…` で内訳を取得し、`payout ⇄ balance_transaction ⇄ tip` の対応を**不変（追記のみ・上書き禁止）**の照合テーブルに記録する。tip は paid に更新。`payout.failed` は tip を payable へ戻す補正を**追記**（既存行は書き換えない）。
+- **(e) 日次照合バッチ**：自前DBと Stripe を突き合わせて差分を検知する**点検ジョブ**（既存 `stripe-reconcile.job.ts` を拡張）。まず合計レベル（DBのpaid合計＝Stripeのpayout合計、DB残高＝Stripe balance）を照合し、ズレ or 未確定(pending)/進行中payout だけ掘り下げる（全件スキャンしない）。差分はログ/アラート。**Cron常時実行は任意**（実装はするが初期は動かさなくてよい＝手動起動可）。
+- **(f) 返金・チャージバック（負残高）対応**：`charge.refunded`/`charge.dispute.created` を受け、該当 tip を `refunded`/`disputed` に遷移して残高・受取履歴・送金候補から除外。Stripe残高が負になり得ることを許容し、残高表示で負を握りつぶさず安全に扱う（補正は台帳に追記）。
+- いずれも Webhook は raw body・署名・冪等（webhook_event）を維持し、Connect スコープのイベントも受ける。
+
 ### 通知（任意・中優先）
 - notification: id, staff_id, tip_id, read_at, created_at（「〇〇さんからありがとうが届きました」）。初期はメール送信でも可。
 

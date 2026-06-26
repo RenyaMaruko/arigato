@@ -164,6 +164,15 @@ function SettlementBadge({ status }: { status: SettlementStatus }) {
       label: t("staff.tipsSettlementPaid"),
       className: "bg-surface-subtle text-ink-sub",
     },
+    // (f) 返金・異議は終端状態。残高・送金候補から除外済みであることをバッジで示す
+    refunded: {
+      label: t("staff.tipsSettlementRefunded"),
+      className: "bg-surface-subtle text-muted",
+    },
+    disputed: {
+      label: t("staff.tipsSettlementDisputed"),
+      className: "bg-surface-subtle text-muted",
+    },
   };
   const { label, className } = map[status];
   return (

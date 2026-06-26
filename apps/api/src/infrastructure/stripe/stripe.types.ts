@@ -54,6 +54,14 @@ export type VerifiedWebhookEvent = {
   payoutArrivedAt: Date | null;
   // payout.failed の失敗理由（failure_message。対象外は null）
   payoutFailureReason: string | null;
+  // (c) charge.* / payment_intent.succeeded で受け取る charge ID（ch_…）。確定見込み（balance_transaction）の取得元。対象外は null
+  chargeId: string | null;
+  // (c) charge に紐づく Connected Account ID（Direct charge は Connected Account 上で発生。
+  //   account.updated 系の accountId とは別経路。balance_transaction 取得時の stripeAccount に使う）。対象外は null
+  chargeConnectedAccountId: string | null;
+  // (f) 返金・チャージバックの種別（refunded: 返金 / disputed: 異議。対象外は null）。
+  //   tip を refunded / disputed へ遷移させ、残高・受取履歴・送金候補から除外する
+  settlementCorrection: "refunded" | "disputed" | null;
 };
 
 // Connect オンボーディングリンク発行の入力（infrastructure が受け取るパラメータ）
@@ -109,6 +117,32 @@ export type CreateConnectedAccountResult = {
   connectedAccountId: string;
   // 受け取り（Direct charge）が可能か（true なら本人確認前でも held で受け取れる）
   chargesEnabled: boolean;
+};
+
+// (c) charge の balance_transaction から取得する「確定見込み」スナップショット。
+//   PI 直後は balance_transaction が未付与のことがあるため、取得できない項目は null で返す（後続イベントで埋める）。
+export type ChargeSettlementSnapshot = {
+  // charge ID（ch_…）。tip.stripe_charge_id に保存し、返金・チャージバックの逆引きにも使う
+  chargeId: string;
+  // balance_transaction ID（txn_…）。payout 内訳との突合（台帳 d）に使う。未付与なら null
+  balanceTransactionId: string | null;
+  // 送金可能（available）になる見込み時刻（pending→available の確定見込み）。未付与なら null
+  availableOn: Date | null;
+  // balance_transaction の状態（pending: 確定待ち / available: 送金可能）。未付与なら null
+  btStatus: "pending" | "available" | null;
+};
+
+// (d) payout 内訳の1要素（balance_transactions?payout=po_… の auto-pagination 結果の1行）。
+//   payout ⇄ balance_transaction ⇄ charge(tip) の対応を台帳へ追記するための素材。
+export type PayoutLedgerEntry = {
+  // balance_transaction ID（txn_…）
+  balanceTransactionId: string;
+  // balance_transaction の種別（charge / payout / refund / adjustment / payment_refund など）
+  type: string;
+  // 金額（円。Stripe の net ではなく amount をそのまま。payout はマイナス側になる）
+  amount: number;
+  // source が charge（ch_…）なら charge ID。payout 自身や非 charge は null
+  chargeId: string | null;
 };
 
 // Connected Account の残高スナップショット（送金可能額・準備中額の「正」＝ Stripe 実残高）。

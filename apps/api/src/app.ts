@@ -17,6 +17,7 @@ import {
   getStaffDisplayInfo,
   createTipIntent,
   getTipComplete,
+  recordTipChargeSettlement,
 } from "./features/tip/tip.service.js";
 import { createTipRepository } from "./features/tip/tip.repository.js";
 import { createInMemoryTipRepository } from "./features/tip/tip.repository.memory.js";
@@ -37,6 +38,8 @@ import {
   createStaffPayout,
   getStaffPayouts,
   applyPayoutWebhookUpdate,
+  recordPayoutLedger,
+  recordSettlementCorrectionLedger,
 } from "./features/staff/staff.service.js";
 import { createStaffRepository } from "./features/staff/staff.repository.js";
 import { createInMemoryStaffRepository } from "./features/staff/staff.repository.memory.js";
@@ -67,6 +70,8 @@ import {
   createPayout,
   createConnectedAccount,
   retrieveConnectBalance,
+  retrieveChargeSettlement,
+  listPayoutLedgerEntries,
 } from "./infrastructure/stripe/stripe-connect.js";
 import { verifyWebhookEvent } from "./infrastructure/stripe/stripe-webhook.js";
 // Supabase JWT の検証（JWKS / 非対称鍵）は infrastructure/auth に隔離する
@@ -215,6 +220,34 @@ export function createApp() {
           applyConnectAccountUpdate(staffRepo, stripeAccountId, payoutsEnabled),
         // payout.paid / payout.failed の反映（着金確定・失敗で tip を payable へ戻す）も staff Service を配線
         (params) => applyPayoutWebhookUpdate(staffRepo, params),
+        // (c)(d)(f) の追加ユースケースを配線（webhook feature は tip / staff feature を直接 import せず、ここで接続する）。
+        {
+          // (c) 受取 tip の確定見込みを tip へ鏡保存（infra で charge を expand し balance_transaction を取得）
+          recordTipSettlementMirror: (p) =>
+            recordTipChargeSettlement(tipRepo, retrieveChargeSettlement, p),
+          // (d) payout 内訳（balance_transaction ↔ tip）を照合台帳へ追記（infra で balance_transactions?payout= を取得）
+          recordPayoutLedger: (p) =>
+            recordPayoutLedger(staffRepo, listPayoutLedgerEntries, p),
+          // (f) 返金・チャージバックで tip を refunded / disputed へ遷移し、補正を台帳へ追記する。
+          //   tip 側の遷移（tip Repository）と台帳補正（staff Service）を、ここ（コンポジションルート）で束ねる。
+          applySettlementCorrection: async (p) => {
+            // まず tip を終端状態へ遷移（残高・履歴・送金候補から除外）。冪等（既に終端なら null）。
+            const corrected = await tipRepo.applySettlementCorrectionToTip({
+              settlementStatus: p.kind,
+              chargeId: p.chargeId,
+              paymentIntentId: p.paymentIntentId,
+            });
+            if (!corrected) return false;
+            // 遷移できたら補正エントリを不変台帳へ追記する（append-only）
+            await recordSettlementCorrectionLedger(staffRepo, {
+              kind: p.kind,
+              tipId: corrected.tipId,
+              faceAmount: corrected.amount,
+              stripeChargeId: p.chargeId,
+            });
+            return true;
+          },
+        },
         event,
       ),
   });

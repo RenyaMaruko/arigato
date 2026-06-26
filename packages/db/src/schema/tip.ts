@@ -34,9 +34,23 @@ export const tip = pgTable("tip", {
   stripePaymentIntentId: text("stripe_payment_intent_id"),
   // Direct charge の Checkout Session ID（Webhook 取りこぼし時の突合・参照に使う）
   stripeCheckoutSessionId: text("stripe_checkout_session_id"),
+  // (c) Stripe を残高の真実の源泉とするための「鏡」列。
+  //   charge.updated / payment_intent.succeeded 受信時に charge を expand して取得し保存する。
+  //   送金候補の事前フィルタ・UI 表示（「◯日後に送金できます」）の精緻化に使う。
+  //   ただし送金可否の最終判定は必ず送金直前の balance.retrieve（実 available）で行う（これは予測・並べ替え用）。
+  // この tip の charge ID（ch_…）。返金・チャージバックの逆引き照合にも使う
+  stripeChargeId: text("stripe_charge_id"),
+  // この charge の balance_transaction ID（txn_…）。payout 内訳との突合（台帳 d）に使う
+  balanceTransactionId: text("balance_transaction_id"),
+  // Stripe で送金可能（available）になる見込み時刻（pending→available の確定見込み）
+  availableOn: timestamp("available_on", { withTimezone: true }),
+  // balance_transaction の状態（pending: 確定待ち / available: 送金可能）。
+  //   available_on 経過＆bt_status=available の tip だけを送金候補の事前フィルタに使う
+  btStatus: text("bt_status"),
   // 決済ステータス（pending / succeeded / failed）
   status: text("status").notNull().default("pending"),
-  // 着金ステータス（held: 保留 / payable: 着金可能 / paid: 着金済）
+  // 着金ステータス（held: 保留 / payable: 着金可能 / paid: 着金済 / refunded: 返金済 / disputed: 異議申立）。
+  //   (f) refunded / disputed は残高・受取履歴・送金候補から除外する（負残高を握りつぶさず安全に扱う）。
   settlementStatus: text("settlement_status").notNull().default("held"),
   // この tip がどの送金（payout）で paid になったかの追跡（未送金は null）。
   // payout.failed で paid→payable へ戻すときに、対象 tip をこの payout_id で特定する。

@@ -102,7 +102,13 @@ function wire(store: ReturnType<typeof makeStore>) {
     store.applyAccountUpdate(accountId, payoutsEnabled);
   // この settlement テストは payout を扱わないため no-op（反映なし）
   const applyPayoutUpdate = async () => false;
-  return { repo, updateTip, applyAccountUpdate, applyPayoutUpdate };
+  // (c)(d)(f) は本テストでは扱わないため no-op
+  const settlementDeps = {
+    recordTipSettlementMirror: async () => false,
+    recordPayoutLedger: async () => 0,
+    applySettlementCorrection: async () => false,
+  };
+  return { repo, updateTip, applyAccountUpdate, applyPayoutUpdate, settlementDeps };
 }
 
 // payment_intent.succeeded（metadata.tipId 付き）の検証済みイベント
@@ -118,6 +124,9 @@ function succeeded(eventId: string, tipId: string): VerifiedEvent {
     payoutMetadataId: null,
     payoutArrivedAt: null,
     payoutFailureReason: null,
+    chargeId: null,
+    chargeConnectedAccountId: null,
+    settlementCorrection: null,
   };
 }
 
@@ -134,6 +143,9 @@ function accountUpdated(eventId: string, accountId: string): VerifiedEvent {
     payoutMetadataId: null,
     payoutArrivedAt: null,
     payoutFailureReason: null,
+    chargeId: null,
+    chargeConnectedAccountId: null,
+    settlementCorrection: null,
   };
 }
 
@@ -142,9 +154,9 @@ describe("verified 店員の tip が succeeded 時に payable で確定する（
     const store = makeStore();
     store.addStaff({ staffId: "staff_v", identityStatus: "verified", stripeAccountId: "acct_v" });
     store.addPendingTip({ tipId: "tip_v", staffId: "staff_v" });
-    const { repo, updateTip, applyAccountUpdate, applyPayoutUpdate } = wire(store);
+    const { repo, updateTip, applyAccountUpdate, applyPayoutUpdate, settlementDeps } = wire(store);
 
-    await handleStripeWebhook(repo, updateTip, applyAccountUpdate, applyPayoutUpdate, succeeded("evt_v", "tip_v"));
+    await handleStripeWebhook(repo, updateTip, applyAccountUpdate, applyPayoutUpdate, settlementDeps, succeeded("evt_v", "tip_v"));
 
     const tip = store.tips.get("tip_v")!;
     expect(tip.status).toBe("succeeded");
@@ -155,9 +167,9 @@ describe("verified 店員の tip が succeeded 時に payable で確定する（
     const store = makeStore();
     store.addStaff({ staffId: "staff_n", identityStatus: "none", stripeAccountId: "acct_n" });
     store.addPendingTip({ tipId: "tip_n", staffId: "staff_n" });
-    const { repo, updateTip, applyAccountUpdate, applyPayoutUpdate } = wire(store);
+    const { repo, updateTip, applyAccountUpdate, applyPayoutUpdate, settlementDeps } = wire(store);
 
-    await handleStripeWebhook(repo, updateTip, applyAccountUpdate, applyPayoutUpdate, succeeded("evt_n", "tip_n"));
+    await handleStripeWebhook(repo, updateTip, applyAccountUpdate, applyPayoutUpdate, settlementDeps, succeeded("evt_n", "tip_n"));
 
     const tip = store.tips.get("tip_n")!;
     expect(tip.status).toBe("succeeded");
@@ -168,9 +180,9 @@ describe("verified 店員の tip が succeeded 時に payable で確定する（
     const store = makeStore();
     store.addStaff({ staffId: "staff_p", identityStatus: "pending", stripeAccountId: "acct_p" });
     store.addPendingTip({ tipId: "tip_p", staffId: "staff_p" });
-    const { repo, updateTip, applyAccountUpdate, applyPayoutUpdate } = wire(store);
+    const { repo, updateTip, applyAccountUpdate, applyPayoutUpdate, settlementDeps } = wire(store);
 
-    await handleStripeWebhook(repo, updateTip, applyAccountUpdate, applyPayoutUpdate, succeeded("evt_p", "tip_p"));
+    await handleStripeWebhook(repo, updateTip, applyAccountUpdate, applyPayoutUpdate, settlementDeps, succeeded("evt_p", "tip_p"));
 
     expect(store.tips.get("tip_p")!.settlementStatus).toBe("held");
   });
@@ -179,10 +191,10 @@ describe("verified 店員の tip が succeeded 時に payable で確定する（
     const store = makeStore();
     store.addStaff({ staffId: "staff_l", identityStatus: "none", stripeAccountId: "acct_l" });
     store.addPendingTip({ tipId: "tip_l", staffId: "staff_l" });
-    const { repo, updateTip, applyAccountUpdate, applyPayoutUpdate } = wire(store);
+    const { repo, updateTip, applyAccountUpdate, applyPayoutUpdate, settlementDeps } = wire(store);
 
     // 先に succeeded（このときは未verified なので held）
-    await handleStripeWebhook(repo, updateTip, applyAccountUpdate, applyPayoutUpdate, succeeded("evt_l", "tip_l"));
+    await handleStripeWebhook(repo, updateTip, applyAccountUpdate, applyPayoutUpdate, settlementDeps, succeeded("evt_l", "tip_l"));
     expect(store.tips.get("tip_l")!.settlementStatus).toBe("held");
 
     // 後から本人確認完了 → account.updated で held を payable へ昇格
@@ -191,6 +203,7 @@ describe("verified 店員の tip が succeeded 時に payable で確定する（
       updateTip,
       applyAccountUpdate,
       applyPayoutUpdate,
+      settlementDeps,
       accountUpdated("evt_l_acct", "acct_l"),
     );
 

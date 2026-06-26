@@ -26,8 +26,9 @@ export type IdentityStatus = "none" | "pending" | "verified";
 // 招待のステータス（pending: 未消費 / accepted: 消費済み / revoked: 失効）
 export type InviteStatus = "pending" | "accepted" | "revoked";
 
-// 着金（精算）ステータス（held: 保留 / payable: 着金可能 / paid: 着金済）
-export type SettlementStatus = "held" | "payable" | "paid";
+// 着金（精算）ステータス（held: 保留 / payable: 着金可能 / paid: 着金済 / refunded: 返金済 / disputed: 異議申立）。
+// (f) refunded / disputed は終端状態で、残高・受取履歴・送金候補から除外する。
+export type SettlementStatus = "held" | "payable" | "paid" | "refunded" | "disputed";
 
 /**
  * 本人確認の状態から着金可否を判定する純粋関数。

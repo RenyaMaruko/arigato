@@ -248,5 +248,30 @@ export function createInMemoryStaffRepository(): StaffRepository {
       if (profile) profileByAuth.set(foundAuth, { ...profile, identityStatus: "verified" });
       return { found: true, verified: true, promotedTips: 0 };
     },
+
+    // (d) payout を保持しないインメモリでは照合できず null（実 DB 環境で本実装が動く）
+    async findPayoutForLedger() {
+      return null;
+    },
+    // (d) tip を保持しないインメモリでは紐づく tip 無し（実 DB 環境で本実装が動く）
+    async listPaidTipsForPayout() {
+      return [];
+    },
+    // (d) tip を保持しないインメモリでは charge→tip 逆引きできず null
+    async findTipIdByChargeId() {
+      return null;
+    },
+    // (d) 台帳を保持しないインメモリでは追記なし（0 件）
+    async appendPayoutLedgerEntries() {
+      return 0;
+    },
+    // (f) 台帳を保持しないインメモリでは補正追記はダミー id を返す（実 DB 環境で本実装が動く）
+    async appendLedgerCorrection() {
+      return "00000000-0000-0000-0000-000000000000";
+    },
+    // (e) tip / Connected Account を保持しないインメモリでは照合対象なし（実 DB 環境で本実装が動く）
+    async listReconcileTotalsByStaff() {
+      return [];
+    },
   };
 }

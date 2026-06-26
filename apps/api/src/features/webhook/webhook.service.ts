@@ -29,6 +29,12 @@ export type VerifiedEvent = {
   payoutArrivedAt: Date | null;
   // payout.failed の失敗理由（対象外は null）
   payoutFailureReason: string | null;
+  // (c) charge.* / payment_intent.succeeded の charge ID（ch_…）。確定見込みの取得起点。対象外は null
+  chargeId: string | null;
+  // (c) charge の発生元 Connected Account ID（Direct charge は連結アカウント上）。対象外は null
+  chargeConnectedAccountId: string | null;
+  // (f) 返金・チャージバックの種別（refunded / disputed。対象外は null）
+  settlementCorrection: "refunded" | "disputed" | null;
 };
 
 /**
@@ -62,6 +68,12 @@ export type HandleWebhookResult = {
   promotedTips: number;
   // payout.* で送金（payout）の状態を更新できたか（該当 payout 無し・冪等スキップなら false）
   payoutUpdated: boolean;
+  // (c) charge / balance_transaction の確定見込みを tip に保存できたか
+  settlementMirrored: boolean;
+  // (d) payout 内訳を照合台帳へ追記した件数
+  ledgerEntries: number;
+  // (f) 返金・チャージバックで tip を refunded / disputed へ遷移できたか
+  settlementCorrected: boolean;
 };
 
 /**
@@ -82,6 +94,55 @@ export type ApplyPayoutUpdate = (params: {
   arrivedAt: Date | null;
   // payout.failed の失敗理由
   failureReason: string | null;
+}) => Promise<boolean>;
+
+/**
+ * (c) 受取 tip の確定見込み（charge / balance_transaction）を tip に保存する関数（コンポジションルートで配線）。
+ * webhook feature は tip feature を直接 import せず、この注入関数を通して保存する。
+ *  - payment_intent.succeeded / charge.succeeded / charge.updated 受信時に呼ぶ。
+ *  - 内部で charge を expand して balance_transaction（available_on / status）を取得し、対応 tip へ鏡として保存する。
+ *  - PI 直後は balance_transaction 未付与のことがあるため、取れなければ後続イベントで埋め直せるよう堅牢に扱う。
+ * 保存できたか（boolean）を返す（該当 tip 無し・charge 情報無しなら false）。
+ */
+export type RecordTipSettlementMirror = (params: {
+  // tip 特定の主キー（metadata.tipId 由来。無ければ PaymentIntent ID で引く）
+  tipId: string | null;
+  // tip 特定の従キー（PaymentIntent ID）
+  paymentIntentId: string | null;
+  // 確定見込みの取得元 charge ID（ch_…）
+  chargeId: string;
+  // charge の発生元 Connected Account ID（balance_transaction 取得時に必要）
+  connectedAccountId: string;
+}) => Promise<boolean>;
+
+/**
+ * (d) 送金成立時に payout 内訳（balance_transaction ↔ tip）を照合台帳へ追記する関数（コンポジションルートで配線）。
+ * webhook feature は staff feature を直接 import せず、この注入関数を通して追記する。
+ *  - payout.paid 受信時に呼ぶ。balance_transactions?payout=po_… を取得し、source(ch_…) から tip を逆引きして
+ *    payout ⇄ balance_transaction ⇄ tip の対応を append-only で台帳に記録する（手動送金の唯一の突き合わせ手段）。
+ * 追記件数を返す（該当 payout 無し・既に記録済みなら 0）。
+ */
+export type RecordPayoutLedger = (params: {
+  // 主の照合キー（Stripe Payout ID）
+  stripePayoutId: string;
+  // 従の照合キー（metadata.payout_id＝自前 payout 行 id）
+  payoutId: string | null;
+}) => Promise<number>;
+
+/**
+ * (f) 返金・チャージバックを反映する関数（コンポジションルートで配線）。
+ * webhook feature は staff feature を直接 import せず、この注入関数を通して遷移する。
+ *  - charge.refunded → tip を refunded、charge.dispute.created/funds_withdrawn → tip を disputed へ遷移。
+ *  - 返金/異議の tip は残高・受取履歴・送金候補から除外（settlement_status を終端状態にする）。
+ *  - 補正エントリを台帳(d)へ追記する（append-only）。
+ * 反映できたか（boolean）を返す（該当 tip 無しなら false）。
+ */
+export type ApplySettlementCorrection = (params: {
+  kind: "refunded" | "disputed";
+  // tip 特定の主キー（charge ID から逆引き）
+  chargeId: string | null;
+  // tip 特定の従キー（PaymentIntent ID）
+  paymentIntentId: string | null;
 }) => Promise<boolean>;
 
 /**
@@ -108,6 +169,9 @@ const NO_OP_RESULT: HandleWebhookResult = {
   identityVerified: false,
   promotedTips: 0,
   payoutUpdated: false,
+  settlementMirrored: false,
+  ledgerEntries: 0,
+  settlementCorrected: false,
 };
 
 /**
@@ -118,17 +182,47 @@ const NO_OP_RESULT: HandleWebhookResult = {
  *  - payout.paid / payout.failed → 注入された applyPayoutUpdate で送金の着金確定・失敗を反映
  * 同一イベント ID の再送は冪等にスキップし、二重遷移しない。
  */
+// (c)(d)(f) の追加ユースケースを注入する束（既存4引数は維持しつつ、新規はこの1引数に集約）。
+// webhook feature は tip / staff feature を直接 import せず、すべて app.ts でこれらを配線する。
+export type SettlementDeps = {
+  // (c) 受取 tip の確定見込み（charge / balance_transaction）を tip へ保存する
+  recordTipSettlementMirror: RecordTipSettlementMirror;
+  // (d) payout 内訳（balance_transaction ↔ tip）を照合台帳へ追記する
+  recordPayoutLedger: RecordPayoutLedger;
+  // (f) 返金・チャージバックで tip を refunded / disputed へ遷移し、補正を台帳へ追記する
+  applySettlementCorrection: ApplySettlementCorrection;
+};
+
 export async function handleStripeWebhook(
   repo: WebhookRepository,
   updateTip: UpdateTipStatusDeps,
   applyAccountUpdate: ApplyAccountUpdate,
   applyPayoutUpdate: ApplyPayoutUpdate,
+  settlementDeps: SettlementDeps,
   event: VerifiedEvent,
 ): Promise<HandleWebhookResult> {
   // 冪等性: 同一イベント ID を2回受けても2回目は記録できず false → 何もせずスキップ
   const isNew = await repo.recordEventIfNew(event.id, event.type);
   if (!isNew) {
     return { ...NO_OP_RESULT, duplicate: true };
+  }
+
+  // (f) charge.refunded / charge.dispute.* : 返金・チャージバックを反映する（残高・履歴・送金候補から除外）。
+  //   settlementCorrection が立っているイベントはここで処理する（決済確定の写像より優先）。
+  if (event.settlementCorrection) {
+    const corrected = await settlementDeps.applySettlementCorrection({
+      kind: event.settlementCorrection,
+      chargeId: event.chargeId,
+      paymentIntentId: event.paymentIntentId,
+    });
+    return { ...NO_OP_RESULT, settlementCorrected: corrected };
+  }
+
+  // (c) charge.succeeded / charge.updated : 確定見込み（balance_transaction）を tip へ鏡として保存する。
+  //   これらは tip の status は変えない（決済確定は payment_intent.* / 突合を正とする）。
+  if (event.type === "charge.succeeded" || event.type === "charge.updated") {
+    const mirrored = await mirrorChargeSettlement(settlementDeps, event);
+    return { ...NO_OP_RESULT, settlementMirrored: mirrored };
   }
 
   // account.updated: 本人確認の遷移（verified）と held→payable の遷移を行う
@@ -159,7 +253,26 @@ export async function handleStripeWebhook(
       arrivedAt: event.payoutArrivedAt,
       failureReason: event.payoutFailureReason,
     });
-    return { ...NO_OP_RESULT, payoutUpdated: updated };
+
+    // (d) payout.paid: 送金が成立したら内訳（balance_transaction ↔ tip）を照合台帳へ追記する。
+    //   手動送金は Stripe が自動照合しないため、ここで append-only に突き合わせを記録する。
+    //   台帳追記の失敗は送金確定自体を壊さない（ログのみ。失敗で payoutUpdated を覆さない）。
+    let ledgerEntries = 0;
+    if (event.type === "payout.paid") {
+      try {
+        ledgerEntries = await settlementDeps.recordPayoutLedger({
+          stripePayoutId: event.payoutId,
+          payoutId: event.payoutMetadataId,
+        });
+      } catch (err) {
+        console.error(
+          "[webhook.service] payout 照合台帳の追記に失敗しました（送金確定は維持）:",
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+
+    return { ...NO_OP_RESULT, payoutUpdated: updated, ledgerEntries };
   }
 
   // 種別を tip ステータスへ写像（対象外イベントはここで終了。冪等記録だけ残す）
@@ -177,6 +290,43 @@ export async function handleStripeWebhook(
     updated = await updateTip.byPaymentIntentId(event.paymentIntentId, nextStatus);
   }
 
+  // (c) payment_intent.succeeded のとき、charge があれば確定見込み（balance_transaction）を tip へ鏡保存する。
+  //   決済確定（tip.status=succeeded）の写像とは別に、available_on / bt_status を保存して送金候補の事前フィルタに使う。
+  //   失敗しても決済確定は壊さない（ログのみ。PI 直後に未付与でも後続 charge.updated で埋まる）。
+  let settlementMirrored = false;
+  if (event.type === "payment_intent.succeeded") {
+    settlementMirrored = await mirrorChargeSettlement(settlementDeps, event);
+  }
+
   // 該当 tip が無い（例: CLI trigger の無関係なテストイベント）場合は 0 件で tipUpdated=false
-  return { ...NO_OP_RESULT, tipUpdated: updated > 0 };
+  return { ...NO_OP_RESULT, tipUpdated: updated > 0, settlementMirrored };
+}
+
+/**
+ * (c) charge / balance_transaction の確定見込みを tip へ鏡保存する内部ヘルパ。
+ * charge ID と発生元 Connected Account が揃っているときだけ実行する。
+ * 取得失敗は決済確定を壊さないようここで握り、false を返す（後続イベントで埋め直せる）。
+ */
+async function mirrorChargeSettlement(
+  deps: SettlementDeps,
+  event: VerifiedEvent,
+): Promise<boolean> {
+  // charge ID と課金先口座が揃っていなければ確定見込みを取得できない（後続イベントで埋める）
+  if (!event.chargeId || !event.chargeConnectedAccountId) {
+    return false;
+  }
+  try {
+    return await deps.recordTipSettlementMirror({
+      tipId: event.tipId,
+      paymentIntentId: event.paymentIntentId,
+      chargeId: event.chargeId,
+      connectedAccountId: event.chargeConnectedAccountId,
+    });
+  } catch (err) {
+    console.error(
+      "[webhook.service] 確定見込み（balance_transaction）の tip 保存に失敗しました（後続イベントで再試行）:",
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
 }

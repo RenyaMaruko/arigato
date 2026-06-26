@@ -171,6 +171,8 @@ export const ja = {
       tipsSettlementHeld: "保留中",
       tipsSettlementPayable: "着金可能",
       tipsSettlementPaid: "着金済",
+      tipsSettlementRefunded: "返金済",
+      tipsSettlementDisputed: "異議申立",
       tipsNoMessage: "メッセージはありません",
       // 残高・ステータス（05）
       balanceTitle: "残高・ステータス",

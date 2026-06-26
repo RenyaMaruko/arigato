@@ -85,6 +85,9 @@ function makeRepo(overrides: Partial<TipRepository> = {}): {
     updateTipStatusByTipId: vi.fn(async () => 0),
     updateTipStatusByPaymentIntentId: vi.fn(async () => 0),
     listPendingTipsForReconcile: vi.fn(async () => []),
+    // (c)(f) 鏡保存・返金補正は本テストでは検証対象外（投げ銭作成・表示のテスト）。最小実装で契約を満たす。
+    saveTipChargeSettlement: vi.fn(async () => 0),
+    applySettlementCorrectionToTip: vi.fn(async () => null),
     ...overrides,
   };
   return { repo, inserted };
@@ -263,5 +266,73 @@ describe("tip.service getTipComplete", () => {
       findMembershipDisplay: vi.fn(async () => null),
     });
     expect(await getTipComplete(repo, "nope", tip.id)).toBeNull();
+  });
+});
+
+import { recordTipChargeSettlement } from "./tip.service.js";
+
+/**
+ * (c) 確定見込み（charge / balance_transaction）の鏡保存の契約テスト。
+ * infra（charge expand）と repo（保存）をモックに差し替えて、
+ * 「balance_transaction の available_on / status を tip へ保存する」ことを検証する。
+ */
+describe("recordTipChargeSettlement（c: 確定見込みの鏡保存）", () => {
+  it("charge を expand して available_on / bt_status を tip に保存する", async () => {
+    const saveTipChargeSettlement = vi.fn(async () => 1);
+    const repo = {
+      saveTipChargeSettlement,
+    } as unknown as TipRepository;
+    const availableOn = new Date("2026-07-01T00:00:00Z");
+    const retrieve = vi.fn(async () => ({
+      chargeId: "ch_1",
+      balanceTransactionId: "txn_1",
+      availableOn,
+      btStatus: "pending" as const,
+    }));
+
+    const ok = await recordTipChargeSettlement(repo, retrieve, {
+      tipId: "tip_1",
+      paymentIntentId: "pi_1",
+      chargeId: "ch_1",
+      connectedAccountId: "acct_1",
+    });
+
+    expect(retrieve).toHaveBeenCalledWith("ch_1", "acct_1");
+    expect(saveTipChargeSettlement).toHaveBeenCalledWith({
+      tipId: "tip_1",
+      paymentIntentId: "pi_1",
+      chargeId: "ch_1",
+      balanceTransactionId: "txn_1",
+      availableOn,
+      btStatus: "pending",
+    });
+    expect(ok).toBe(true);
+  });
+
+  it("balance_transaction が未付与（null）でも charge ID は保存し、見込みは後続で埋める", async () => {
+    const saveTipChargeSettlement = vi.fn(async () => 1);
+    const repo = { saveTipChargeSettlement } as unknown as TipRepository;
+    const retrieve = vi.fn(async () => ({
+      chargeId: "ch_2",
+      balanceTransactionId: null,
+      availableOn: null,
+      btStatus: null,
+    }));
+
+    await recordTipChargeSettlement(repo, retrieve, {
+      tipId: "tip_2",
+      paymentIntentId: null,
+      chargeId: "ch_2",
+      connectedAccountId: "acct_2",
+    });
+
+    expect(saveTipChargeSettlement).toHaveBeenCalledWith({
+      tipId: "tip_2",
+      paymentIntentId: null,
+      chargeId: "ch_2",
+      balanceTransactionId: null,
+      availableOn: null,
+      btStatus: null,
+    });
   });
 });

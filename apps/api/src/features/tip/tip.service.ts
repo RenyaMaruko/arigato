@@ -196,3 +196,54 @@ export async function getTipComplete(
     status: tip.status,
   };
 }
+
+// (c) charge の確定見込み（balance_transaction）を取得する infrastructure 関数の型（コンポジションルートで注入）。
+// charge を expand して available_on / status を読む（PI 直後は未付与のことがあるため null 可）。
+export type RetrieveChargeSettlement = (
+  chargeId: string,
+  connectedAccountId: string,
+) => Promise<{
+  chargeId: string;
+  balanceTransactionId: string | null;
+  availableOn: Date | null;
+  btStatus: "pending" | "available" | null;
+}>;
+
+/**
+ * (c) 受取 tip の確定見込み（charge / balance_transaction）を tip へ鏡保存する（Webhook 経由）。
+ * Stripe を残高の真実の源泉とし、自前 DB は「鏡」を持つ。
+ * webhook feature から直接 import せず、コンポジションルートでこの関数を注入して使う。
+ *
+ * 流れ:
+ *  1. charge を expand して balance_transaction（available_on / status）を取得する（infra 注入）。
+ *  2. tipId（主）/ PaymentIntent ID（従）で対象 tip を特定し、
+ *     stripe_charge_id / balance_transaction_id / available_on / bt_status を保存する（null は既存維持）。
+ *
+ * 用途: UI 表示（「◯日後に送金できます」を tip 単位で正確化）・送金候補の事前フィルタ。
+ *   送金可否の最終判定は必ず送金直前の balance.retrieve（実 available）で行う（これは予測・並べ替え用）。
+ * 保存できたか（boolean）を返す（該当 tip 無しなら false）。
+ */
+export async function recordTipChargeSettlement(
+  repo: TipRepository,
+  retrieveChargeSettlement: RetrieveChargeSettlement,
+  params: {
+    tipId: string | null;
+    paymentIntentId: string | null;
+    chargeId: string;
+    connectedAccountId: string;
+  },
+): Promise<boolean> {
+  // 【1】charge を expand して確定見込み（available_on / status）を取得する
+  const snapshot = await retrieveChargeSettlement(params.chargeId, params.connectedAccountId);
+
+  // 【2】tip へ鏡保存する（tipId 主・PaymentIntent ID 従。null の項目は既存維持で後続イベントが埋める）
+  const updated = await repo.saveTipChargeSettlement({
+    tipId: params.tipId,
+    paymentIntentId: params.paymentIntentId,
+    chargeId: snapshot.chargeId,
+    balanceTransactionId: snapshot.balanceTransactionId,
+    availableOn: snapshot.availableOn,
+    btStatus: snapshot.btStatus,
+  });
+  return updated > 0;
+}

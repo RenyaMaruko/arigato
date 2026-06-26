@@ -118,5 +118,29 @@ export function createInMemoryTipRepository(): TipRepository {
     async listPendingTipsForReconcile() {
       return [];
     },
+
+    // (c) 確定見込み（charge / balance_transaction）をメモリ上の tip 行へ鏡保存する。
+    //   実 DB と同じく tipId 主・PaymentIntent ID 従で特定する。インメモリ行は最小情報のみ保持する。
+    async saveTipChargeSettlement(params) {
+      // tipId か PaymentIntent ID から対象の tipId を解決する
+      const tipId = params.tipId ?? (params.paymentIntentId ? piIndex.get(params.paymentIntentId) : undefined);
+      if (!tipId) return 0;
+      const row = tips.get(tipId);
+      if (!row) return 0;
+      // TipRow は鏡列を持たないため、保存できたことだけを件数で返す（DB 接続時のみ列に反映）
+      return 1;
+    },
+
+    // (f) 返金・チャージバックでメモリ上の tip を refunded / disputed へ遷移する。
+    //   charge ID を保持しないインメモリでは PaymentIntent ID 経由で特定する（charge は DB 接続時のみ逆引き）。
+    async applySettlementCorrectionToTip(params) {
+      const tipId = params.paymentIntentId ? piIndex.get(params.paymentIntentId) : undefined;
+      if (!tipId) return null;
+      const row = tips.get(tipId);
+      if (!row) return null;
+      if (row.settlementStatus === "refunded" || row.settlementStatus === "disputed") return null;
+      tips.set(tipId, { ...row, settlementStatus: params.settlementStatus });
+      return { tipId, staffId: row.staffId, amount: row.amount };
+    },
   };
 }

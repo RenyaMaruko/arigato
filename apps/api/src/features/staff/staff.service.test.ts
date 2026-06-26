@@ -338,6 +338,37 @@ function createMockRepo() {
       }
       return false;
     },
+    // (d)(f) 照合台帳まわりは本テストでは検証対象外（送金・参加フローのテスト）。最小実装で契約を満たす。
+    async findPayoutForLedger(params) {
+      for (const p of payoutsByStaff.values()) {
+        const hit =
+          (p.stripePayoutId !== null && p.stripePayoutId === params.stripePayoutId) ||
+          (params.payoutId !== null && p.id === params.payoutId);
+        if (hit) {
+          return {
+            payoutId: p.id,
+            stripePayoutId: p.stripePayoutId,
+            connectedAccountId: accountByAuth.get(p.authUserId) ?? null,
+          };
+        }
+      }
+      return null;
+    },
+    async listPaidTipsForPayout() {
+      return [];
+    },
+    async findTipIdByChargeId() {
+      return null;
+    },
+    async appendPayoutLedgerEntries() {
+      return 0;
+    },
+    async appendLedgerCorrection() {
+      return "ledger-correction-id";
+    },
+    async listReconcileTotalsByStaff() {
+      return [];
+    },
   };
 
   return { repo, invites, staffByAuth, membershipsByAuth, tipsByAuth, accountByAuth, payoutsByStaff };

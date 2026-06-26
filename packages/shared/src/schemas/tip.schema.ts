@@ -10,8 +10,16 @@ export type TipStatus = z.infer<typeof TipStatusSchema>;
 /**
  * 着金（精算）ステータス。保留残高モデルの状態。
  * held（保留）→ payable（着金可能）→ paid（着金済）。
+ * (f) refunded（返金済）/ disputed（異議申立・チャージバック）は終端状態。
+ *   返金・異議の tip は残高・受取履歴・送金候補から除外する（Stripe を正とし、負残高を握りつぶさず安全に扱う）。
  */
-export const SettlementStatusSchema = z.enum(["held", "payable", "paid"]);
+export const SettlementStatusSchema = z.enum([
+  "held",
+  "payable",
+  "paid",
+  "refunded",
+  "disputed",
+]);
 export type SettlementStatus = z.infer<typeof SettlementStatusSchema>;
 
 /**

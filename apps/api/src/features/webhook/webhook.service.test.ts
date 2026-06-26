@@ -1,6 +1,22 @@
 import { describe, it, expect, vi } from "vitest";
-import { handleStripeWebhook, type VerifiedEvent } from "./webhook.service.js";
+import {
+  handleStripeWebhook,
+  type VerifiedEvent,
+  type SettlementDeps,
+} from "./webhook.service.js";
 import type { WebhookRepository } from "./webhook.repository.js";
+
+// (c)(d)(f) の追加ユースケースを束ねた no-op の settlementDeps（既存テスト向けの既定値）。
+// 個別テストで mirror/ledger/correction を検証するときは差し替える。
+function makeSettlementDeps(overrides: Partial<SettlementDeps> = {}): SettlementDeps {
+  return {
+    recordTipSettlementMirror: vi.fn(async () => false),
+    recordPayoutLedger: vi.fn(async () => 0),
+    applySettlementCorrection: vi.fn(async () => false),
+    ...overrides,
+  };
+}
+const noopSettlementDeps = makeSettlementDeps();
 
 /**
  * webhook Service 層のユニットテスト。
@@ -37,6 +53,9 @@ function succeededEvent(
     payoutMetadataId: null,
     payoutArrivedAt: null,
     payoutFailureReason: null,
+    chargeId: null,
+    chargeConnectedAccountId: null,
+    settlementCorrection: null,
   };
 }
 
@@ -57,6 +76,9 @@ function accountUpdatedEvent(
     payoutMetadataId: null,
     payoutArrivedAt: null,
     payoutFailureReason: null,
+    chargeId: null,
+    chargeConnectedAccountId: null,
+    settlementCorrection: null,
   };
 }
 
@@ -78,6 +100,9 @@ function payoutEvent(
     payoutMetadataId: opts.metadataId ?? null,
     payoutArrivedAt: opts.arrivedAt ?? null,
     payoutFailureReason: opts.failureReason ?? null,
+    chargeId: null,
+    chargeConnectedAccountId: null,
+    settlementCorrection: null,
   };
 }
 
@@ -141,6 +166,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       noopApplyAccountUpdate,
       noopApplyPayoutUpdate,
+      noopSettlementDeps,
       succeededEvent("evt_1"),
     );
 
@@ -154,6 +180,9 @@ describe("webhook.service handleStripeWebhook", () => {
       identityVerified: false,
       promotedTips: 0,
       payoutUpdated: false,
+      settlementMirrored: false,
+      ledgerEntries: 0,
+      settlementCorrected: false,
     });
   });
 
@@ -172,8 +201,11 @@ describe("webhook.service handleStripeWebhook", () => {
       payoutMetadataId: null,
       payoutArrivedAt: null,
       payoutFailureReason: null,
+      chargeId: null,
+      chargeConnectedAccountId: null,
+      settlementCorrection: null,
     };
-    const result = await handleStripeWebhook(repo, update, noopApplyAccountUpdate, noopApplyPayoutUpdate, failed);
+    const result = await handleStripeWebhook(repo, update, noopApplyAccountUpdate, noopApplyPayoutUpdate, noopSettlementDeps, failed);
 
     expect(update.byTipId).toHaveBeenCalledWith("tip_2", "failed", "pi_2");
     expect(result.tipUpdated).toBe(true);
@@ -188,6 +220,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       noopApplyAccountUpdate,
       noopApplyPayoutUpdate,
+      noopSettlementDeps,
       succeededEvent("evt_pi_only", { tipId: null, piId: "pi_only" }),
     );
 
@@ -206,6 +239,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       noopApplyAccountUpdate,
       noopApplyPayoutUpdate,
+      noopSettlementDeps,
       succeededEvent("evt_same"),
     );
     // 2回目: 同じイベント ID → 冪等にスキップ
@@ -214,6 +248,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       noopApplyAccountUpdate,
       noopApplyPayoutUpdate,
+      noopSettlementDeps,
       succeededEvent("evt_same"),
     );
 
@@ -240,8 +275,11 @@ describe("webhook.service handleStripeWebhook", () => {
       payoutMetadataId: null,
       payoutArrivedAt: null,
       payoutFailureReason: null,
+      chargeId: null,
+      chargeConnectedAccountId: null,
+      settlementCorrection: null,
     };
-    const result = await handleStripeWebhook(repo, update, noopApplyAccountUpdate, noopApplyPayoutUpdate, other);
+    const result = await handleStripeWebhook(repo, update, noopApplyAccountUpdate, noopApplyPayoutUpdate, noopSettlementDeps, other);
 
     expect(update.byTipId).not.toHaveBeenCalled();
     expect(update.byPaymentIntentId).not.toHaveBeenCalled();
@@ -258,6 +296,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       noopApplyAccountUpdate,
       noopApplyPayoutUpdate,
+      noopSettlementDeps,
       succeededEvent("evt_3"),
     );
 
@@ -278,6 +317,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       applyAccountUpdate,
       noopApplyPayoutUpdate,
+      noopSettlementDeps,
       accountUpdatedEvent("evt_acct_1", "acct_123", true),
     );
 
@@ -291,6 +331,9 @@ describe("webhook.service handleStripeWebhook", () => {
       identityVerified: true,
       promotedTips: 3,
       payoutUpdated: false,
+      settlementMirrored: false,
+      ledgerEntries: 0,
+      settlementCorrected: false,
     });
   });
 
@@ -304,6 +347,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       applyAccountUpdate,
       noopApplyPayoutUpdate,
+      noopSettlementDeps,
       accountUpdatedEvent("evt_acct_same", "acct_123", true),
     );
     // 同一イベント ID の再送 → webhook_event の冪等性でスキップ
@@ -312,6 +356,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       applyAccountUpdate,
       noopApplyPayoutUpdate,
+      noopSettlementDeps,
       accountUpdatedEvent("evt_acct_same", "acct_123", true),
     );
 
@@ -334,6 +379,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       applyAccountUpdate,
       noopApplyPayoutUpdate,
+      noopSettlementDeps,
       accountUpdatedEvent("evt_acct_a", "acct_777", true),
     );
     // 別イベント ID（webhook_event は通過する）だが、口座は既に verified
@@ -342,6 +388,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       applyAccountUpdate,
       noopApplyPayoutUpdate,
+      noopSettlementDeps,
       accountUpdatedEvent("evt_acct_b", "acct_777", true),
     );
 
@@ -362,6 +409,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       applyAccountUpdate,
       noopApplyPayoutUpdate,
+      noopSettlementDeps,
       accountUpdatedEvent("evt_acct_pending", "acct_999", false),
     );
 
@@ -383,6 +431,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       noopApplyAccountUpdate,
       applyPayout,
+      noopSettlementDeps,
       payoutEvent("evt_po_paid", "payout.paid", "po_123", { arrivedAt }),
     );
 
@@ -410,6 +459,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       noopApplyAccountUpdate,
       applyPayout,
+      noopSettlementDeps,
       payoutEvent("evt_po_failed", "payout.failed", "po_456", {
         failureReason: "account_closed",
       }),
@@ -435,6 +485,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       noopApplyAccountUpdate,
       applyPayout,
+      noopSettlementDeps,
       payoutEvent("evt_po_same", "payout.paid", "po_789"),
     );
     // 同一イベント ID の再送 → webhook_event の冪等性でスキップ
@@ -443,6 +494,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       noopApplyAccountUpdate,
       applyPayout,
+      noopSettlementDeps,
       payoutEvent("evt_po_same", "payout.paid", "po_789"),
     );
 
@@ -464,6 +516,7 @@ describe("webhook.service handleStripeWebhook", () => {
       update,
       noopApplyAccountUpdate,
       applyPayout,
+      noopSettlementDeps,
       payoutEvent("evt_po_meta", "payout.paid", "po_meta", {
         arrivedAt,
         metadataId: "our-payout-uuid",
@@ -478,5 +531,284 @@ describe("webhook.service handleStripeWebhook", () => {
       arrivedAt,
       failureReason: null,
     });
+  });
+
+  // --- (c) 確定見込み（charge / balance_transaction）の鏡保存 ---
+
+  it("(c) payment_intent.succeeded で charge があれば確定見込みを tip へ鏡保存する", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(1);
+    const recordTipSettlementMirror = vi.fn(async () => true);
+    const deps = makeSettlementDeps({ recordTipSettlementMirror });
+
+    // charge ID と発生元 Connected Account を伴う succeeded イベント
+    const evt: VerifiedEvent = {
+      ...succeededEvent("evt_mirror"),
+      chargeId: "ch_123",
+      chargeConnectedAccountId: "acct_c",
+    };
+    const result = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
+      deps,
+      evt,
+    );
+
+    // 決済確定（tipUpdated）に加え、確定見込みの鏡保存も行われる
+    expect(result.tipUpdated).toBe(true);
+    expect(recordTipSettlementMirror).toHaveBeenCalledWith({
+      tipId: "tip_1",
+      paymentIntentId: "pi_1",
+      chargeId: "ch_123",
+      connectedAccountId: "acct_c",
+    });
+    expect(result.settlementMirrored).toBe(true);
+  });
+
+  it("(c) charge.updated は tip の決済確定をせず、確定見込みの鏡保存だけ行う", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(1);
+    const recordTipSettlementMirror = vi.fn(async () => true);
+    const deps = makeSettlementDeps({ recordTipSettlementMirror });
+
+    const evt: VerifiedEvent = {
+      id: "evt_charge_updated",
+      type: "charge.updated",
+      paymentIntentId: "pi_x",
+      tipId: "tip_x",
+      accountId: null,
+      payoutsEnabled: null,
+      payoutId: null,
+      payoutMetadataId: null,
+      payoutArrivedAt: null,
+      payoutFailureReason: null,
+      chargeId: "ch_x",
+      chargeConnectedAccountId: "acct_x",
+      settlementCorrection: null,
+    };
+    const result = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
+      deps,
+      evt,
+    );
+
+    // 決済確定（byTipId）は呼ばれない。鏡保存だけ行う
+    expect(update.byTipId).not.toHaveBeenCalled();
+    expect(result.tipUpdated).toBe(false);
+    expect(recordTipSettlementMirror).toHaveBeenCalledTimes(1);
+    expect(result.settlementMirrored).toBe(true);
+  });
+
+  it("(c) 鏡保存が失敗しても決済確定は壊れない（後続イベントで埋め直せる）", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(1);
+    const recordTipSettlementMirror = vi.fn(async () => {
+      throw new Error("balance_transaction 未付与");
+    });
+    const deps = makeSettlementDeps({ recordTipSettlementMirror });
+
+    const evt: VerifiedEvent = {
+      ...succeededEvent("evt_mirror_fail"),
+      chargeId: "ch_fail",
+      chargeConnectedAccountId: "acct_f",
+    };
+    const result = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
+      deps,
+      evt,
+    );
+
+    // 決済確定は成立し、鏡保存だけ false（失敗を握りつぶして決済を壊さない）
+    expect(result.tipUpdated).toBe(true);
+    expect(result.settlementMirrored).toBe(false);
+  });
+
+  // --- (d) 送金の照合台帳追記 ---
+
+  it("(d) payout.paid で照合台帳を追記する（balance_transaction ↔ tip の突き合わせ）", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(0);
+    const applyPayout = makeApplyPayoutUpdate(true);
+    const recordPayoutLedger = vi.fn(async () => 2);
+    const deps = makeSettlementDeps({ recordPayoutLedger });
+
+    const result = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      applyPayout,
+      deps,
+      payoutEvent("evt_po_ledger", "payout.paid", "po_ledger", { metadataId: "our-uuid" }),
+    );
+
+    expect(recordPayoutLedger).toHaveBeenCalledWith({
+      stripePayoutId: "po_ledger",
+      payoutId: "our-uuid",
+    });
+    expect(result.payoutUpdated).toBe(true);
+    expect(result.ledgerEntries).toBe(2);
+  });
+
+  it("(d) payout.failed では照合台帳を追記しない（成立した送金だけ突き合わせる）", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(0);
+    const applyPayout = makeApplyPayoutUpdate(true);
+    const recordPayoutLedger = vi.fn(async () => 0);
+    const deps = makeSettlementDeps({ recordPayoutLedger });
+
+    await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      applyPayout,
+      deps,
+      payoutEvent("evt_po_failed_ledger", "payout.failed", "po_f", {
+        failureReason: "account_closed",
+      }),
+    );
+
+    expect(recordPayoutLedger).not.toHaveBeenCalled();
+  });
+
+  it("(d) 台帳追記が失敗しても送金の着金確定は維持する", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(0);
+    const applyPayout = makeApplyPayoutUpdate(true);
+    const recordPayoutLedger = vi.fn(async () => {
+      throw new Error("ledger down");
+    });
+    const deps = makeSettlementDeps({ recordPayoutLedger });
+
+    const result = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      applyPayout,
+      deps,
+      payoutEvent("evt_po_ledger_fail", "payout.paid", "po_lf"),
+    );
+
+    // 着金確定は維持・台帳件数は 0（失敗を握り、送金確定を壊さない）
+    expect(result.payoutUpdated).toBe(true);
+    expect(result.ledgerEntries).toBe(0);
+  });
+
+  // --- (f) 返金・チャージバック（残高・履歴・送金候補から除外） ---
+
+  it("(f) charge.refunded で tip を refunded へ遷移する（決済確定の写像はしない）", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(1);
+    const applySettlementCorrection = vi.fn(async () => true);
+    const deps = makeSettlementDeps({ applySettlementCorrection });
+
+    const evt: VerifiedEvent = {
+      id: "evt_refund",
+      type: "charge.refunded",
+      paymentIntentId: "pi_r",
+      tipId: null,
+      accountId: null,
+      payoutsEnabled: null,
+      payoutId: null,
+      payoutMetadataId: null,
+      payoutArrivedAt: null,
+      payoutFailureReason: null,
+      chargeId: "ch_r",
+      chargeConnectedAccountId: "acct_r",
+      settlementCorrection: "refunded",
+    };
+    const result = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
+      deps,
+      evt,
+    );
+
+    expect(applySettlementCorrection).toHaveBeenCalledWith({
+      kind: "refunded",
+      chargeId: "ch_r",
+      paymentIntentId: "pi_r",
+    });
+    // 返金イベントは決済確定の写像をしない（byTipId は呼ばれない）
+    expect(update.byTipId).not.toHaveBeenCalled();
+    expect(result.settlementCorrected).toBe(true);
+  });
+
+  it("(f) charge.dispute.created で tip を disputed へ遷移する", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(1);
+    const applySettlementCorrection = vi.fn(async () => true);
+    const deps = makeSettlementDeps({ applySettlementCorrection });
+
+    const evt: VerifiedEvent = {
+      id: "evt_dispute",
+      type: "charge.dispute.created",
+      paymentIntentId: "pi_d",
+      tipId: null,
+      accountId: null,
+      payoutsEnabled: null,
+      payoutId: null,
+      payoutMetadataId: null,
+      payoutArrivedAt: null,
+      payoutFailureReason: null,
+      chargeId: "ch_d",
+      chargeConnectedAccountId: "acct_d",
+      settlementCorrection: "disputed",
+    };
+    const result = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
+      deps,
+      evt,
+    );
+
+    expect(applySettlementCorrection).toHaveBeenCalledWith({
+      kind: "disputed",
+      chargeId: "ch_d",
+      paymentIntentId: "pi_d",
+    });
+    expect(result.settlementCorrected).toBe(true);
+  });
+
+  it("(f) 返金・異議も冪等（同一イベント再送では二重遷移しない）", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(1);
+    const applySettlementCorrection = vi.fn(async () => true);
+    const deps = makeSettlementDeps({ applySettlementCorrection });
+
+    const evt: VerifiedEvent = {
+      id: "evt_refund_same",
+      type: "charge.refunded",
+      paymentIntentId: "pi_rs",
+      tipId: null,
+      accountId: null,
+      payoutsEnabled: null,
+      payoutId: null,
+      payoutMetadataId: null,
+      payoutArrivedAt: null,
+      payoutFailureReason: null,
+      chargeId: "ch_rs",
+      chargeConnectedAccountId: "acct_rs",
+      settlementCorrection: "refunded",
+    };
+    const first = await handleStripeWebhook(repo, update, noopApplyAccountUpdate, noopApplyPayoutUpdate, deps, evt);
+    const second = await handleStripeWebhook(repo, update, noopApplyAccountUpdate, noopApplyPayoutUpdate, deps, evt);
+
+    expect(first.settlementCorrected).toBe(true);
+    expect(second.duplicate).toBe(true);
+    expect(second.settlementCorrected).toBe(false);
+    // 反映は1回だけ（二重遷移しない）
+    expect(applySettlementCorrection).toHaveBeenCalledTimes(1);
   });
 });

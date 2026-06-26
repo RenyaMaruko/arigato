@@ -217,6 +217,72 @@ export type StaffRepository = {
     params: { stripePayoutId: string | null; payoutId: string | null },
     failureReason: string | null,
   ) => Promise<boolean>;
+  // (d) 送金（payout）を stripe_payout_id（主）/ 自前 payout 行 id（従）で照合し、台帳追記に必要な
+  //   自前 payout 行 id・Stripe Payout ID・Connected Account ID を取得する。該当なしは null。
+  findPayoutForLedger: (params: {
+    stripePayoutId: string | null;
+    payoutId: string | null;
+  }) => Promise<{
+    payoutId: string;
+    stripePayoutId: string | null;
+    connectedAccountId: string | null;
+  } | null>;
+  // (d) ある payout 行に紐づく（paid 化した）tip を、台帳追記の素材として取得する。
+  //   手動送金は Stripe の balance_transactions?payout= で内訳を引けない（自動送金のみ対応）ため、
+  //   「この payout で paid にした tip」という DB の確定リンクを唯一の突き合わせ源泉とする（spec の意図）。
+  //   各 tip の balance_transaction_id / charge_id（(c) で鏡保存済み）と手取り額を返す。
+  listPaidTipsForPayout: (payoutId: string) => Promise<
+    Array<{
+      tipId: string;
+      balanceTransactionId: string | null;
+      stripeChargeId: string | null;
+      // 額面（円）。台帳には手取り（約85%）に換算して記録する
+      amount: number;
+    }>
+  >;
+  // (d) ある charge ID（ch_…）から自前 tip の id を逆引きする（台帳の payout⇄bt⇄tip 対応付け用）。該当なしは null。
+  findTipIdByChargeId: (chargeId: string) => Promise<string | null>;
+  // (d) 照合台帳（payout_ledger）へ追記する（append-only・上書き禁止）。
+  //   同一 (payout_id, balance_transaction_id) は二重追記しない（冪等）。追記した件数を返す。
+  appendPayoutLedgerEntries: (
+    payoutId: string,
+    entries: Array<{
+      balanceTransactionId: string | null;
+      stripeChargeId: string | null;
+      tipId: string | null;
+      amount: number;
+      type: string;
+    }>,
+  ) => Promise<number>;
+  // (f) 補正エントリ1件を照合台帳へ追記する（append-only。返金・異議・送金失敗などの補正）。
+  //   既存行は書き換えず、補正は新しい行として記録する。追記した行の id を返す。
+  appendLedgerCorrection: (params: {
+    // 対応する自前 payout 行（送金前の返金など payout が無い補正は null）
+    payoutId: string | null;
+    tipId: string | null;
+    stripeChargeId: string | null;
+    amount: number;
+    type: string;
+  }) => Promise<string>;
+  // (e) 日次照合バッチ用: Connected Account を持つ店員ごとに、DB 側の「合計」だけを集約して返す。
+  //   全件スキャンを避けるため、まず合計レベル（paid 合計・held+payable 合計・進行中 payout 件数・未確定 tip 件数）で
+  //   Stripe と突き合わせ、ズレた店員だけを後で掘り下げる。金額は店員手取り（約85%）換算済みの円。
+  listReconcileTotalsByStaff: () => Promise<ReconcileStaffTotals[]>;
+};
+
+// (e) 日次照合の合計（店員1人分）。Stripe と突き合わせる DB 側の集約。
+export type ReconcileStaffTotals = {
+  staffId: string;
+  // 送金元 Connected Account（Stripe 残高・payout を読む口座）
+  connectedAccountId: string;
+  // DB 上の paid な tip の手取り合計（円）。Stripe の成立 payout 合計と突き合わせる
+  paidTakeTotal: number;
+  // DB 上の held+payable な tip の手取り合計（円）。Stripe の balance(available+pending) と突き合わせる
+  unsettledTakeTotal: number;
+  // 進行中（pending）の自前 payout 件数（突き合わせの掘り下げ対象の目安）
+  pendingPayoutCount: number;
+  // 決済未確定（pending）の tip 件数（取りこぼしの掘り下げ対象の目安）
+  pendingTipCount: number;
 };
 
 /**
@@ -448,6 +514,8 @@ export function createStaffRepository(): StaffRepository {
         JOIN store st ON st.id = t.store_id
         WHERE s.auth_user_id = ${authUserId}
           AND t.status = 'succeeded'
+          -- (f) 返金・チャージバックの tip は受取履歴から除外する
+          AND t.settlement_status NOT IN ('refunded', 'disputed')
         ORDER BY COALESCE(t.succeeded_at, t.created_at) DESC
       `);
       return rows;
@@ -464,6 +532,8 @@ export function createStaffRepository(): StaffRepository {
         JOIN staff s ON s.id = t.staff_id
         WHERE s.auth_user_id = ${authUserId}
           AND t.status = 'succeeded'
+          -- (f) 返金・チャージバックの tip は残高集計から除外する（Stripe を正・負を握りつぶさない）
+          AND t.settlement_status NOT IN ('refunded', 'disputed')
       `);
       return rows;
     },
@@ -482,6 +552,8 @@ export function createStaffRepository(): StaffRepository {
         JOIN store st ON st.id = t.store_id
         WHERE s.auth_user_id = ${authUserId}
           AND t.status = 'succeeded'
+          -- (f) 返金・チャージバックの tip は申告データから除外する（収入ではない）
+          AND t.settlement_status NOT IN ('refunded', 'disputed')
           AND EXTRACT(YEAR FROM (COALESCE(t.succeeded_at, t.created_at) AT TIME ZONE 'Asia/Tokyo')) = ${year}
         ORDER BY COALESCE(t.succeeded_at, t.created_at) ASC
       `);
@@ -732,6 +804,146 @@ export function createStaffRepository(): StaffRepository {
 
         return true;
       });
+    },
+
+    // (d) 送金を stripe_payout_id（主）/ 自前 id（従）で照合し、台帳追記に必要な
+    //   自前 payout 行 id・Stripe Payout ID・Connected Account ID（送金元店員の口座）を取得する。
+    async findPayoutForLedger(params) {
+      const db = getDb();
+      const rows = await db.execute<{
+        payoutId: string;
+        stripePayoutId: string | null;
+        connectedAccountId: string | null;
+      }>(sql`
+        SELECT
+          p.id                AS "payoutId",
+          p.stripe_payout_id  AS "stripePayoutId",
+          s.stripe_account_id AS "connectedAccountId"
+        FROM payout p
+        JOIN staff s ON s.id = p.staff_id
+        WHERE (
+            p.stripe_payout_id = ${params.stripePayoutId}
+            OR p.id = ${params.payoutId}::uuid
+          )
+        LIMIT 1
+      `);
+      return rows[0] ?? null;
+    },
+
+    // (d) ある payout 行に紐づく（paid 化した）tip を、台帳追記の素材として取得する。
+    //   手動送金は balance_transactions?payout= で内訳を引けないため、DB の確定リンク（tip.payout_id）を源泉にする。
+    //   (c) で鏡保存した balance_transaction_id / charge_id と額面を返す。
+    async listPaidTipsForPayout(payoutId) {
+      const db = getDb();
+      const rows = await db.execute<{
+        tipId: string;
+        balanceTransactionId: string | null;
+        stripeChargeId: string | null;
+        amount: number;
+      }>(sql`
+        SELECT
+          id                     AS "tipId",
+          balance_transaction_id AS "balanceTransactionId",
+          stripe_charge_id       AS "stripeChargeId",
+          amount                 AS "amount"
+        FROM tip
+        WHERE payout_id = ${payoutId}::uuid
+        ORDER BY COALESCE(succeeded_at, created_at) ASC
+      `);
+      return rows;
+    },
+
+    // (d) charge ID（ch_…）から自前 tip の id を逆引きする（台帳の payout⇄bt⇄tip 対応付け用）。
+    async findTipIdByChargeId(chargeId) {
+      const db = getDb();
+      const rows = await db.execute<{ id: string }>(sql`
+        SELECT id AS "id"
+        FROM tip
+        WHERE stripe_charge_id = ${chargeId}
+        LIMIT 1
+      `);
+      return rows[0]?.id ?? null;
+    },
+
+    // (d) 照合台帳（payout_ledger）へ追記する（append-only・上書き禁止）。
+    //   同一 (payout_id, balance_transaction_id) は二重追記しない（payout.paid の再送・突合の重複に冪等）。
+    //   既存行は決して UPDATE / DELETE しない。新しい対応だけを INSERT する。追記件数を返す。
+    async appendPayoutLedgerEntries(payoutId, entries) {
+      if (entries.length === 0) return 0;
+      const db = getDb();
+      let appended = 0;
+      // 1件ずつ「まだ無ければ追記」する（balance_transaction_id 単位で冪等）。台帳は不変なので INSERT のみ。
+      for (const e of entries) {
+        const rows = await db.execute<{ id: string }>(sql`
+          INSERT INTO payout_ledger (
+            payout_id, balance_transaction_id, stripe_charge_id, tip_id, amount, type
+          )
+          SELECT
+            ${payoutId}::uuid, ${e.balanceTransactionId}, ${e.stripeChargeId},
+            ${e.tipId}::uuid, ${e.amount}, ${e.type}
+          WHERE NOT EXISTS (
+            SELECT 1 FROM payout_ledger pl
+            WHERE pl.payout_id = ${payoutId}::uuid
+              AND pl.balance_transaction_id IS NOT DISTINCT FROM ${e.balanceTransactionId}
+              AND pl.tip_id IS NOT DISTINCT FROM ${e.tipId}::uuid
+          )
+          RETURNING id AS "id"
+        `);
+        if (rows.length > 0) appended += 1;
+      }
+      return appended;
+    },
+
+    // (e) 日次照合バッチ用: Connected Account を持つ店員ごとに DB 側の合計を集約する（全件スキャンしない）。
+    //   手取りは floor(amount * 0.85)（= application_fee=15% 控除後の連結残高と1円一致・#11）を SQL で合算する。
+    //   返金・チャージバック（refunded/disputed）は除外する（Stripe 側でも残高から外れるため）。
+    async listReconcileTotalsByStaff() {
+      const db = getDb();
+      const rows = await db.execute<ReconcileStaffTotals>(sql`
+        SELECT
+          s.id                AS "staffId",
+          s.stripe_account_id AS "connectedAccountId",
+          -- paid な tip の手取り合計（Stripe の成立 payout 合計と突き合わせる）
+          COALESCE(SUM(
+            CASE WHEN t.settlement_status = 'paid'
+                 THEN FLOOR(t.amount * 0.85) ELSE 0 END
+          ), 0)::int          AS "paidTakeTotal",
+          -- held+payable な tip の手取り合計（Stripe balance(available+pending) と突き合わせる）
+          COALESCE(SUM(
+            CASE WHEN t.settlement_status IN ('held', 'payable')
+                 THEN FLOOR(t.amount * 0.85) ELSE 0 END
+          ), 0)::int          AS "unsettledTakeTotal",
+          -- 進行中（pending）の自前 payout 件数
+          (SELECT COUNT(*)::int FROM payout p
+            WHERE p.staff_id = s.id AND p.status = 'pending') AS "pendingPayoutCount",
+          -- 決済未確定（pending）の tip 件数（succeeded 集計とは別軸なので独立サブクエリで数える）
+          (SELECT COUNT(*)::int FROM tip tp
+            WHERE tp.staff_id = s.id AND tp.status = 'pending') AS "pendingTipCount"
+        FROM staff s
+        LEFT JOIN tip t
+          ON t.staff_id = s.id
+          AND t.status = 'succeeded'
+          AND t.settlement_status NOT IN ('refunded', 'disputed')
+        WHERE s.stripe_account_id IS NOT NULL
+        GROUP BY s.id, s.stripe_account_id
+      `);
+      return rows;
+    },
+
+    // (f) 補正エントリ1件を照合台帳へ追記する（append-only）。
+    //   返金・異議・送金失敗などの補正は、既存行を書き換えず新しい行として記録する（不変台帳）。
+    async appendLedgerCorrection(params) {
+      const db = getDb();
+      const rows = await db.execute<{ id: string }>(sql`
+        INSERT INTO payout_ledger (
+          payout_id, balance_transaction_id, stripe_charge_id, tip_id, amount, type
+        ) VALUES (
+          ${params.payoutId}::uuid, NULL, ${params.stripeChargeId},
+          ${params.tipId}::uuid, ${params.amount}, ${params.type}
+        )
+        RETURNING id AS "id"
+      `);
+      return rows[0]!.id;
     },
   };
 }

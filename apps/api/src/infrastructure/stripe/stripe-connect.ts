@@ -10,6 +10,8 @@ import type {
   CreatePayoutResult,
   CreateConnectedAccountResult,
   ConnectBalance,
+  ChargeSettlementSnapshot,
+  PayoutLedgerEntry,
 } from "./stripe.types.js";
 import { CURRENCY } from "@arigato/shared";
 
@@ -210,6 +212,124 @@ export async function retrieveConnectBalance(
   }
 
   return { availableAmount, pendingAmount, nextAvailableOn };
+}
+
+/**
+ * (e) 日次照合バッチ用: Connected Account で「成立した payout（status=paid）の合計額」を取得する（infrastructure 層）。
+ *
+ * DB の paid な tip 手取り合計と、Stripe 側の成立 payout 合計を「合計レベル」で突き合わせるために使う
+ * （全件スキャンしない・合計だけ照合し、ズレた口座だけ後で掘り下げる）。
+ * payout は Connected Account 上にあるため stripeAccount を指定して読み、auto-pagination で全件合算する。
+ */
+export async function sumPaidPayouts(connectedAccountId: string): Promise<number> {
+  const stripe = getStripe();
+  let total = 0;
+  // status=paid の payout を auto-pagination で全件走査し、JPY の額を合算する
+  for await (const po of stripe.payouts.list(
+    { status: "paid", limit: 100 },
+    { stripeAccount: connectedAccountId },
+  )) {
+    if (po.currency === CURRENCY) {
+      total += po.amount;
+    }
+  }
+  return total;
+}
+
+/**
+ * (c) charge を expand して balance_transaction（確定見込み）を取得する（infrastructure 層）。
+ *
+ * 設計の肝（Stripe を残高の真実の源泉とし、自前は「鏡」を持つ）:
+ *  - charge.balance_transaction（available_on / status）を取得し、tip に保存する見込み情報を返す。
+ *  - Direct charge の charge は Connected Account 上にあるため、stripeAccount を指定して読む。
+ *  - PI 直後は balance_transaction が未付与のことがある（堅牢に）。取れない項目は null で返し、
+ *    呼び出し側は後続イベント（charge.updated など）で埋め直せるようにする。
+ *
+ * 用途: UI 表示（「◯日後に送金できます」を tip 単位で正確化）・送金候補の事前フィルタ。
+ *   送金可否の最終判定は必ず送金直前の balance.retrieve（実 available）で行う（これは予測・並べ替え用）。
+ */
+export async function retrieveChargeSettlement(
+  chargeId: string,
+  connectedAccountId: string,
+): Promise<ChargeSettlementSnapshot> {
+  const stripe = getStripe();
+
+  // charge を取得し balance_transaction を expand する（Connected Account のコンテキストで読む）
+  const charge = await stripe.charges.retrieve(
+    chargeId,
+    { expand: ["balance_transaction"] },
+    { stripeAccount: connectedAccountId },
+  );
+
+  // balance_transaction が未付与（string ID のみ／null）の場合は available_on / status を取れない。
+  // その場合でも charge ID は返し、見込み情報は null（後続イベントで埋める）。
+  const bt = charge.balance_transaction;
+  if (bt == null || typeof bt === "string") {
+    // string ID だけ取れた場合は ID は記録する（available_on/status は後続で埋める）
+    return {
+      chargeId: charge.id,
+      balanceTransactionId: typeof bt === "string" ? bt : null,
+      availableOn: null,
+      btStatus: null,
+    };
+  }
+
+  // 展開済み balance_transaction から確定見込みを取り出す
+  return {
+    chargeId: charge.id,
+    balanceTransactionId: bt.id,
+    // available_on は秒単位の epoch。送金可能になる見込み時刻として記録する
+    availableOn: bt.available_on ? new Date(bt.available_on * 1000) : null,
+    // status は pending（確定待ち）/ available（送金可能）。それ以外は null 扱い
+    btStatus: bt.status === "available" ? "available" : bt.status === "pending" ? "pending" : null,
+  };
+}
+
+/**
+ * (d) ある payout の内訳（balance_transactions?payout=po_…）を auto-pagination で全件取得する（infrastructure 層）。
+ *
+ * 設計の肝（手動送金は Stripe が自動照合しないため、この台帳が唯一の突き合わせ手段＝公式明記）:
+ *  - balance_transactions を payout フィルタで列挙し、各エントリの source(ch_…) を取り出す。
+ *    これにより「payout ⇄ balance_transaction ⇄ charge(tip)」の対応を台帳へ追記できる。
+ *  - Direct charge の payout は Connected Account 上にあるため、stripeAccount を指定して読む。
+ *  - autoPagingEach（auto-pagination）で 100 件超の内訳も漏れなく取得する。
+ */
+export async function listPayoutLedgerEntries(
+  stripePayoutId: string,
+  connectedAccountId: string,
+): Promise<PayoutLedgerEntry[]> {
+  const stripe = getStripe();
+  const entries: PayoutLedgerEntry[] = [];
+
+  // payout に含まれる balance_transaction を auto-pagination で全件走査する
+  for await (const txn of stripe.balanceTransactions.list(
+    { payout: stripePayoutId, limit: 100 },
+    { stripeAccount: connectedAccountId },
+  )) {
+    // source が charge（ch_…）なら charge ID を逆引きできる（それ以外＝payout 自身などは null）
+    const chargeId = extractSourceChargeId(txn.source);
+    entries.push({
+      balanceTransactionId: txn.id,
+      type: txn.type,
+      amount: txn.amount,
+      chargeId,
+    });
+  }
+
+  return entries;
+}
+
+/**
+ * balance_transaction.source（string | 展開オブジェクト | null）から charge ID（ch_…）を取り出す純粋ヘルパ。
+ * source が ch_ で始まる文字列のときだけ charge とみなす（payout/refund 等は null を返す）。
+ */
+function extractSourceChargeId(
+  source: Stripe.BalanceTransaction["source"],
+): string | null {
+  if (source == null) return null;
+  const id = typeof source === "string" ? source : source.id;
+  if (typeof id !== "string") return null;
+  return id.startsWith("ch_") ? id : null;
 }
 
 /**

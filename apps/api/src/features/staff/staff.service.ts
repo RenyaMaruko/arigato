@@ -33,6 +33,7 @@ import type {
   CreateOnboardingLinkResult,
   CreatePayoutResult as StripeCreatePayoutResult,
   ConnectBalance,
+  PayoutLedgerEntry,
 } from "../../infrastructure/stripe/stripe.types.js";
 
 // Connected Account の実残高（available / pending / 直近の available_on）を取得する
@@ -347,9 +348,11 @@ export async function getStaffBalance(
   if (verified && connect?.stripeAccountId) {
     try {
       const balance = await getConnectBalance(connect.stripeAccountId);
-      // 送金できる額＝Stripe の実 available（「送金する」の対象額）
-      sendableAmount = balance.availableAmount;
-      pendingStripeAmount = balance.pendingAmount;
+      // (f) Stripe 残高は返金・チャージバックで負になり得る。負を握りつぶさず安全に扱うため、
+      //   送金できる額は 0 未満にしない（マイナス残高では送金不可・画面は壊さない）。
+      sendableAmount = Math.max(0, balance.availableAmount);
+      // 準備中も負を表示に出さない（0 未満は 0 とする。負は内部的な調整中であり「準備中」ではない）
+      pendingStripeAmount = Math.max(0, balance.pendingAmount);
       nextAvailableOn = balance.nextAvailableOn;
     } catch (err) {
       // Stripe 残高取得に失敗しても画面を壊さない（DB 集計は返す）。0 にフォールバックしてログのみ。
@@ -636,4 +639,110 @@ export async function applyPayoutWebhookUpdate(
     return repo.markPayoutPaid(match, params.arrivedAt ?? new Date());
   }
   return repo.markPayoutFailedAndRevertTips(match, params.failureReason);
+}
+
+// payout 内訳（balance_transaction）を取得する infrastructure 関数の型（コンポジションルートで注入）。
+// balance_transactions?payout=po_… を auto-pagination で全件取得する（#d の照合台帳の素材）。
+export type ListPayoutLedgerEntries = (
+  stripePayoutId: string,
+  connectedAccountId: string,
+) => Promise<PayoutLedgerEntry[]>;
+
+/**
+ * (d) 送金成立時に payout 内訳（balance_transaction ↔ tip）を照合台帳へ追記する（Webhook 経由・append-only）。
+ * webhook feature から直接 import せず、コンポジションルートでこの関数を注入して使う。
+ *
+ * 手動送金（メルカリ型）の重要な Stripe 制約（実 Stripe で確認済み）:
+ *  - `balance_transactions?payout=po_…` は **自動送金（automatic transfer）にしか使えない**。
+ *    手動送金には使えず "Balance transaction history can only be filtered on automatic transfers, not manual." を返す。
+ *  - そのため手動送金は「この payout で paid にした tip」という **DB の確定リンク（tip.payout_id）を唯一の
+ *    突き合わせ源泉**とする（これが spec の言う「手動送金は Stripe が自動照合しないため台帳が唯一の手段」の実装）。
+ *
+ * 流れ:
+ *  1. stripe_payout_id（主）/ 自前 payout 行 id（従）で送金を照合し、自前 payout 行 id を得る。
+ *  2. その payout で paid にした tip を取得し（(c) で鏡保存した balance_transaction_id / charge_id・手取り換算）、
+ *     payout ⇄ balance_transaction ⇄ tip の対応を台帳へ append-only で追記する（同一 bt は冪等にスキップ）。
+ *  3. 加えて payout そのものの控え（type=payout・送金額をマイナス）を1行追記し、内訳の合計が突き合う形にする。
+ * 追記件数を返す（該当 payout 無し・既に記録済みなら 0）。
+ *
+ * listEntries（balance_transactions?payout=）は自動送金の将来拡張用に残すが、手動送金では使わない。
+ */
+export async function recordPayoutLedger(
+  repo: StaffRepository,
+  _listEntries: ListPayoutLedgerEntries,
+  params: { stripePayoutId: string; payoutId: string | null },
+): Promise<number> {
+  // 【1】送金を照合し、自前 payout 行 id を得る
+  const payout = await repo.findPayoutForLedger({
+    stripePayoutId: params.stripePayoutId,
+    payoutId: params.payoutId,
+  });
+  if (!payout) {
+    // 該当 payout が無ければ照合できない（台帳は追記しない）
+    return 0;
+  }
+
+  // 【2】この payout で paid にした tip を取得し、payout⇄bt⇄tip の対応を組み立てる（手取り換算）
+  const tips = await repo.listPaidTipsForPayout(payout.payoutId);
+  const ledgerEntries: Array<{
+    balanceTransactionId: string | null;
+    stripeChargeId: string | null;
+    tipId: string | null;
+    amount: number;
+    type: string;
+  }> = tips.map((t) => ({
+    // (c) で鏡保存した charge の balance_transaction（送金内訳の1要素）
+    balanceTransactionId: t.balanceTransactionId,
+    stripeChargeId: t.stripeChargeId,
+    tipId: t.tipId,
+    // 額面 → 店員手取り（約85%）。連結残高＝手取りなので送金内訳と一致する
+    amount: calculateStaffTakeAmount(t.amount),
+    type: "charge",
+  }));
+
+  // 【3】payout そのものの控え（送金額をマイナス）を1行追記する。
+  //   balance_transaction_id には payout の Stripe Payout ID を入れて二重追記を冪等に弾く。
+  const tipsTotal = ledgerEntries.reduce((sum, e) => sum + e.amount, 0);
+  ledgerEntries.push({
+    balanceTransactionId: payout.stripePayoutId ?? params.stripePayoutId,
+    stripeChargeId: null,
+    tipId: null,
+    // 送金は残高から出ていくためマイナス（charge 合計と相殺して 0 になる＝内訳が突き合う）
+    amount: -tipsTotal,
+    type: "payout",
+  });
+
+  // append-only で台帳へ追記する（同一 (payout_id, balance_transaction_id) は二重追記しない）
+  return repo.appendPayoutLedgerEntries(payout.payoutId, ledgerEntries);
+}
+
+/**
+ * (f) 返金・チャージバックの補正エントリを照合台帳へ追記する（Webhook 経由・append-only）。
+ * tip 側の遷移（refunded / disputed）は tip Repository で行い、ここでは「補正を不変台帳に追記」する責務だけを持つ。
+ * webhook feature から直接 import せず、コンポジションルートでこの関数を注入して使う。
+ *
+ * 既存の台帳行は決して書き換えず、補正は新しい行として追記する（不変台帳）。
+ * 送金前の返金は対応する payout が無いため payoutId=null で追記する。
+ * amount は店員手取り（約85%）をマイナスで記録する（残高から引かれた分を表す）。
+ */
+export async function recordSettlementCorrectionLedger(
+  repo: StaffRepository,
+  params: {
+    kind: "refunded" | "disputed";
+    tipId: string;
+    // 返金・異議の対象 tip の額面（お客さま支払額・円）。手取りへ変換してマイナスで記録する
+    faceAmount: number;
+    stripeChargeId: string | null;
+  },
+): Promise<string> {
+  // 額面 → 店員手取り（約85%）。残高から引かれた分なのでマイナスで記録する
+  const take = calculateStaffTakeAmount(params.faceAmount);
+  return repo.appendLedgerCorrection({
+    // 送金前の補正は対応 payout が無いため null（台帳は payout 無しの補正も許容する）
+    payoutId: null,
+    tipId: params.tipId,
+    stripeChargeId: params.stripeChargeId,
+    amount: -take,
+    type: params.kind === "refunded" ? "refund" : "dispute",
+  });
 }
