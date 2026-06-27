@@ -113,7 +113,7 @@ function EditForm({
         <span className="text-token-2xl font-bold text-ink">{t("staff.editTitle")}</span>
       </div>
 
-      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-[26px] pb-7 pt-2">
+      <div className="flex-1 min-h-0 overflow-y-auto px-[26px] pb-7 pt-2">
         {/* アバター（編集 UI は Sprint 5。現状は表示のみ）。ローズの淡いリングで包む */}
         <div className="mt-2 flex justify-center">
           <div className="rounded-full bg-rose-soft p-1">

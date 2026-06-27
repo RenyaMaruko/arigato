@@ -132,7 +132,7 @@ export function StaffTipsHistoryPage() {
         <span className="h-6 w-6" />
       </div>
 
-      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-5 pb-6 pt-4">
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-6 pt-4">
         {/* フィルタ行（店舗・期間）。ヘッダー直下・サマリーの上に置く。
             フィルタ変更で useStaffTips が自動リセットされ、一覧・サマリーが連動して絞られる。
             所属が1店だけのときは店舗セレクタを出さない（選びようがないため）。 */}
