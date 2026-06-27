@@ -110,7 +110,7 @@ function StoreStaffContent({ store }: { store: StoreProfile }) {
       <div className="h-px flex-none bg-line-soft" />
 
       {/* タブ下の中身（在籍中 or 招待中）だけが切り替わる */}
-      <div className="flex-1 overflow-y-auto px-5 pb-6 pt-1.5">
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-6 pt-1.5">
         {tab === "active" ? (
           <>
             {staff.length === 0 ? (

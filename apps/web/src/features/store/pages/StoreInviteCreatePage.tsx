@@ -78,7 +78,7 @@ function StoreInviteCreateContent({ store }: { store: StoreProfile }) {
         <span className="text-token-2xl font-bold text-ink">{t("store.inviteTitle")}</span>
       </div>
 
-      <div className="flex flex-1 flex-col overflow-y-auto px-7 pb-6 pt-2.5">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-7 pb-6 pt-2.5">
         {/* 封筒アイコン */}
         <div className="mt-6 flex justify-center">
           <svg width="120" height="100" viewBox="0 0 120 100" fill="none" aria-hidden="true">

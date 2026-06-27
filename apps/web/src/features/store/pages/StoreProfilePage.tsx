@@ -81,7 +81,7 @@ function StoreProfileContent({ store }: { store: StoreProfile }) {
         <span className="text-token-2xl font-bold text-ink">{t("store.profileTitle")}</span>
       </div>
 
-      <form onSubmit={handleSubmit} className="flex flex-1 flex-col overflow-y-auto px-6 pb-6 pt-3.5">
+      <form onSubmit={handleSubmit} className="flex flex-1 min-h-0 flex-col overflow-y-auto px-6 pb-6 pt-3.5">
         {/* ロゴ（プレースホルダ。アップロードは将来拡張）。右下にカメラバッジ（モック02の装飾） */}
         <div className="flex justify-center">
           <div className="relative">

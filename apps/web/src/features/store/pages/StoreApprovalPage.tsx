@@ -50,7 +50,7 @@ function StoreApprovalContent({ store }: { store: StoreProfile }) {
         <span className="text-token-2xl font-bold text-ink">{t("store.approvalTitle")}</span>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-6 pb-6 pt-2">
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-6 pt-2">
         {/* ステータスカード（導入承認に同意済みであることを示す） */}
         <div className="rounded-2xl border border-line-soft p-7 text-center shadow-sm">
           <div className="flex justify-center">

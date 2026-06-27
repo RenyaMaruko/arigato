@@ -53,7 +53,7 @@ export function StoreHomePage({ store }: { store: StoreProfile }) {
         </span>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 pb-6 pt-1">
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-6 pt-1">
         {/* ヒーロー: お店全体に届いた「ありがとう」の件数（金額ではない） */}
         <div className="rounded-2xl border border-rose-soft bg-rose-soft/40 p-5">
           <div className="whitespace-pre-line text-token-md leading-snug text-rose">

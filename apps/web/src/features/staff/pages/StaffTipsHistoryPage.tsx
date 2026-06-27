@@ -72,6 +72,10 @@ export function StaffTipsHistoryPage() {
 
   // 無限スクロールの操作（次ページ取得・状態）
   const { fetchNextPage, hasNextPage, isFetchingNextPage } = tipsQuery;
+  // 取得中フラグは ref に同期し、監視コールバック内で常に最新を見る（多重取得の防止）。
+  // これにより監視の依存に isFetchingNextPage を入れずに済み、毎回の再生成での暴発を防ぐ。
+  const isFetchingRef = useRef(isFetchingNextPage);
+  isFetchingRef.current = isFetchingNextPage;
 
   // 全ページの items を1本に平坦化する（無限スクロールの表示用）。ページ追加のたびに作り直す
   const items = useMemo(
@@ -92,8 +96,8 @@ export function StaffTipsHistoryPage() {
     // 番兵が画面に入ったら、取得中でないときだけ次ページを取りに行く
     const observer = new IntersectionObserver(
       (entries) => {
-        const entry = entries[0];
-        if (entry?.isIntersecting && hasNextPage && !isFetchingNextPage) {
+        // 取得中でなく次があるときだけ取りに行く（取得中フラグは ref で最新を見る）
+        if (entries[0]?.isIntersecting && !isFetchingRef.current) {
           fetchNextPage();
         }
       },
@@ -102,7 +106,9 @@ export function StaffTipsHistoryPage() {
     );
     observer.observe(node);
     return () => observer.disconnect();
-  }, [hasNextPage, isFetchingNextPage, fetchNextPage, items.length]);
+    // items.length を含めるのは、1ページぶんで画面が埋まらないとき（番兵が見えたまま）に
+    // 再観測して続きを取りに行くため。isFetchingNextPage は ref 経由で見るため依存に入れない。
+  }, [hasNextPage, fetchNextPage, items.length]);
 
   // ローディング表示（認証・プロフィール・履歴のいずれか取得中）。スピナーで示す
   if (authLoading || meQuery.isLoading || !meQuery.data) {
@@ -126,7 +132,7 @@ export function StaffTipsHistoryPage() {
         <span className="h-6 w-6" />
       </div>
 
-      <div className="flex flex-1 flex-col overflow-y-auto px-5 pb-6 pt-4">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-5 pb-6 pt-4">
         {/* フィルタ行（店舗・期間）。ヘッダー直下・サマリーの上に置く。
             フィルタ変更で useStaffTips が自動リセットされ、一覧・サマリーが連動して絞られる。
             所属が1店だけのときは店舗セレクタを出さない（選びようがないため）。 */}

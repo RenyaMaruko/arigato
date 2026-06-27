@@ -96,7 +96,7 @@ export function StaffStoreDetailPage() {
         <span className="h-6 w-6" />
       </div>
 
-      <div className="flex flex-1 flex-col overflow-y-auto px-[26px] pb-7 pt-5">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-[26px] pb-7 pt-5">
         {/* 見出し（どの店のQRかを併記する） */}
         <div className="mt-3.5 text-center text-token-lg font-bold text-ink">
           {t("staff.qrHeading")}

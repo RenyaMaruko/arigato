@@ -69,7 +69,7 @@ export function StaffTaxExportPage() {
         <span className="text-token-2xl font-bold text-ink">{t("staff.exportTitle")}</span>
       </div>
 
-      <div className="flex flex-1 flex-col overflow-y-auto px-[26px] pb-7 pt-6">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-[26px] pb-7 pt-6">
         {/* CSV ファイルのアイコン（装飾） */}
         <div className="mt-4 flex justify-center">
           <div className="relative h-[104px] w-[84px] rounded-[10px] border-2 border-line bg-page shadow-[0_4px_14px_rgba(20,20,40,.06)]">

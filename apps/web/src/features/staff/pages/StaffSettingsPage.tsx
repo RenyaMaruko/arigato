@@ -54,7 +54,7 @@ export function StaffSettingsPage() {
         <span className="text-token-2xl font-bold text-ink">{t("staff.settingsTitle")}</span>
       </div>
 
-      <div className="flex-1 overflow-y-auto bg-surface-subtle px-5 pb-6 pt-4">
+      <div className="flex-1 min-h-0 overflow-y-auto bg-surface-subtle px-5 pb-6 pt-4">
         {/* アカウント系のグループ（プロフィール・本人確認/口座・申告データ） */}
         <div className="overflow-hidden rounded-2xl bg-page shadow-sm">
           <SettingRow

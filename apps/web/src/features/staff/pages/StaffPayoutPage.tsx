@@ -110,7 +110,7 @@ export function StaffPayoutPage() {
         <span className="h-6 w-6" />
       </div>
 
-      <div className="flex flex-1 flex-col overflow-y-auto px-[22px] pb-6 pt-5">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-[22px] pb-6 pt-5">
         {balanceQuery.isLoading ? (
           <div className="flex flex-1 items-center justify-center text-token-md text-ink-sub">
             {t("staff.loading")}
