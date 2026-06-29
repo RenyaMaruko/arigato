@@ -49,7 +49,8 @@ function createMockRepo() {
   const stores = new Map<string, StoreRow>();
   const invitesByStore = new Map<string, StoreInviteRow[]>();
   const staffByStore = new Map<string, StoreStaffRow[]>();
-  const voicesByStore = new Map<string, GratitudeVoiceRow[]>();
+  // 声に staffId を持たせて、staffId 絞りの検証ができるようにする（実 DB の t.staff_id = ... と同じ振る舞い）
+  const voicesByStore = new Map<string, (GratitudeVoiceRow & { staffId?: string })[]>();
   const timesByStore = new Map<string, GratitudeTimeRow[]>();
   const perStaffByStore = new Map<string, GratitudePerStaffRow[]>();
   // スタッフ別の受取日時明細（期間でスタッフ別件数を数え直す検証に使う）
@@ -121,11 +122,19 @@ function createMockRepo() {
     async listStaff(storeId) {
       return [...(staffByStore.get(storeId) ?? [])];
     },
-    async listGratitudeVoices(storeId, limit, period) {
+    async listGratitudeVoices(storeId, limit, period, staffId) {
       // 期間（from 含む・to 排他）が来たら受取日時で絞る。実 DB の SQL と同じ振る舞いをモックでも再現する
       const all = voicesByStore.get(storeId) ?? [];
-      const filtered = all.filter((v) => inPeriod(v.receivedAt, period));
-      return filtered.slice(0, limit);
+      const filtered = all.filter((v) => {
+        if (!inPeriod(v.receivedAt, period)) return false;
+        // staffId 指定時はそのスタッフ宛の声だけに絞る（実 DB の AND t.staff_id = ... と同じ）
+        if (staffId && v.staffId !== staffId) return false;
+        return true;
+      });
+      // staffId などを応答に漏らさないよう、契約どおりの GratitudeVoiceRow に整形して返す
+      return filtered
+        .slice(0, limit)
+        .map(({ id, message, receivedAt, staffName }) => ({ id, message, receivedAt, staffName }));
     },
     async listGratitudeTimes(storeId) {
       // 件数集計用は全期間を返す（期間絞りと今週判定は Model 側で行う）
@@ -426,6 +435,75 @@ describe("store.service", () => {
     expect(may.voices.map((v) => v.id)).toEqual(["v-may-1"]);
     expect(may.perStaff.find((p) => p.staffId === "s1")!.count).toBe(0);
     expect(may.perStaff.find((p) => p.staffId === "s2")!.count).toBe(1);
+  });
+
+  it("getStoreGratitude: staffId 指定で voices がそのスタッフに絞られる。perStaff・totalCount・weekCount は不変", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    // 受取日時（件数集計用・全期間）
+    m.timesByStore.set("store-1", [
+      { receivedAt: "2026-06-23T01:00:00Z" },
+      { receivedAt: "2026-06-22T03:00:00Z" },
+      { receivedAt: "2026-06-21T03:00:00Z" },
+    ]);
+    // 声に staffId を持たせる（s1 が2件・s2 が1件）
+    m.voicesByStore.set("store-1", [
+      { id: "v-s1-a", message: "山田さんへA", receivedAt: "2026-06-23T01:00:00Z", staffName: "山田", staffId: "s1" },
+      { id: "v-s1-b", message: null, receivedAt: "2026-06-22T03:00:00Z", staffName: "山田", staffId: "s1" },
+      { id: "v-s2-a", message: "田中さんへ", receivedAt: "2026-06-21T03:00:00Z", staffName: "田中", staffId: "s2" },
+    ]);
+    // perStaff（全スタッフ集計・名簿順）。staffId 絞りでこれは変わってはいけない
+    m.perStaffByStore.set("store-1", [
+      { staffId: "s1", staffName: "山田", count: 2 },
+      { staffId: "s2", staffName: "田中", count: 1 },
+    ]);
+
+    const now = new Date("2026-06-23T03:00:00Z");
+
+    // staffId 指定なし（全スタッフ）→ voices は全件
+    const all = await getStoreGratitude(m.repo, "owner-1", "store-1", now);
+    expect(all.voices.map((v) => v.id)).toEqual(["v-s1-a", "v-s1-b", "v-s2-a"]);
+
+    // staffId = s1 → voices は s1 の2件だけ（メッセージなしも含む）
+    const onlyS1 = await getStoreGratitude(m.repo, "owner-1", "store-1", now, { staffId: "s1" });
+    expect(onlyS1.voices.map((v) => v.id)).toEqual(["v-s1-a", "v-s1-b"]);
+    // メッセージなしの声もそのまま残る（フロントで「メッセージなし」表示）
+    expect(onlyS1.voices.find((v) => v.id === "v-s1-b")!.message).toBeNull();
+    // perStaff・totalCount・weekCount は staffId に関わらず不変（全スタッフ集計のまま）
+    expect(onlyS1.perStaff).toEqual(all.perStaff);
+    expect(onlyS1.totalCount).toBe(all.totalCount);
+    expect(onlyS1.weekCount).toBe(all.weekCount);
+
+    // staffId = s2 → voices は s2 の1件だけ
+    const onlyS2 = await getStoreGratitude(m.repo, "owner-1", "store-1", now, { staffId: "s2" });
+    expect(onlyS2.voices.map((v) => v.id)).toEqual(["v-s2-a"]);
+    expect(onlyS2.perStaff).toEqual(all.perStaff);
+  });
+
+  it("getStoreGratitude: staffId と期間（from/to）を併用すると voices がスタッフ×期間で絞られる", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.timesByStore.set("store-1", [
+      { receivedAt: "2026-06-23T01:00:00Z" },
+      { receivedAt: "2026-05-15T03:00:00Z" },
+    ]);
+    m.voicesByStore.set("store-1", [
+      { id: "v-s1-jun", message: "6月の山田さんへ", receivedAt: "2026-06-23T01:00:00Z", staffName: "山田", staffId: "s1" },
+      { id: "v-s1-may", message: "5月の山田さんへ", receivedAt: "2026-05-15T03:00:00Z", staffName: "山田", staffId: "s1" },
+      { id: "v-s2-jun", message: "6月の田中さんへ", receivedAt: "2026-06-23T01:00:00Z", staffName: "田中", staffId: "s2" },
+    ]);
+    m.perStaffByStore.set("store-1", [
+      { staffId: "s1", staffName: "山田", count: 2 },
+      { staffId: "s2", staffName: "田中", count: 1 },
+    ]);
+
+    const now = new Date("2026-06-23T03:00:00Z");
+
+    // s1 ×今月（6/1〜7/1）→ 6月の s1 だけ（5月分・他スタッフは除外）
+    const s1Jun = await getStoreGratitude(m.repo, "owner-1", "store-1", now, {
+      from: "2026-06-01T00:00:00Z",
+      to: "2026-07-01T00:00:00Z",
+      staffId: "s1",
+    });
+    expect(s1Jun.voices.map((v) => v.id)).toEqual(["v-s1-jun"]);
   });
 
   it("金額非表示: 感謝の可視化の応答に金額・残高・着金キーが一切含まれない", async () => {

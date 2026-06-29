@@ -120,16 +120,28 @@ export function useStoreStaff(storeId: string | undefined) {
  * 感謝の可視化（GET /store/:storeId/gratitude）を取得する。件数・お客さまの声・スタッフ別件数。
  *
  * period（from/to・ISO）で期間を絞れる（記録画面の期間セレクタ用）。未指定は全期間（店ホーム互換）。
- * period を queryKey に含めるので、期間が変わると自動で再取得し、件数・声・スタッフ別が連動する。
+ * period.staffId（uuid）で voices を特定スタッフに絞れる（スタッフ別タブの「特定スタッフ」用。
+ * 集計値 totalCount/weekCount/perStaff は staffId に関わらず不変）。
+ * period（from/to/staffId）を queryKey に含めるので、変わると自動で再取得し連動する。
+ *
+ * options.enabled で取得の有効/無効を切り替えられる（特定スタッフ選択時だけ追加取得する等）。
+ * 省略時は storeId が確定していれば取得する（従来どおり）。
  */
-export function useStoreGratitude(storeId: string | undefined, period?: { from?: string; to?: string }) {
-  // period の各端を queryKey に含める（undefined は全期間を表す安定キー）
+export function useStoreGratitude(
+  storeId: string | undefined,
+  period?: { from?: string; to?: string; staffId?: string },
+  options?: { enabled?: boolean },
+) {
+  // period の各値を queryKey に含める（null は全期間・全スタッフを表す安定キー）
   const from = period?.from ?? null;
   const to = period?.to ?? null;
+  const staffId = period?.staffId ?? null;
+  // 呼び出し側の enabled 指定があればそれと storeId の有無を AND（省略時は storeId の有無のみ）
+  const enabled = Boolean(storeId) && (options?.enabled ?? true);
   return useQuery({
-    queryKey: ["store", "gratitude", storeId, from, to],
+    queryKey: ["store", "gratitude", storeId, from, to, staffId],
     queryFn: () => fetchStoreGratitude(storeId!, period),
-    enabled: Boolean(storeId),
+    enabled,
     retry: false,
   });
 }

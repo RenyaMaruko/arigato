@@ -185,6 +185,10 @@ export const StoreGratitudeQuerySchema = z.object({
   from: z.string().datetime().optional().catch(undefined),
   // 期間の上限（排他・ISO 文字列）。不正・未指定はフィルタ無し
   to: z.string().datetime().optional().catch(undefined),
+  // 特定スタッフの絞り込み（任意・uuid）。指定時は voices をそのスタッフに絞る。
+  // totalCount・weekCount・perStaff は staffId に関わらず常に全スタッフ集計のまま（変えない）。
+  // 不正値は安全側に倒し、フィルタ無し（undefined）として扱う（.catch(undefined)）。
+  staffId: z.string().uuid().optional().catch(undefined),
 });
 export type StoreGratitudeQuery = z.infer<typeof StoreGratitudeQuerySchema>;
 

@@ -288,11 +288,14 @@ export async function listStoreStaff(
   };
 }
 
-// 感謝の可視化の期間フィルタ（記録画面の期間セレクタから渡る from/to。未指定は全期間＝店ホーム互換）。
-// from は含む（>=）・to は排他（<）。ISO 文字列。
+// 感謝の可視化の絞り込み（記録画面の期間セレクタから渡る from/to と、スタッフ別タブの staffId）。
+// from は含む（>=）・to は排他（<）。ISO 文字列。未指定は全期間＝店ホーム互換。
+// staffId（任意）は voices だけに効く。totalCount・weekCount・perStaff は staffId に関わらず全スタッフ集計のまま。
 export type GratitudePeriod = {
   from?: string;
   to?: string;
+  // 特定スタッフの絞り込み（任意・uuid）。voices をそのスタッフに絞る（集計値は変えない）
+  staffId?: string;
 };
 
 /**
@@ -301,6 +304,10 @@ export type GratitudePeriod = {
  * 期間（period.from/to）で絞った店全体の件数（totalCount）・お客さまの声フィード・スタッフ別件数と、
  * 期間に関わらず常に「今週」の件数（weekCount・店ホームの今週バッジ用）を返す。
  * period 未指定なら全期間を返す（店ホーム互換）。
+ *
+ * period.staffId（任意）を指定すると voices だけをその店員さんに絞る（スタッフ別タブの「特定スタッフ」用）。
+ * totalCount・weekCount・perStaff は staffId に関わらず常に全スタッフ集計のまま——
+ * ドロップダウンの選択肢（perStaff）と各スタッフの件数は staffId 絞りの影響を受けてはならない。
  *
  * 金額（amount / customer_total / platform_fee）・残高・着金は一切返さない（店はお金に触れない）。
  * 件数集計は Model の純粋関数に委ね、スタッフ別件数は名簿順（中立）のまま——件数で並べ替え・順位付けしない。
@@ -318,13 +325,20 @@ export async function getStoreGratitude(
   const times = await repo.listGratitudeTimes(storeId);
   const counts = summarizeGratitudeCounts(times, now, { from: period.from, to: period.to });
 
-  // お客さまの声（メッセージのある成立済みを新しい順に。期間で絞る。金額なし）
-  const voices = await repo.listGratitudeVoices(storeId, GRATITUDE_VOICES_LIMIT, {
-    from: period.from,
-    to: period.to,
-  });
+  // お客さまの声（成立済みを新しい順に。期間で絞る。金額なし）。
+  // staffId 指定時はその店員さんの声だけに絞る（特定スタッフの「メッセージ一覧」用）。
+  const voices = await repo.listGratitudeVoices(
+    storeId,
+    GRATITUDE_VOICES_LIMIT,
+    {
+      from: period.from,
+      to: period.to,
+    },
+    period.staffId,
+  );
 
-  // スタッフ別件数（名簿順・中立。期間で絞る。件数で並べ替えない）
+  // スタッフ別件数（名簿順・中立。期間で絞る。件数で並べ替えない）。
+  // staffId に関わらず常に全スタッフ集計（ドロップダウンの選択肢・各スタッフの件数の出どころ）。
   const perStaff = await repo.listGratitudePerStaff(storeId, {
     from: period.from,
     to: period.to,

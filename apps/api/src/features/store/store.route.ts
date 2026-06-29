@@ -62,10 +62,11 @@ type StoreDeps = {
   listStoreStaff: (authUserId: string, storeId: string) => Promise<StoreStaffResponse>;
   // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）。
   // period（from/to・任意）でその期間に絞る（未指定は全期間＝店ホーム互換）。
+  // staffId（任意）指定時は voices をその店員さんに絞る（集計値 totalCount/weekCount/perStaff は不変）。
   getStoreGratitude: (
     authUserId: string,
     storeId: string,
-    period: { from?: string; to?: string },
+    period: { from?: string; to?: string; staffId?: string },
   ) => Promise<StoreGratitude>;
 };
 
@@ -195,13 +196,14 @@ export function createStoreRoute(deps: StoreDeps) {
       }
     })
     // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）。
-    // 任意クエリ from/to（ISO）で期間を絞る。不正値は安全側（フィルタ無し）に倒す（.catch(undefined)）。
+    // 任意クエリ from/to（ISO）で期間を絞り、任意 staffId（uuid）で voices を絞る。
+    // 不正値は安全側（フィルタ無し）に倒す（.catch(undefined)）。
     .get("/:storeId/gratitude", zValidator("query", StoreGratitudeQuerySchema), async (c) => {
       const authUser = c.get("authUser");
       const storeId = c.req.param("storeId");
-      const { from, to } = c.req.valid("query");
+      const { from, to, staffId } = c.req.valid("query");
       try {
-        const gratitude = await deps.getStoreGratitude(authUser.id, storeId, { from, to });
+        const gratitude = await deps.getStoreGratitude(authUser.id, storeId, { from, to, staffId });
         return c.json(gratitude);
       } catch (err) {
         const mapped = handleStoreScopeError(err);

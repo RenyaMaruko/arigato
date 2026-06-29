@@ -141,16 +141,18 @@ export async function fetchStoreStaff(storeId: string): Promise<StoreStaffRespon
 /**
  * GET /store/:storeId/gratitude — 感謝の可視化を取得する（件数・お客さまの声・スタッフ別件数。金額なし）。
  * period（from/to・ISO）を渡すとその期間に絞る。未指定は全期間（店ホーム互換）。
- * undefined の端はクエリに載せない（空文字を送らない）。
+ * staffId（uuid）を渡すと voices をその店員さんに絞る（集計値 totalCount/weekCount/perStaff は不変）。
+ * undefined の端・空文字はクエリに載せない。
  */
 export async function fetchStoreGratitude(
   storeId: string,
-  period?: { from?: string; to?: string },
+  period?: { from?: string; to?: string; staffId?: string },
 ): Promise<StoreGratitude> {
-  // 指定された端だけをクエリに載せる（未指定は全期間扱い）
-  const query: { from?: string; to?: string } = {};
+  // 指定された値だけをクエリに載せる（未指定は全期間・全スタッフ扱い）
+  const query: { from?: string; to?: string; staffId?: string } = {};
   if (period?.from) query.from = period.from;
   if (period?.to) query.to = period.to;
+  if (period?.staffId) query.staffId = period.staffId;
 
   const res = await apiClient.store[":storeId"].gratitude.$get({
     param: { storeId },

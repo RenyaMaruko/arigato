@@ -122,12 +122,14 @@ export type StoreRepository = {
   revokeInvite: (storeId: string, code: string) => Promise<number>;
   // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（在籍管理。中立な並び）
   listStaff: (storeId: string) => Promise<StoreStaffRow[]>;
-  // 自店宛の「お客さまの声」（メッセージのある成立済み投げ銭）を新しい順に取得する（金額なし）。
+  // 自店宛の「お客さまの声」（成立済み投げ銭）を新しい順に取得する（金額なし）。
   // period（from/to）を渡すとその期間に絞る（未指定は全期間）。
+  // staffId を渡すと、その店員さん宛の声だけに絞る（未指定は全スタッフ・スタッフ別タブの「特定スタッフ」用）。
   listGratitudeVoices: (
     storeId: string,
     limit: number,
     period?: GratitudePeriodFilter,
+    staffId?: string,
   ) => Promise<GratitudeVoiceRow[]>;
   // 自店宛の成立済み投げ銭の受取日時だけを取得する（件数集計用・金額なし）。
   // 期間で絞らず全期間を返す（totalCount の期間絞り込みと weekCount の常時今週は Model 側で算出する）。
@@ -325,10 +327,13 @@ export function createStoreRepository(): StoreRepository {
       return rows;
     },
 
-    // 自店宛の「お客さまの声」を新しい順に取得する（メッセージのある成立済みのみ・金額は SELECT しない）。
+    // 自店宛の「お客さまの声」を新しい順に取得する（成立済みのみ・金額は SELECT しない）。
     // period（from/to）を渡すとその期間に絞る（COALESCE(succeeded_at, created_at) を受取日時として AND）。
-    async listGratitudeVoices(storeId, limit, period) {
+    // staffId を渡すと、その店員さん宛の声だけに絞る（AND t.staff_id = ...・期間と併用）。
+    async listGratitudeVoices(storeId, limit, period, staffId) {
       const db = getDb();
+      // 特定スタッフ指定時のみ staff_id の絞り込み条件を足す（未指定は全スタッフ）
+      const staffClause = staffId ? sql`AND t.staff_id = ${staffId}` : sql``;
       const rows = await db.execute<GratitudeVoiceRow>(sql`
         SELECT
           t.id          AS "id",
@@ -341,6 +346,7 @@ export function createStoreRepository(): StoreRepository {
         WHERE t.store_id = ${storeId}
           AND t.status = 'succeeded'
           ${gratitudePeriodClause(period)}
+          ${staffClause}
         ORDER BY COALESCE(t.succeeded_at, t.created_at) DESC
         LIMIT ${limit}
       `);

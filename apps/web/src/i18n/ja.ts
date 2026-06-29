@@ -384,6 +384,11 @@ export const ja = {
       gratitudePerStaffNote: "（名簿順・件数で順位はつけません）",
       gratitudeNoStaff: "スタッフがいません",
       gratitudePerStaffCount: "{{count}} 件",
+      // スタッフ別タブのスタッフ選択（ドロップダウン）
+      gratitudeStaffLabel: "スタッフ",
+      gratitudeStaffAll: "すべて",
+      // 特定スタッフ選択時にメッセージが無いときの表示
+      gratitudeStaffNoVoices: "この期間のメッセージはありません",
       // 設定（07）
       settingsTitle: "設定",
       settingsProfile: "店舗プロフィール",
