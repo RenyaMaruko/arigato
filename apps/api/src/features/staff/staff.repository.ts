@@ -195,6 +195,8 @@ export type StaffRepository = {
     authUserId: string,
     params: { displayName: string; headline: string | null; avatarUrl: string | null },
   ) => Promise<StaffProfileRow | null>;
+  // 本人のアバター画像URL（公開URL）を更新する（画像アップロード後・本人スコープ）。
+  setAvatarUrl: (authUserId: string, avatarUrl: string) => Promise<void>;
   // 本人の Connect 連携状態（Connected Account・identity_status）を取得（オンボーディングの起点）
   findStaffConnect: (authUserId: string) => Promise<StaffConnectRow | null>;
   // 新規作成した Connected Account を本人の staff に保存する（オンボーディング開始時に1度だけ）
@@ -527,7 +529,9 @@ export function createStaffRepository(): StaffRepository {
         UPDATE staff
         SET display_name = ${params.displayName},
             headline = ${params.headline},
-            avatar_url = ${params.avatarUrl}
+            -- アバターは別経路（POST /staff/me/avatar）で更新するため、テキスト編集では消さない。
+            -- 値が来た時だけ差し替え、未指定（null）なら既存アバターを保つ（COALESCE）。
+            avatar_url = COALESCE(${params.avatarUrl}, avatar_url)
         WHERE auth_user_id = ${authUserId}
         RETURNING
           id              AS "id",
@@ -537,6 +541,16 @@ export function createStaffRepository(): StaffRepository {
           identity_status AS "identityStatus"
       `);
       return rows[0] ?? null;
+    },
+
+    // 本人のアバター画像URL（公開URL）を更新する（画像アップロード後・本人スコープで限定）
+    async setAvatarUrl(authUserId, avatarUrl) {
+      const db = getDb();
+      await db.execute(sql`
+        UPDATE staff
+        SET avatar_url = ${avatarUrl}
+        WHERE auth_user_id = ${authUserId}
+      `);
     },
 
     // 本人の Connect 連携状態（Connected Account・identity_status）を取得（オンボーディングの起点）

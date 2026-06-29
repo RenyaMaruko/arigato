@@ -133,6 +133,13 @@ export function createInMemoryStaffRepository(): StaffRepository {
       return updated;
     },
 
+    // 本人のアバター画像URL（公開URL）を更新する（画像アップロード後）
+    async setAvatarUrl(authUserId, avatarUrl) {
+      const existing = profileByAuth.get(authUserId);
+      if (!existing) return;
+      profileByAuth.set(authUserId, { ...existing, avatarUrl });
+    },
+
     // 本人の Connect 連携状態を返す（オンボーディングの起点）
     async findStaffConnect(authUserId) {
       const profile = profileByAuth.get(authUserId);

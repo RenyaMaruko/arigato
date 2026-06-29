@@ -97,3 +97,12 @@ export function summarizeGratitudeCounts(
 
   return periods;
 }
+
+/**
+ * 店ロゴの Storage 保存パスを組み立てる純粋関数。
+ * 形式は logos/<storeId>/<uuid>.<ext>。storeId 配下に分けて店ごとに管理する。
+ * uuid・ext は呼び出し側（Service）が用意して渡す（uuid 生成は副作用のため Model では行わない）。
+ */
+export function buildLogoStoragePath(storeId: string, uuid: string, ext: string): string {
+  return `logos/${storeId}/${uuid}.${ext}`;
+}

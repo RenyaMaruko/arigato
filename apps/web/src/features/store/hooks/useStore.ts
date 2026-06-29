@@ -4,6 +4,7 @@ import {
   fetchMyStore,
   createStore,
   updateStore,
+  uploadStoreLogo,
   createStoreInvite,
   revokeStoreInvite,
   fetchStoreInvites,
@@ -57,6 +58,21 @@ export function useUpdateStore() {
       updateStore(args.storeId, args.input),
     onSuccess: (store) => {
       qc.setQueryData(STORE_ME_KEY, store);
+      qc.invalidateQueries({ queryKey: STORE_ME_KEY });
+    },
+  });
+}
+
+/**
+ * 店ロゴ画像のアップロード（POST /store/:storeId/logo）。
+ * 成功時は store/me を取り直してロゴ（logoUrl）を反映する。
+ */
+export function useUploadStoreLogo() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { storeId: string; file: File }) => uploadStoreLogo(args.storeId, args.file),
+    onSuccess: () => {
+      // logo_url が変わるため自店を取り直す
       qc.invalidateQueries({ queryKey: STORE_ME_KEY });
     },
   });

@@ -237,9 +237,18 @@ function PerStaffTab({
                 key={p.staffId}
                 className="flex items-center gap-3.5 rounded-xl border border-line-soft px-4 py-3.5"
               >
-                <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-token-sm text-muted">
-                  員
-                </span>
+                {/* アバターがあれば丸アイコンに画像、無ければ「員」プレースホルダ */}
+                {p.avatarUrl ? (
+                  <img
+                    src={p.avatarUrl}
+                    alt={p.staffName}
+                    className="h-9 w-9 flex-none rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-token-sm text-muted">
+                    員
+                  </span>
+                )}
                 <div className="flex-1 text-token-md font-semibold text-ink">{p.staffName}</div>
                 {/* 件数（金額ではない） */}
                 <span className="text-token-md font-bold text-rose">

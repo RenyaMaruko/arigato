@@ -167,6 +167,8 @@ export type GratitudeVoice = z.infer<typeof GratitudeVoiceSchema>;
 export const GratitudePerStaffSchema = z.object({
   staffId: z.string().uuid(),
   staffName: z.string(),
+  // スタッフのアバター画像URL（公開URL）。未設定は null（フロントは「員」プレースホルダにフォールバック）
+  avatarUrl: z.string().nullable(),
   // この店員さんに届いた「ありがとう」の件数（金額ではない）
   count: z.number().int(),
 });

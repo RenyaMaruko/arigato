@@ -11,11 +11,18 @@ import type {
   PayoutList,
 } from "@arigato/shared";
 import { CURRENCY, STAFF_TIPS_DEFAULT_LIMIT, STAFF_TIPS_MAX_LIMIT } from "@arigato/shared";
+import { randomUUID } from "node:crypto";
+import {
+  ImageUploadMetaSchema,
+  IMAGE_MIME_TO_EXT,
+  type AvatarUploadResult,
+} from "@arigato/shared";
 import {
   canPayout,
   isInviteUsable,
   buildTipUrl,
   normalizeHeadline,
+  buildAvatarStoragePath,
   summarizeBalance,
   buildTaxReportCsv,
   calculateStaffTakeAmount,
@@ -274,6 +281,70 @@ export async function updateStaffProfile(
   // 更新後の所属一覧も併せて返す（ホーム再描画に使える）
   const memberships = await repo.listMembershipsByAuthUserId(authUserId);
   return toStaffMe(profile, memberships, buildUrl);
+}
+
+// 画像を公開バケットへアップロードする infrastructure 関数の型（コンポジションルートで注入）。
+// path（保存先）・本体・MIME を受け取り、公開URLを返す。feature は Supabase を直接知らない。
+export type UploadPublicImage = (params: {
+  path: string;
+  body: ArrayBuffer | Uint8Array;
+  contentType: string;
+}) => Promise<{ path: string; publicUrl: string }>;
+
+// 画像アップロードで起こりうる業務エラー（Route で HTTP ステータスに変換する）。
+// MIME が画像でない／サイズ上限超過などの検証違反（Route で 400 にする）。
+export class InvalidImageError extends Error {
+  constructor() {
+    super("invalid_image");
+    this.name = "InvalidImageError";
+  }
+}
+
+/**
+ * 店員アバター画像をアップロードして自分の avatar_url を更新する（POST /staff/me/avatar・本人スコープ）。
+ *
+ * 流れ:
+ *  1. 本人の staff を特定する（未作成なら null＝404）。他人の avatar は変えられない（authUserId で限定）。
+ *  2. サーバ側で検証する（MIME が許可画像か・サイズ上限内か）。違反は InvalidImageError（400）。
+ *  3. Storage（公開バケット）へ avatars/<staffId>/<uuid>.<ext> で保存し、公開URLを得る（infrastructure 経由）。
+ *  4. 本人の staff.avatar_url を公開URLへ更新する（生 SQL は Repository）。
+ *  5. { avatarUrl } を返す。
+ *
+ * 画像本体は ArrayBuffer で受け取り、Zod で MIME・サイズのメタ検証をしてから保存する（過大・非画像を弾く）。
+ */
+export async function uploadStaffAvatar(
+  repo: StaffRepository,
+  uploadImage: UploadPublicImage,
+  authUserId: string,
+  file: { body: ArrayBuffer; contentType: string },
+): Promise<AvatarUploadResult | null> {
+  // 【1】本人の staff を特定（他人のものは触れない・未作成なら null）
+  const profile = await repo.findStaffByAuthUserId(authUserId);
+  if (!profile) return null;
+
+  // 【2】サーバ側検証（MIME・サイズ）。違反は 400（InvalidImageError）。
+  const meta = ImageUploadMetaSchema.safeParse({
+    contentType: file.contentType,
+    sizeBytes: file.body.byteLength,
+  });
+  if (!meta.success) {
+    throw new InvalidImageError();
+  }
+
+  // 【3】公開バケットへ保存する（avatars/<staffId>/<uuid>.<ext>）。拡張子は MIME から決める。
+  const ext = IMAGE_MIME_TO_EXT[meta.data.contentType] ?? "bin";
+  const path = buildAvatarStoragePath(profile.id, randomUUID(), ext);
+  const { publicUrl } = await uploadImage({
+    path,
+    body: file.body,
+    contentType: meta.data.contentType,
+  });
+
+  // 【4】本人の avatar_url を公開URLへ更新する（本人スコープで限定）
+  await repo.setAvatarUrl(authUserId, publicUrl);
+
+  // 【5】公開URLを返す
+  return { avatarUrl: publicUrl };
 }
 
 /**

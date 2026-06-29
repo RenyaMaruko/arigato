@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   getMyStore,
   createStore,
@@ -9,9 +9,11 @@ import {
   revokeStoreInvite,
   listStoreStaff,
   getStoreGratitude,
+  uploadStoreLogo,
   StoreForbiddenError,
   StoreAlreadyExistsError,
   StoreInviteNotFoundError,
+  InvalidImageError,
 } from "./store.service.js";
 import { buildInviteUrl } from "./store.model.js";
 import type {
@@ -90,6 +92,11 @@ function createMockRepo() {
       stores.set(storeId, updated);
       return updated;
     },
+    async setLogoUrl(storeId, logoUrl) {
+      const s = stores.get(storeId);
+      if (!s) return;
+      stores.set(storeId, { ...s, logoUrl });
+    },
     async createInvite(storeId, code, label) {
       const invite: StoreInviteRow = {
         code,
@@ -147,6 +154,7 @@ function createMockRepo() {
         return detail.map((d) => ({
           staffId: d.staffId,
           staffName: d.staffName,
+          avatarUrl: null,
           count: d.times.filter((tm) => inPeriod(tm, period)).length,
         }));
       }
@@ -376,8 +384,8 @@ describe("store.service", () => {
       { id: "v1", message: "笑顔が素敵で癒されました！", receivedAt: "2026-06-23T01:00:00Z", staffName: "山田 さくら" },
     ]);
     m.perStaffByStore.set("store-1", [
-      { staffId: "s1", staffName: "山田 さくら", count: 2 },
-      { staffId: "s2", staffName: "田中 健一", count: 1 },
+      { staffId: "s1", staffName: "山田 さくら", avatarUrl: "https://example.test/avatar-s1.png", count: 2 },
+      { staffId: "s2", staffName: "田中 健一", avatarUrl: null, count: 1 },
     ]);
 
     const g = await getStoreGratitude(m.repo, "owner-1", "store-1", new Date("2026-06-23T03:00:00Z"));
@@ -387,6 +395,9 @@ describe("store.service", () => {
     expect(g.voices[0]!.message).toBe("笑顔が素敵で癒されました！");
     expect(g.voices[0]!.staffName).toBe("山田 さくら");
     expect(g.perStaff.length).toBe(2);
+    // スタッフ別にアバターURL（公開URL）が乗る（金額は出さない）。無い場合は null。
+    expect(g.perStaff.find((p) => p.staffId === "s1")!.avatarUrl).toBe("https://example.test/avatar-s1.png");
+    expect(g.perStaff.find((p) => p.staffId === "s2")!.avatarUrl).toBeNull();
     // today/month は廃止済み（応答に含まれない）
     expect((g as Record<string, unknown>).todayCount).toBeUndefined();
     expect((g as Record<string, unknown>).monthCount).toBeUndefined();
@@ -453,8 +464,8 @@ describe("store.service", () => {
     ]);
     // perStaff（全スタッフ集計・名簿順）。staffId 絞りでこれは変わってはいけない
     m.perStaffByStore.set("store-1", [
-      { staffId: "s1", staffName: "山田", count: 2 },
-      { staffId: "s2", staffName: "田中", count: 1 },
+      { staffId: "s1", staffName: "山田", avatarUrl: null, count: 2 },
+      { staffId: "s2", staffName: "田中", avatarUrl: null, count: 1 },
     ]);
 
     const now = new Date("2026-06-23T03:00:00Z");
@@ -491,8 +502,8 @@ describe("store.service", () => {
       { id: "v-s2-jun", message: "6月の田中さんへ", receivedAt: "2026-06-23T01:00:00Z", staffName: "田中", staffId: "s2" },
     ]);
     m.perStaffByStore.set("store-1", [
-      { staffId: "s1", staffName: "山田", count: 2 },
-      { staffId: "s2", staffName: "田中", count: 1 },
+      { staffId: "s1", staffName: "山田", avatarUrl: null, count: 2 },
+      { staffId: "s2", staffName: "田中", avatarUrl: null, count: 1 },
     ]);
 
     const now = new Date("2026-06-23T03:00:00Z");
@@ -512,7 +523,7 @@ describe("store.service", () => {
     m.voicesByStore.set("store-1", [
       { id: "v1", message: "ありがとう", receivedAt: "2026-06-23T01:00:00Z", staffName: "山田" },
     ]);
-    m.perStaffByStore.set("store-1", [{ staffId: "s1", staffName: "山田", count: 1 }]);
+    m.perStaffByStore.set("store-1", [{ staffId: "s1", staffName: "山田", avatarUrl: null, count: 1 }]);
 
     const g = await getStoreGratitude(m.repo, "owner-1", "store-1", new Date("2026-06-23T03:00:00Z"));
     const json = JSON.stringify(g);
@@ -537,5 +548,65 @@ describe("store.service", () => {
     expect(updated.name).toBe("新しい店名");
     expect(updated.description).toBeNull();
     expect(updated.industry).toBe("カフェ・喫茶");
+  });
+});
+
+// 店ロゴ画像アップロード（POST /store/:storeId/logo）のユースケース検証。
+// オーナースコープ・検証（MIME・サイズ）・Storage 保存・logo_url 更新・公開URL返却を確認する。
+describe("store.service uploadStoreLogo", () => {
+  let m: ReturnType<typeof createMockRepo>;
+  const fakeUpload = vi.fn(async (params: { path: string; body: ArrayBuffer | Uint8Array; contentType: string }) => ({
+    path: params.path,
+    publicUrl: `https://example.test/storage/v1/object/public/media/${params.path}`,
+  }));
+
+  beforeEach(() => {
+    m = createMockRepo();
+    fakeUpload.mockClear();
+    seedOwnedStore(m, "store-1", "owner-1");
+  });
+
+  it("画像を保存し、公開URLで logo_url を更新して返す（logos/<storeId>/ 配下）", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
+    const result = await uploadStoreLogo(m.repo, fakeUpload, "owner-1", "store-1", {
+      body: png,
+      contentType: "image/png",
+    });
+    expect(result.logoUrl).toMatch(/^https:\/\/example\.test\//);
+    const callPath = fakeUpload.mock.calls[0]![0].path;
+    expect(callPath).toMatch(/^logos\/store-1\/[0-9a-f-]+\.png$/);
+    // store の logo_url が公開URLに更新されている
+    const store = await getStore(m.repo, "owner-1", "store-1");
+    expect(store.logoUrl).toBe(result.logoUrl);
+  });
+
+  it("他店（別オーナー）のロゴは変えられない（StoreForbiddenError）。Storage は呼ばない", async () => {
+    await expect(
+      uploadStoreLogo(m.repo, fakeUpload, "intruder", "store-1", {
+        body: new Uint8Array([0x89]).buffer,
+        contentType: "image/png",
+      }),
+    ).rejects.toBeInstanceOf(StoreForbiddenError);
+    expect(fakeUpload).not.toHaveBeenCalled();
+  });
+
+  it("非画像 MIME は 400 相当（InvalidImageError）。Storage は呼ばない", async () => {
+    await expect(
+      uploadStoreLogo(m.repo, fakeUpload, "owner-1", "store-1", {
+        body: new Uint8Array([1, 2, 3]).buffer,
+        contentType: "text/plain",
+      }),
+    ).rejects.toBeInstanceOf(InvalidImageError);
+    expect(fakeUpload).not.toHaveBeenCalled();
+  });
+
+  it("サイズ上限（5MB）超過は 400 相当（InvalidImageError）", async () => {
+    await expect(
+      uploadStoreLogo(m.repo, fakeUpload, "owner-1", "store-1", {
+        body: new Uint8Array(5 * 1024 * 1024 + 1).buffer,
+        contentType: "image/png",
+      }),
+    ).rejects.toBeInstanceOf(InvalidImageError);
+    expect(fakeUpload).not.toHaveBeenCalled();
   });
 });

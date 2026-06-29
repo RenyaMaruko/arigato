@@ -13,6 +13,7 @@ import {
   createStaffProfile,
   joinStore,
   updateStaffProfile,
+  uploadStaffAvatar,
   fetchInviteInfo,
   fetchStaffTips,
   fetchStaffBalance,
@@ -97,6 +98,21 @@ export function useUpdateStaffProfile() {
     mutationFn: (input: UpdateStaffProfileInput) => updateStaffProfile(input),
     onSuccess: (me) => {
       qc.setQueryData(STAFF_ME_KEY, me);
+      qc.invalidateQueries({ queryKey: STAFF_ME_KEY });
+    },
+  });
+}
+
+/**
+ * アバター画像のアップロード（POST /staff/me/avatar）。
+ * 成功時は staff/me を取り直してプレビュー（avatarUrl）を反映する。
+ */
+export function useUploadStaffAvatar() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (file: File) => uploadStaffAvatar(file),
+    onSuccess: () => {
+      // avatar_url が変わるため自分のプロフィールを取り直す
       qc.invalidateQueries({ queryKey: STAFF_ME_KEY });
     },
   });

@@ -163,6 +163,12 @@ export const ja = {
       editSubmit: "保存する",
       editSaved: "保存しました",
       editError: "保存に失敗しました。もう一度お試しください。",
+      // アバター画像のアップロード
+      avatarChange: "顔写真を変更",
+      avatarUploading: "アップロード中…",
+      avatarError: "画像のアップロードに失敗しました。もう一度お試しください。",
+      avatarInvalidType: "画像ファイル（PNG / JPEG / WebP）を選んでください。",
+      avatarTooLarge: "画像サイズが大きすぎます（5MB まで）。",
       // ホームの導線（受取履歴・送金）
       homeHistory: "受取履歴",
       homePayout: "送金",
@@ -412,6 +418,12 @@ export const ja = {
       profileSaving: "保存中…",
       profileSaved: "保存しました",
       profileError: "保存に失敗しました。もう一度お試しください。",
+      // ロゴ画像のアップロード
+      logoChange: "店舗ロゴを変更",
+      logoUploading: "アップロード中…",
+      logoError: "画像のアップロードに失敗しました。もう一度お試しください。",
+      logoInvalidType: "画像ファイル（PNG / JPEG / WebP）を選んでください。",
+      logoTooLarge: "画像サイズが大きすぎます（5MB まで）。",
       // 共通
       back: "戻る",
     },

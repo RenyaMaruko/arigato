@@ -13,11 +13,13 @@ import {
   createStaffPayout,
   getStaffPayouts,
   applyPayoutWebhookUpdate,
+  uploadStaffAvatar,
   InviteNotUsableError,
   StaffAlreadyExistsError,
   StaffNotFoundError,
   PayoutNotVerifiedError,
   PayoutBelowMinimumError,
+  InvalidImageError,
 } from "./staff.service.js";
 import { buildTipUrl } from "./staff.model.js";
 import type {
@@ -182,6 +184,11 @@ function createMockRepo() {
     },
     async setStripeAccountId(authUserId, stripeAccountId) {
       accountByAuth.set(authUserId, stripeAccountId);
+    },
+    async setAvatarUrl(authUserId, avatarUrl) {
+      const existing = staffByAuth.get(authUserId);
+      if (!existing) return;
+      staffByAuth.set(authUserId, { ...existing, avatarUrl });
     },
     // 本人スコープ: その authUserId の履歴のみ「1ページ分」返す（キーセットページング）。
     // 実 DB と同じ並び（受取日時 DESC, id DESC）にし、cursor 以降を take 件返す。
@@ -1460,5 +1467,73 @@ describe("staff.service", () => {
     const target = payouts!.items.find((p) => p.id === pending.id);
     expect(target!.status).toBe("paid");
     expect(target!.arrivedAt).not.toBeNull();
+  });
+});
+
+// アバター画像アップロード（POST /staff/me/avatar）のユースケース検証。
+// 検証（MIME・サイズ）・本人スコープ・Storage 保存・avatar_url 更新・公開URL返却を確認する。
+describe("staff.service uploadStaffAvatar", () => {
+  let mock: ReturnType<typeof createMockRepo>;
+
+  // テスト用の Storage アップロード（保存先 path を公開URLに見立てて返す。実 Supabase は叩かない）
+  const fakeUpload = vi.fn(async (params: { path: string; body: ArrayBuffer | Uint8Array; contentType: string }) => ({
+    path: params.path,
+    publicUrl: `https://example.test/storage/v1/object/public/media/${params.path}`,
+  }));
+
+  beforeEach(async () => {
+    mock = createMockRepo();
+    fakeUpload.mockClear();
+    // 本人の staff を1件用意する
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-A", {
+      displayName: "山田 さくら",
+    });
+  });
+
+  it("画像を保存し、公開URLで avatar_url を更新して返す（avatars/<staffId>/ 配下）", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer; // ダミー本体
+    const result = await uploadStaffAvatar(mock.repo, fakeUpload, "auth-A", {
+      body: png,
+      contentType: "image/png",
+    });
+    // 公開URLが返る
+    expect(result?.avatarUrl).toMatch(/^https:\/\/example\.test\//);
+    // 保存パスは avatars/<staffId>/<uuid>.png
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-A");
+    expect(fakeUpload).toHaveBeenCalledTimes(1);
+    const callPath = fakeUpload.mock.calls[0]![0].path;
+    expect(callPath).toMatch(new RegExp(`^avatars/${me!.id}/[0-9a-f-]+\\.png$`));
+    // DB（モック）の avatar_url が公開URLに更新されている
+    expect(me!.avatarUrl).toBe(result!.avatarUrl);
+  });
+
+  it("MIME が画像でなければ 400 相当（InvalidImageError）。Storage は呼ばない", async () => {
+    await expect(
+      uploadStaffAvatar(mock.repo, fakeUpload, "auth-A", {
+        body: new Uint8Array([1, 2, 3]).buffer,
+        contentType: "application/pdf",
+      }),
+    ).rejects.toBeInstanceOf(InvalidImageError);
+    expect(fakeUpload).not.toHaveBeenCalled();
+  });
+
+  it("サイズ上限（5MB）超過は 400 相当（InvalidImageError）。Storage は呼ばない", async () => {
+    const tooBig = new Uint8Array(5 * 1024 * 1024 + 1).buffer;
+    await expect(
+      uploadStaffAvatar(mock.repo, fakeUpload, "auth-A", {
+        body: tooBig,
+        contentType: "image/png",
+      }),
+    ).rejects.toBeInstanceOf(InvalidImageError);
+    expect(fakeUpload).not.toHaveBeenCalled();
+  });
+
+  it("プロフィール未作成（他人/未登録）なら null（404 相当）。Storage は呼ばない", async () => {
+    const result = await uploadStaffAvatar(mock.repo, fakeUpload, "auth-UNKNOWN", {
+      body: new Uint8Array([0x89]).buffer,
+      contentType: "image/png",
+    });
+    expect(result).toBeNull();
+    expect(fakeUpload).not.toHaveBeenCalled();
   });
 });

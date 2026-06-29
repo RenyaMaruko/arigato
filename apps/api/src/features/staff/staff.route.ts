@@ -15,6 +15,7 @@ import {
   type ConnectOnboardResponse,
   type CreatePayoutResult,
   type PayoutList,
+  type AvatarUploadResult,
 } from "@arigato/shared";
 import type { MiddlewareHandler } from "hono";
 import type { AuthVariables } from "../../middleware/auth.js";
@@ -24,6 +25,7 @@ import {
   StaffNotFoundError,
   PayoutNotVerifiedError,
   PayoutBelowMinimumError,
+  InvalidImageError,
 } from "./staff.service.js";
 
 /**
@@ -49,6 +51,12 @@ type StaffDeps = {
     authUserId: string,
     input: UpdateStaffProfileInput,
   ) => Promise<StaffMe | null>;
+  // アバター画像をアップロードして avatar_url を更新する（本人のみ）。
+  // 画像本体（ArrayBuffer）と MIME を受け取り、公開URLを返す。未作成なら null（404）、検証違反は例外（400）。
+  uploadStaffAvatar: (
+    authUserId: string,
+    file: { body: ArrayBuffer; contentType: string },
+  ) => Promise<AvatarUploadResult | null>;
   // 受取履歴を1ページ取得する（金額・メッセージ含む・本人のみ・キーセットページング）。未作成なら null。
   // cursor（次ページの基点）・limit（1ページ件数・既定20）を受け取る。
   getStaffTips: (
@@ -126,6 +134,35 @@ export function createStaffRoute(deps: StaffDeps) {
         return c.json({ error: "staff_not_found" }, 404);
       }
       return c.json(me);
+    })
+    // アバター画像のアップロード（multipart/form-data・画像1枚。本人のみ）。
+    // field 名 "file" の画像を受け取り、検証 → Storage 保存 → avatar_url 更新 → { avatarUrl } を返す。
+    // 検証違反（非画像・過大）は 400、ファイル欠落は 400、未作成は 404。
+    .post("/me/avatar", async (c) => {
+      const authUser = c.get("authUser");
+      // multipart を取得する（Hono の parseBody。file フィールドに画像本体が載る）
+      const body = await c.req.parseBody();
+      const file = body["file"];
+      // ファイルが無い・File でない場合は不正リクエスト（400）
+      if (!(file instanceof File)) {
+        return c.json({ error: "invalid_image" }, 400);
+      }
+      try {
+        const result = await deps.uploadStaffAvatar(authUser.id, {
+          body: await file.arrayBuffer(),
+          contentType: file.type,
+        });
+        if (!result) {
+          return c.json({ error: "staff_not_found" }, 404);
+        }
+        return c.json(result);
+      } catch (err) {
+        // MIME が画像でない／サイズ上限超過などの検証違反は 400
+        if (err instanceof InvalidImageError) {
+          return c.json({ error: "invalid_image" }, 400);
+        }
+        throw err;
+      }
     })
     // 受取履歴（金額・メッセージ・受取日時。本人のみ・20件ずつの無限スクロール）。
     // cursor（次ページの基点）・limit（既定20・上限50）はクエリで受ける。

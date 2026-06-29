@@ -80,6 +80,8 @@ export type GratitudeTimeRow = {
 export type GratitudePerStaffRow = {
   staffId: string;
   staffName: string;
+  // スタッフのアバター画像URL（公開URL）。未設定は null
+  avatarUrl: string | null;
   // この店員さんに届いた件数（COUNT）。金額ではない
   count: number;
 };
@@ -112,6 +114,8 @@ export type StoreRepository = {
   createStore: (params: CreateStoreParams) => Promise<StoreRow>;
   // 店プロフィールを更新する。更新後の行を返す
   updateStore: (storeId: string, params: UpdateStoreParams) => Promise<StoreRow | null>;
+  // 自店のロゴ画像URL（公開URL）を更新する（画像アップロード後・店スコープ）
+  setLogoUrl: (storeId: string, logoUrl: string) => Promise<void>;
   // 招待を発行する（pending で新規作成）。label は誰宛かの任意メモ（未入力は null）。発行した招待行を返す
   createInvite: (storeId: string, code: string, label: string | null) => Promise<StoreInviteRow>;
   // 自店の招待中（pending）だけを新しい順に取得する（招待中一覧。accepted/revoked は返さない）
@@ -229,11 +233,23 @@ export function createStoreRepository(): StoreRepository {
         SET name = ${params.name},
             description = ${params.description},
             industry = ${params.industry},
-            logo_url = ${params.logoUrl}
+            -- ロゴは別経路（POST /store/:storeId/logo）で更新するため、テキスト編集では消さない。
+            -- 値が来た時だけ差し替え、未指定（null）なら既存ロゴを保つ（COALESCE）。
+            logo_url = COALESCE(${params.logoUrl}, logo_url)
         WHERE id = ${storeId}
         RETURNING ${STORE_SELECT}
       `);
       return rows[0] ?? null;
+    },
+
+    // 自店のロゴ画像URL（公開URL）を更新する（画像アップロード後・店スコープ）
+    async setLogoUrl(storeId, logoUrl) {
+      const db = getDb();
+      await db.execute(sql`
+        UPDATE store
+        SET logo_url = ${logoUrl}
+        WHERE id = ${storeId}
+      `);
     },
 
     // 招待を発行する（pending で新規作成）。code は Service/Model で生成済みの一意トークン。
@@ -379,6 +395,7 @@ export function createStoreRepository(): StoreRepository {
         SELECT
           s.id            AS "staffId",
           s.display_name  AS "staffName",
+          s.avatar_url    AS "avatarUrl",
           COUNT(t.id)::int AS "count"
         FROM staff_store ss
         JOIN staff s ON s.id = ss.staff_id
@@ -388,7 +405,7 @@ export function createStoreRepository(): StoreRepository {
           AND t.status = 'succeeded'
           ${gratitudePeriodClause(period)}
         WHERE ss.store_id = ${storeId}
-        GROUP BY s.id, s.display_name, ss.created_at
+        GROUP BY s.id, s.display_name, s.avatar_url, ss.created_at
         ORDER BY ss.created_at ASC
       `);
       return rows;

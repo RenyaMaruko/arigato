@@ -7,7 +7,9 @@ import {
   JoinStoreResultSchema,
   CreatePayoutResultSchema,
   PayoutListSchema,
+  AvatarUploadResultSchema,
   type StaffMe,
+  type AvatarUploadResult,
   type InviteInfo,
   type StaffTipsResponse,
   type StaffBalance,
@@ -100,6 +102,42 @@ export async function updateStaffProfile(
     throw new Error(`staff profile update failed: ${res.status}`);
   }
   return StaffMeSchema.parse(await res.json());
+}
+
+/**
+ * POST /staff/me/avatar — アバター画像をアップロードして avatar_url を更新する（本人のみ）。
+ * multipart/form-data（field 名 "file"）で送る。hc は FormData 送信に向かないため、CSV ダウンロードと
+ * 同様に fetch を直接使い、認証トークンを手で付与する。検証違反（非画像・過大）は 400 でエラーを投げる。
+ */
+export async function uploadStaffAvatar(file: File): Promise<AvatarUploadResult> {
+  const apiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
+  // トークンはメモリ保持のセッションから同期取得する
+  const token = getAccessToken();
+  const headers = new Headers();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  // FormData に画像を載せる（Content-Type は fetch が boundary 付きで自動設定するため手で付けない）
+  const form = new FormData();
+  form.append("file", file);
+
+  const res = await fetch(`${apiUrl}/staff/me/avatar`, {
+    method: "POST",
+    headers,
+    body: form,
+  });
+  if (!res.ok) {
+    // 検証違反などはエラーコードを添えて投げる（呼び出し側で文言に変換）
+    let code = `status_${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) code = body.error;
+    } catch {
+      // JSON でなければステータスのみ
+    }
+    throw new Error(code);
+  }
+  return AvatarUploadResultSchema.parse(await res.json());
 }
 
 /**

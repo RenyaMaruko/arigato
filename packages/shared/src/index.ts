@@ -13,3 +13,4 @@ export * from "./schemas/health.schema.js";
 export * from "./schemas/staff.schema.js";
 export * from "./schemas/store.schema.js";
 export * from "./schemas/payout.schema.js";
+export * from "./schemas/media.schema.js";

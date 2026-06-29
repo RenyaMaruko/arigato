@@ -1,12 +1,17 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import { STORE_NAME_MAX_LENGTH, STORE_DESCRIPTION_MAX_LENGTH } from "@arigato/shared";
+import {
+  STORE_NAME_MAX_LENGTH,
+  STORE_DESCRIPTION_MAX_LENGTH,
+  ALLOWED_IMAGE_MIME_TYPES,
+  MAX_IMAGE_SIZE_BYTES,
+} from "@arigato/shared";
 import type { StoreProfile } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StoreBottomNav } from "../components/StoreBottomNav.js";
 import { StoreGuard } from "../components/StoreGuard.js";
-import { useUpdateStore } from "../hooks/useStore.js";
+import { useUpdateStore, useUploadStoreLogo } from "../hooks/useStore.js";
 
 /**
  * 店舗プロフィール編集画面（/store/profile）。モック02に対応。
@@ -20,6 +25,9 @@ function StoreProfileContent({ store }: { store: StoreProfile }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const updateMutation = useUpdateStore();
+  // ロゴアップロード（POST /store/:storeId/logo）
+  const logoMutation = useUploadStoreLogo();
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // 既存値で初期化
   const [name, setName] = useState(store.name);
@@ -27,6 +35,34 @@ function StoreProfileContent({ store }: { store: StoreProfile }) {
   const [industry, setIndustry] = useState(store.industry ?? "");
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 直近にアップロードしたロゴの公開URL（取り直し前の即時プレビュー用）
+  const [logoPreview, setLogoPreview] = useState<string | null>(store.logoUrl);
+  const [logoError, setLogoError] = useState<string | null>(null);
+
+  // ファイル選択時にロゴをアップロードする。クライアント側でも MIME・サイズを事前チェックする。
+  const handleLogoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = "";
+    if (!file) return;
+    setLogoError(null);
+    if (!ALLOWED_IMAGE_MIME_TYPES.includes(file.type as (typeof ALLOWED_IMAGE_MIME_TYPES)[number])) {
+      setLogoError(t("store.logoInvalidType"));
+      return;
+    }
+    if (file.size > MAX_IMAGE_SIZE_BYTES) {
+      setLogoError(t("store.logoTooLarge"));
+      return;
+    }
+    logoMutation.mutate(
+      { storeId: store.id, file },
+      {
+        onSuccess: (result) => {
+          setLogoPreview(result.logoUrl);
+        },
+        onError: () => setLogoError(t("store.logoError")),
+      },
+    );
+  };
 
   const canSubmit = name.trim() !== "" && !updateMutation.isPending;
 
@@ -82,13 +118,27 @@ function StoreProfileContent({ store }: { store: StoreProfile }) {
       </div>
 
       <form onSubmit={handleSubmit} className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-6 pb-6 pt-3.5">
-        {/* ロゴ（プレースホルダ。アップロードは将来拡張）。右下にカメラバッジ（モック02の装飾） */}
-        <div className="flex justify-center">
-          <div className="relative">
+        {/* ロゴ。枠をタップすると画像を選んでアップロードし、プレビューを差し替える。右下にカメラバッジ。 */}
+        <div className="flex flex-col items-center">
+          {/* 隠しファイル入力（画像のみ）。枠タップで開く */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ALLOWED_IMAGE_MIME_TYPES.join(",")}
+            onChange={handleLogoChange}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={logoMutation.isPending}
+            aria-label={t("store.logoChange")}
+            className="relative disabled:opacity-60"
+          >
             <div className="flex h-[104px] w-[104px] items-center justify-center overflow-hidden rounded-full bg-rose-soft text-token-sm text-muted">
-              {store.logoUrl ? (
+              {logoPreview ? (
                 <img
-                  src={store.logoUrl}
+                  src={logoPreview}
                   alt={store.name}
                   className="h-[104px] w-[104px] rounded-full object-cover"
                 />
@@ -115,7 +165,12 @@ function StoreProfileContent({ store }: { store: StoreProfile }) {
                 <circle cx="12" cy="13" r="3.4" />
               </svg>
             </span>
-          </div>
+          </button>
+          {/* アップロード中・失敗の表示 */}
+          {logoMutation.isPending && (
+            <div className="mt-2 text-token-sm text-ink-sub">{t("store.logoUploading")}</div>
+          )}
+          {logoError && <div className="mt-2 text-center text-token-sm text-rose">{logoError}</div>}
         </div>
 
         {/* 店名（必須） */}

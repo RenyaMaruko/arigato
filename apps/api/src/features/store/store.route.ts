@@ -13,6 +13,7 @@ import {
   type UpdateStoreProfileInput,
   type CreateStoreInput,
   type CreateStoreInviteInput,
+  type LogoUploadResult,
 } from "@arigato/shared";
 import type { MiddlewareHandler } from "hono";
 import type { AuthVariables } from "../../middleware/auth.js";
@@ -21,6 +22,7 @@ import {
   StoreForbiddenError,
   StoreAlreadyExistsError,
   StoreInviteNotFoundError,
+  InvalidImageError,
 } from "./store.service.js";
 
 /**
@@ -48,6 +50,13 @@ type StoreDeps = {
     storeId: string,
     input: UpdateStoreProfileInput,
   ) => Promise<StoreProfile>;
+  // 店ロゴ画像をアップロードして logo_url を更新する（オーナーのみ）。
+  // 画像本体（ArrayBuffer）と MIME を受け取り、公開URLを返す。検証違反は例外（400）。
+  uploadStoreLogo: (
+    authUserId: string,
+    storeId: string,
+    file: { body: ArrayBuffer; contentType: string },
+  ) => Promise<LogoUploadResult>;
   // スタッフ招待の発行（方式A・店スコープ）。input.label は誰宛かの任意メモ
   createStoreInvite: (
     authUserId: string,
@@ -132,6 +141,35 @@ export function createStoreRoute(deps: StoreDeps) {
         const store = await deps.updateStore(authUser.id, storeId, input);
         return c.json(store);
       } catch (err) {
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // 店ロゴ画像のアップロード（multipart/form-data・画像1枚。オーナーのみ）。
+    // field 名 "file" の画像を受け取り、検証 → Storage 保存 → logo_url 更新 → { logoUrl } を返す。
+    // 検証違反（非画像・過大）・ファイル欠落は 400、他店アクセス・店なしは 404。
+    .post("/:storeId/logo", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      // multipart を取得する（file フィールドに画像本体が載る）
+      const body = await c.req.parseBody();
+      const file = body["file"];
+      if (!(file instanceof File)) {
+        return c.json({ error: "invalid_image" }, 400);
+      }
+      try {
+        const result = await deps.uploadStoreLogo(authUser.id, storeId, {
+          body: await file.arrayBuffer(),
+          contentType: file.type,
+        });
+        return c.json(result);
+      } catch (err) {
+        // 検証違反は 400
+        if (err instanceof InvalidImageError) {
+          return c.json({ error: "invalid_image" }, 400);
+        }
+        // 他店アクセス・店なしは 404（情報秘匿）
         const mapped = handleStoreScopeError(err);
         if (mapped) return c.json({ error: mapped.error }, mapped.status);
         throw err;

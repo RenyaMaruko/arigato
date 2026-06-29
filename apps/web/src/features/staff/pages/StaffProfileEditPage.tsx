@@ -1,16 +1,17 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
+import { ALLOWED_IMAGE_MIME_TYPES, MAX_IMAGE_SIZE_BYTES } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
-import { useStaffMe, useUpdateStaffProfile } from "../hooks/useStaff.js";
+import { useStaffMe, useUpdateStaffProfile, useUploadStaffAvatar } from "../hooks/useStaff.js";
 
 /**
  * プロフィール編集画面（/staff/profile）。
  * 表示名・一言を編集して PATCH /staff/me で保存する（所属店・招待は変更しない）。
  * 本人スコープ（自分の staff のみ）で、保存後はホームへ戻る。
- * 本実装は表示名・一言の編集まで（アバターアップロードは Sprint 5 に委ねる）。
+ * アバターは顔写真枠をタップ → 画像選択 → アップロード → プレビュー更新で差し替える。
  */
 export function StaffProfileEditPage() {
   const { t } = useTranslation();
@@ -46,6 +47,7 @@ export function StaffProfileEditPage() {
 /**
  * 編集フォーム本体。
  * 取得済みプロフィールを初期値にして入力状態を持ち、保存で PATCH を呼ぶ。
+ * アバターは顔写真枠タップで画像選択 → アップロードし、成功で avatarUrl を反映する。
  */
 function EditForm({
   me,
@@ -56,11 +58,45 @@ function EditForm({
 }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  // アバターアップロード（POST /staff/me/avatar）
+  const avatarMutation = useUploadStaffAvatar();
+  // 隠しファイル入力への参照（顔写真枠タップで開く）
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  // 直近にアップロードした公開URL（取り直し前の即時プレビュー用）
+  const [avatarPreview, setAvatarPreview] = useState<string | null>(me.avatarUrl);
+  const [avatarError, setAvatarError] = useState<string | null>(null);
 
   // 入力状態（取得済みの値で初期化）
   const [displayName, setDisplayName] = useState<string>(me.displayName);
   const [headline, setHeadline] = useState<string>(me.headline ?? "");
   const [error, setError] = useState<string | null>(null);
+
+  // ファイル選択時にアップロードする。クライアント側でも MIME・サイズを事前チェックする（無駄送信を防ぐ）。
+  const handleAvatarChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    // 同じファイルを連続選択しても change が発火するよう入力をリセットする
+    e.target.value = "";
+    if (!file) return;
+    setAvatarError(null);
+    // 事前チェック（許可 MIME か・サイズ上限内か）。違反はアップロードせず文言を出す。
+    if (!ALLOWED_IMAGE_MIME_TYPES.includes(file.type as (typeof ALLOWED_IMAGE_MIME_TYPES)[number])) {
+      setAvatarError(t("staff.avatarInvalidType"));
+      return;
+    }
+    if (file.size > MAX_IMAGE_SIZE_BYTES) {
+      setAvatarError(t("staff.avatarTooLarge"));
+      return;
+    }
+    avatarMutation.mutate(file, {
+      onSuccess: (result) => {
+        // 成功で即プレビューを差し替える（staff/me の再取得も走る）
+        setAvatarPreview(result.avatarUrl);
+      },
+      onError: () => {
+        setAvatarError(t("staff.avatarError"));
+      },
+    });
+  };
 
   // 保存可能か（表示名が必須）
   const canSubmit = displayName.trim() !== "" && !updateMutation.isPending;
@@ -114,13 +150,27 @@ function EditForm({
       </div>
 
       <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-[26px] pb-7 pt-2">
-        {/* アバター（編集 UI は Sprint 5。現状は表示のみ）。ローズの淡いリングで包む */}
-        <div className="mt-2 flex justify-center">
-          <div className="rounded-full bg-rose-soft p-1">
+        {/* アバター。顔写真枠をタップすると画像を選んでアップロードし、プレビューを差し替える。 */}
+        <div className="mt-2 flex flex-col items-center">
+          {/* 隠しファイル入力（画像のみ）。枠タップで開く */}
+          <input
+            ref={fileInputRef}
+            type="file"
+            accept={ALLOWED_IMAGE_MIME_TYPES.join(",")}
+            onChange={handleAvatarChange}
+            className="hidden"
+          />
+          <button
+            type="button"
+            onClick={() => fileInputRef.current?.click()}
+            disabled={avatarMutation.isPending}
+            aria-label={t("staff.avatarChange")}
+            className="relative rounded-full bg-rose-soft p-1 disabled:opacity-60"
+          >
             <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-stamp-bg text-token-sm text-muted ring-2 ring-page">
-              {me.avatarUrl ? (
+              {avatarPreview ? (
                 <img
-                  src={me.avatarUrl}
+                  src={avatarPreview}
                   alt={me.displayName}
                   className="h-24 w-24 rounded-full object-cover"
                 />
@@ -128,7 +178,33 @@ function EditForm({
                 "顔写真"
               )}
             </div>
-          </div>
+            {/* カメラバッジ（白縁のローズ丸）。タップで画像選択を示す装飾 */}
+            <span
+              className="absolute bottom-0.5 right-0.5 flex h-8 w-8 items-center justify-center rounded-full border-[2.5px] border-page bg-rose text-page"
+              aria-hidden="true"
+            >
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="1.9"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              >
+                <path d="M3 8.5a2 2 0 0 1 2-2h2l1.2-1.8h7.6L19 6.5h2a2 2 0 0 1 2 2V18a2 2 0 0 1-2 2H3a2 2 0 0 1-2-2z" />
+                <circle cx="12" cy="13" r="3.4" />
+              </svg>
+            </span>
+          </button>
+          {/* アップロード中・失敗の表示 */}
+          {avatarMutation.isPending && (
+            <div className="mt-2 text-token-sm text-ink-sub">{t("staff.avatarUploading")}</div>
+          )}
+          {avatarError && (
+            <div className="mt-2 text-center text-token-sm text-rose">{avatarError}</div>
+          )}
         </div>
 
         <form onSubmit={handleSubmit} className="mt-7 flex flex-col">

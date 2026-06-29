@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import type {
   StoreProfile,
   StoreInviteCreated,
@@ -7,8 +8,14 @@ import type {
   UpdateStoreProfileInput,
   CreateStoreInput,
   CreateStoreInviteInput,
+  LogoUploadResult,
 } from "@arigato/shared";
-import { generateInviteCode, summarizeGratitudeCounts } from "./store.model.js";
+import { ImageUploadMetaSchema, IMAGE_MIME_TO_EXT } from "@arigato/shared";
+import {
+  generateInviteCode,
+  summarizeGratitudeCounts,
+  buildLogoStoragePath,
+} from "./store.model.js";
 import type { StoreRepository, StoreRow } from "./store.repository.js";
 
 /**
@@ -174,6 +181,67 @@ export async function updateStore(
     throw new StoreNotFoundError();
   }
   return toStoreProfile(updated);
+}
+
+// 画像を公開バケットへアップロードする infrastructure 関数の型（コンポジションルートで注入）。
+// path（保存先）・本体・MIME を受け取り、公開URLを返す。feature は Supabase を直接知らない。
+export type UploadPublicImage = (params: {
+  path: string;
+  body: ArrayBuffer | Uint8Array;
+  contentType: string;
+}) => Promise<{ path: string; publicUrl: string }>;
+
+// 画像アップロードの検証違反（MIME が画像でない／サイズ上限超過）。Route で 400 に変換する。
+export class InvalidImageError extends Error {
+  constructor() {
+    super("invalid_image");
+    this.name = "InvalidImageError";
+  }
+}
+
+/**
+ * 店ロゴ画像をアップロードして自店の logo_url を更新する（POST /store/:storeId/logo・店スコープ）。
+ *
+ * 流れ:
+ *  1. 自店のオーナーであることを確認する（他店のロゴは変えられない）。
+ *  2. サーバ側で検証する（MIME が許可画像か・サイズ上限内か）。違反は InvalidImageError（400）。
+ *  3. Storage（公開バケット）へ logos/<storeId>/<uuid>.<ext> で保存し、公開URLを得る（infrastructure 経由）。
+ *  4. 自店の store.logo_url を公開URLへ更新する（生 SQL は Repository）。
+ *  5. { logoUrl } を返す。
+ */
+export async function uploadStoreLogo(
+  repo: StoreRepository,
+  uploadImage: UploadPublicImage,
+  authUserId: string,
+  storeId: string,
+  file: { body: ArrayBuffer; contentType: string },
+): Promise<LogoUploadResult> {
+  // 【1】自店のオーナー確認（他店は触れない）。違反は StoreForbiddenError → Route で 404。
+  await requireOwnedStore(repo, authUserId, storeId);
+
+  // 【2】サーバ側検証（MIME・サイズ）。違反は 400（InvalidImageError）。
+  const meta = ImageUploadMetaSchema.safeParse({
+    contentType: file.contentType,
+    sizeBytes: file.body.byteLength,
+  });
+  if (!meta.success) {
+    throw new InvalidImageError();
+  }
+
+  // 【3】公開バケットへ保存する（logos/<storeId>/<uuid>.<ext>）
+  const ext = IMAGE_MIME_TO_EXT[meta.data.contentType] ?? "bin";
+  const path = buildLogoStoragePath(storeId, randomUUID(), ext);
+  const { publicUrl } = await uploadImage({
+    path,
+    body: file.body,
+    contentType: meta.data.contentType,
+  });
+
+  // 【4】自店の logo_url を公開URLへ更新する
+  await repo.setLogoUrl(storeId, publicUrl);
+
+  // 【5】公開URLを返す
+  return { logoUrl: publicUrl };
 }
 
 // 招待リンク URL を組み立てる関数の型（フロントのベース URL から作る・コンポジションルートで注入）
@@ -356,6 +424,8 @@ export async function getStoreGratitude(
     perStaff: perStaff.map((p) => ({
       staffId: p.staffId,
       staffName: p.staffName,
+      // スタッフのアバター（公開URL・無ければ null）。金額ではない（表示用の画像）
+      avatarUrl: p.avatarUrl,
       count: p.count,
     })),
   };

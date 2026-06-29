@@ -72,10 +72,18 @@ export function createInMemoryStoreRepository(): StoreRepository {
         name: params.name,
         description: params.description,
         industry: params.industry,
-        logoUrl: params.logoUrl,
+        // ロゴは別経路で更新するためテキスト編集では消さない（値が来た時だけ差し替え・実 DB の COALESCE と整合）
+        logoUrl: params.logoUrl ?? store.logoUrl,
       };
       stores.set(storeId, updated);
       return updated;
+    },
+
+    // 自店のロゴ画像URL（公開URL）を更新する（画像アップロード後）
+    async setLogoUrl(storeId, logoUrl) {
+      const store = stores.get(storeId);
+      if (!store) return;
+      stores.set(storeId, { ...store, logoUrl });
     },
 
     async createInvite(storeId, code, label) {
@@ -132,6 +140,7 @@ export function createInMemoryStoreRepository(): StoreRepository {
       return (staffByStore.get(storeId) ?? []).map((s) => ({
         staffId: s.id,
         staffName: s.displayName,
+        avatarUrl: s.avatarUrl,
         count: 0,
       }));
     },
