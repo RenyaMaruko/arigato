@@ -23,6 +23,7 @@ import {
   InviteNotUsableError,
   StaffAlreadyExistsError,
   StaffNotFoundError,
+  MembershipNotFoundError,
   PayoutNotVerifiedError,
   PayoutBelowMinimumError,
   InvalidImageError,
@@ -45,8 +46,13 @@ type StaffDeps = {
     authUserId: string,
     input: CreateStaffProfileInput,
   ) => Promise<StaffMe>;
-  // 招待コードで所属（staff_store）を追加する（参加の確定点）。joined / already_member を返す
+  // 招待コードで所属（staff_store）を追加する（参加の確定点）。joined / rejoined / already_member を返す
   joinStore: (authUserId: string, inviteCode: string) => Promise<JoinStoreResult>;
+  // 自分でその店を脱退する（論理削除）。本人スコープ。脱退後の最新 StaffMe を返す。未作成なら null。
+  leaveStoreMembership: (
+    authUserId: string,
+    membershipId: string,
+  ) => Promise<StaffMe | null>;
   updateStaffProfile: (
     authUserId: string,
     input: UpdateStaffProfileInput,
@@ -121,6 +127,25 @@ export function createStaffRoute(deps: StaffDeps) {
         // プロフィール未作成（先に POST /staff/me が必要）
         if (err instanceof StaffNotFoundError) {
           return c.json({ error: "staff_not_found" }, 404);
+        }
+        throw err;
+      }
+    })
+    // 自分でその店を脱退する（論理削除・本人スコープ）。本人かつ在籍中の membership のみ脱退できる。
+    // 対象が無い（他人の所属・既に脱退済み・存在しない）は 404、未作成も 404。脱退後の StaffMe を返す。
+    .post("/me/memberships/:membershipId/leave", async (c) => {
+      const authUser = c.get("authUser");
+      const membershipId = c.req.param("membershipId");
+      try {
+        const me = await deps.leaveStoreMembership(authUser.id, membershipId);
+        if (!me) {
+          return c.json({ error: "staff_not_found" }, 404);
+        }
+        return c.json(me);
+      } catch (err) {
+        // 対象 membership が見つからない（他人の所属・既に脱退済み・存在しない）
+        if (err instanceof MembershipNotFoundError) {
+          return c.json({ error: "membership_not_found" }, 404);
         }
         throw err;
       }

@@ -120,7 +120,14 @@ function StoreStaffContent({ store }: { store: StoreProfile }) {
             ) : (
               staff.map((s, i) => (
                 <div key={s.id}>
-                  <div className="flex items-center gap-3.5 px-1 py-4">
+                  {/* スタッフ行。タップでスタッフ詳細（基本情報・在籍解除）へ遷移する */}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      navigate({ to: "/store/staff/$staffId", params: { staffId: s.id } })
+                    }
+                    className="flex w-full items-center gap-3.5 px-1 py-4 text-left"
+                  >
                     <div className="flex h-[46px] w-[46px] flex-none items-center justify-center overflow-hidden rounded-full bg-rose-soft text-token-sm text-muted">
                       {s.avatarUrl ? (
                         <img
@@ -138,7 +145,7 @@ function StoreStaffContent({ store }: { store: StoreProfile }) {
                         <div className="mt-0.5 text-token-sm text-muted">{s.headline}</div>
                       )}
                     </div>
-                    {/* 右端の山括弧（リスト行）。装飾的なので淡色 */}
+                    {/* 右端の山括弧（タップ可能を示す） */}
                     <span className="flex-none text-muted-soft" aria-hidden="true">
                       <svg
                         width="20"
@@ -153,7 +160,7 @@ function StoreStaffContent({ store }: { store: StoreProfile }) {
                         <path d="M9 6l6 6-6 6" />
                       </svg>
                     </span>
-                  </div>
+                  </button>
                   {i < staff.length - 1 && <div className="h-px bg-line-soft" />}
                 </div>
               ))

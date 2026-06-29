@@ -1,0 +1,1 @@
+ALTER TABLE "staff_store" ADD COLUMN "left_at" timestamp with time zone;

@@ -9,6 +9,7 @@ import {
   type StoreInviteCreated,
   type StoreInvitesResponse,
   type StoreStaffResponse,
+  type StoreStaffDetail,
   type StoreGratitude,
   type UpdateStoreProfileInput,
   type CreateStoreInput,
@@ -22,6 +23,7 @@ import {
   StoreForbiddenError,
   StoreAlreadyExistsError,
   StoreInviteNotFoundError,
+  StoreStaffNotFoundError,
   InvalidImageError,
 } from "./store.service.js";
 
@@ -69,6 +71,14 @@ type StoreDeps = {
   revokeStoreInvite: (authUserId: string, storeId: string, code: string) => Promise<void>;
   // 所属スタッフ一覧（在籍管理・店スコープ）
   listStoreStaff: (authUserId: string, storeId: string) => Promise<StoreStaffResponse>;
+  // 在籍中スタッフ1人の詳細（基本情報・金額なし・店スコープ）
+  getStoreStaffDetail: (
+    authUserId: string,
+    storeId: string,
+    staffId: string,
+  ) => Promise<StoreStaffDetail>;
+  // 自店のスタッフを在籍解除する（論理削除・店スコープ）
+  removeStoreStaff: (authUserId: string, storeId: string, staffId: string) => Promise<void>;
   // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）。
   // period（from/to・任意）でその期間に絞る（未指定は全期間＝店ホーム互換）。
   // staffId（任意）指定時は voices をその店員さんに絞る（集計値 totalCount/weekCount/perStaff は不変）。
@@ -228,6 +238,42 @@ export function createStoreRoute(deps: StoreDeps) {
         const staff = await deps.listStoreStaff(authUser.id, storeId);
         return c.json(staff);
       } catch (err) {
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // 在籍中スタッフ1人の詳細（基本情報・金額なし・店スコープ）。他店・脱退済み・存在しないは 404
+    .get("/:storeId/staff/:staffId", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      const staffId = c.req.param("staffId");
+      try {
+        const detail = await deps.getStoreStaffDetail(authUser.id, storeId, staffId);
+        return c.json(detail);
+      } catch (err) {
+        // 在籍中のスタッフが見つからない（他店・脱退済み・存在しない）は 404
+        if (err instanceof StoreStaffNotFoundError) {
+          return c.json({ error: "store_staff_not_found" }, 404);
+        }
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // 自店のスタッフを在籍解除する（論理削除・店スコープ）。在籍中のみ操作可。お金は移動しない。
+    .post("/:storeId/staff/:staffId/remove", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      const staffId = c.req.param("staffId");
+      try {
+        await deps.removeStoreStaff(authUser.id, storeId, staffId);
+        return c.json({ ok: true });
+      } catch (err) {
+        // 対象スタッフが見つからない（他店・既に脱退済み・存在しない）は 404
+        if (err instanceof StoreStaffNotFoundError) {
+          return c.json({ error: "store_staff_not_found" }, 404);
+        }
         const mapped = handleStoreScopeError(err);
         if (mapped) return c.json({ error: mapped.error }, mapped.status);
         throw err;

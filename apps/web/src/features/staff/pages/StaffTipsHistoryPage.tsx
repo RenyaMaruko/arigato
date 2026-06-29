@@ -29,20 +29,22 @@ export function StaffTipsHistoryPage() {
   const [storeId, setStoreId] = useState<string>("");
   const [period, setPeriod] = useState<TipsPeriod>("all");
 
-  // 所属店一覧（店舗セレクタの選択肢）
-  const memberships = meQuery.data?.memberships ?? [];
-  // 重複店（掛け持ちで同店が複数 membership になる可能性）を除いた店舗一覧
+  // 店舗セレクタの選択肢は receiptStores（在籍中＋脱退済み）を使う。
+  // QR・所属一覧は active な memberships を使うが、受取履歴のフィルタは脱退店も含めることで、
+  // 脱退した店の過去の収益も引き続き確認できるようにする（仕様）。
+  // receiptStores は API 側で distinct 済みだが、念のためフロントでも重複店を除く。
+  const receiptStores = meQuery.data?.receiptStores ?? [];
   const stores = useMemo(() => {
     const seen = new Set<string>();
     const list: { storeId: string; storeName: string }[] = [];
-    for (const m of memberships) {
-      if (!seen.has(m.storeId)) {
-        seen.add(m.storeId);
-        list.push({ storeId: m.storeId, storeName: m.storeName });
+    for (const s of receiptStores) {
+      if (!seen.has(s.storeId)) {
+        seen.add(s.storeId);
+        list.push({ storeId: s.storeId, storeName: s.storeName });
       }
     }
     return list;
-  }, [memberships]);
+  }, [receiptStores]);
 
   // 期間プリセット → from/to（ISO）を計算し、店舗とまとめてフィルタにする。
   // フィルタ未指定（すべて）は undefined にして API クエリに載せない。

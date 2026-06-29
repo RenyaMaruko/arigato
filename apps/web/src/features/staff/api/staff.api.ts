@@ -92,6 +92,28 @@ export async function joinStore(inviteCode: string): Promise<JoinStoreResult> {
 }
 
 /**
+ * POST /staff/me/memberships/:membershipId/leave — 自分でその店を脱退する（論理削除・本人スコープ）。
+ * 脱退後は active な所属一覧（memberships）からその店が消えるが、受け取った収益は受取履歴で確認できる
+ * （receiptStores に脱退店が残る）。脱退後の最新 StaffMe を返す。対象なし・未作成は error を投げる。
+ */
+export async function leaveMembership(membershipId: string): Promise<StaffMe> {
+  const res = await apiClient.staff.me.memberships[":membershipId"].leave.$post({
+    param: { membershipId },
+  });
+  if (!res.ok) {
+    let code = `status_${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) code = body.error;
+    } catch {
+      // JSON でなければステータスのみ
+    }
+    throw new Error(code);
+  }
+  return StaffMeSchema.parse(await res.json());
+}
+
+/**
  * PATCH /staff/me — 自分のプロフィールを編集する。
  */
 export async function updateStaffProfile(

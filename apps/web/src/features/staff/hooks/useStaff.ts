@@ -12,6 +12,7 @@ import {
   fetchStaffMe,
   createStaffProfile,
   joinStore,
+  leaveMembership,
   updateStaffProfile,
   uploadStaffAvatar,
   fetchInviteInfo,
@@ -85,6 +86,25 @@ export function useJoinStore() {
     onSuccess: () => {
       // 所属一覧（memberships）が増えるため自分のプロフィールを取り直す
       qc.invalidateQueries({ queryKey: STAFF_ME_KEY });
+    },
+  });
+}
+
+/**
+ * 自分でその店を脱退する（POST /staff/me/memberships/:membershipId/leave・論理削除）。
+ * 成功時は staff/me（active な所属一覧）と受取履歴を取り直す
+ * （脱退店は所属一覧から消えるが、受取履歴の店フィルタには残る）。
+ */
+export function useLeaveMembership() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (membershipId: string) => leaveMembership(membershipId),
+    onSuccess: (me) => {
+      // 最新の StaffMe（memberships が減り receiptStores は残る）を即時反映しつつ取り直す
+      qc.setQueryData(STAFF_ME_KEY, me);
+      qc.invalidateQueries({ queryKey: STAFF_ME_KEY });
+      // 受取履歴のサマリー・一覧も整合させる
+      qc.invalidateQueries({ queryKey: ["staff", "tips"] });
     },
   });
 }

@@ -36,6 +36,7 @@ import type {
   StaffRepository,
   StaffProfileRow,
   StaffMembershipRow,
+  StaffReceiptStoreRow,
   ApplyAccountUpdateResult,
 } from "./staff.repository.js";
 import type {
@@ -71,10 +72,13 @@ export function resolvePayoutAvailability(status: IdentityStatus): boolean {
   return canPayout(status);
 }
 
-// プロフィール行＋所属一覧を API 応答（StaffMe）へ変換する内部ヘルパ
+// プロフィール行＋所属一覧（active）＋受取履歴の店フィルタ用の店一覧（在籍中＋脱退済み）を
+// API 応答（StaffMe）へ変換する内部ヘルパ。
+// memberships は active（在籍中）のみ＝QR・所属一覧用。receiptStores は脱退店も含む＝受取履歴の店フィルタ用。
 function toStaffMe(
   profile: StaffProfileRow,
   memberships: StaffMembershipRow[],
+  receiptStores: StaffReceiptStoreRow[],
   buildUrl: BuildTipUrl,
 ): StaffMe {
   return {
@@ -83,7 +87,7 @@ function toStaffMe(
     headline: profile.headline,
     avatarUrl: profile.avatarUrl,
     identityStatus: profile.identityStatus,
-    // 所属店一覧（各 membership ごとに店ごとQR用URL を組み立てる）
+    // 所属店一覧（active のみ・各 membership ごとに店ごとQR用URL を組み立てる）
     memberships: memberships.map((m) => ({
       membershipId: m.membershipId,
       storeId: m.storeId,
@@ -92,6 +96,11 @@ function toStaffMe(
       logoUrl: m.logoUrl,
       // QR が指す固定 URL（/tip/:membershipId）
       tipUrl: buildUrl(m.membershipId),
+    })),
+    // 受取履歴の店舗フィルタの選択肢（在籍中＋脱退済み）。脱退店の過去収益も確認できる
+    receiptStores: receiptStores.map((r) => ({
+      storeId: r.storeId,
+      storeName: r.storeName,
     })),
   };
 }
@@ -130,8 +139,10 @@ export async function getStaffMe(
 ): Promise<StaffMe | null> {
   const profile = await repo.findStaffByAuthUserId(authUserId);
   if (!profile) return null;
+  // 所属一覧（active のみ）と、受取履歴の店フィルタ用の店一覧（在籍中＋脱退済み）を併せて取得する
   const memberships = await repo.listMembershipsByAuthUserId(authUserId);
-  return toStaffMe(profile, memberships, buildUrl);
+  const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl);
 }
 
 // プロフィール作成・参加で起こりうる業務エラー（Route で HTTP ステータスに変換する）
@@ -212,8 +223,8 @@ export async function createStaffProfile(
     }
   }
 
-  // 作成直後は所属なし。所属一覧は空配列で返す（後続の join で追加される）
-  return toStaffMe(profile, [], buildUrl);
+  // 作成直後は所属なし・受取も無し。どちらも空配列で返す（後続の join で追加される）
+  return toStaffMe(profile, [], [], buildUrl);
 }
 
 /**
@@ -263,6 +274,50 @@ export async function joinStore(
   }
 }
 
+// 脱退対象の membership が見つからない（他人の所属・既に脱退済み・存在しない）ときのエラー。
+// Route で 404 に変換する（本人スコープを守り、他人の所属には作用させない）。
+export class MembershipNotFoundError extends Error {
+  constructor() {
+    super("membership_not_found");
+    this.name = "MembershipNotFoundError";
+  }
+}
+
+/**
+ * 店員さんが自分でその店を脱退する（POST /staff/me/memberships/:membershipId/leave・本人スコープ）。
+ * 論理削除（staff_store.left_at = now()）。物理削除しない（tip が membership_id を参照するため履歴を保持）。
+ *
+ * - 本人（authUserId）かつ在籍中（left_at IS NULL）の membership だけを脱退できる（スコープ検証）。
+ * - 他人の所属・既に脱退済み・存在しない membership は MembershipNotFoundError（404）。
+ * - 脱退後はその店が QR・所属一覧・在籍中スタッフ・記録の選択肢から消えるが、
+ *   受け取った収益は受取履歴で引き続き確認できる（receiptStores に脱退店も残る）。
+ * - 再参加（招待からの join）で left_at が null に戻り、同じ QR で受付を再開する。
+ *
+ * 脱退後の最新状態（active な所属一覧・受取履歴の店一覧）を含む StaffMe を返す（フロントの再描画用）。
+ * プロフィール未作成なら null。
+ */
+export async function leaveStoreMembership(
+  repo: StaffRepository,
+  buildUrl: BuildTipUrl,
+  authUserId: string,
+  membershipId: string,
+): Promise<StaffMe | null> {
+  // 本人のプロフィールが必要（未作成なら所属も無い）
+  const profile = await repo.findStaffByAuthUserId(authUserId);
+  if (!profile) return null;
+
+  // 本人かつ在籍中の membership のみ脱退できる（他人の所属・既に脱退済みは 0 件＝404）
+  const affected = await repo.leaveMembership(authUserId, membershipId);
+  if (affected === 0) {
+    throw new MembershipNotFoundError();
+  }
+
+  // 脱退後の最新状態を返す（その店は memberships から消え、receiptStores には残る）
+  const memberships = await repo.listMembershipsByAuthUserId(authUserId);
+  const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl);
+}
+
 /**
  * 自分のプロフィールを編集する（PATCH /staff/me・本人スコープ）。
  * 所属は変更せず、display_name・headline・avatar のみ更新する。
@@ -280,9 +335,10 @@ export async function updateStaffProfile(
     avatarUrl: input.avatarUrl ?? null,
   });
   if (!profile) return null;
-  // 更新後の所属一覧も併せて返す（ホーム再描画に使える）
+  // 更新後の所属一覧（active）・受取履歴の店一覧も併せて返す（ホーム再描画に使える）
   const memberships = await repo.listMembershipsByAuthUserId(authUserId);
-  return toStaffMe(profile, memberships, buildUrl);
+  const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl);
 }
 
 // 画像を公開バケットへアップロードする infrastructure 関数の型（コンポジションルートで注入）。

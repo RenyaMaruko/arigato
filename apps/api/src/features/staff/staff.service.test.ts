@@ -4,6 +4,8 @@ import {
   getStaffMe,
   createStaffProfile,
   joinStore,
+  leaveStoreMembership,
+  MembershipNotFoundError,
   updateStaffProfile,
   getStaffTips,
   getStaffBalance,
@@ -77,6 +79,8 @@ function createMockRepo() {
   const authByStaffId = new Map<string, string>();
   // payout（送金）の簡易ストア（payoutId をキー）
   const payoutsByStaff = new Map<string, TestPayout>();
+  // 脱退済み（論理削除）の membershipId 集合（leftAt 相当）。在籍中＝この集合に無い
+  const leftMembershipIds = new Set<string>();
   // membership ID の採番カウンタ
   let membershipSeq = 0;
   // payout ID の採番カウンタ
@@ -107,7 +111,30 @@ function createMockRepo() {
       return staffByAuth.get(authUserId) ?? null;
     },
     async listMembershipsByAuthUserId(authUserId) {
-      return membershipsByAuth.get(authUserId) ?? [];
+      // 在籍中（脱退集合に無い）のみ返す（脱退店は QR・所属一覧から消える）
+      return (membershipsByAuth.get(authUserId) ?? []).filter(
+        (m) => !leftMembershipIds.has(m.membershipId),
+      );
+    },
+    // 受取履歴の店フィルタ用の店一覧（在籍中＋脱退済み）。membership（脱退済み含む）から distinct で返す
+    async listReceiptStoresByAuthUserId(authUserId) {
+      const seen = new Set<string>();
+      const result: { storeId: string; storeName: string }[] = [];
+      for (const m of membershipsByAuth.get(authUserId) ?? []) {
+        if (seen.has(m.storeId)) continue;
+        seen.add(m.storeId);
+        result.push({ storeId: m.storeId, storeName: m.storeName });
+      }
+      return result;
+    },
+    // 本人かつ在籍中の membership のみ脱退（leftAt 相当の集合に入れる）。0/1 件を返す（スコープ検証）
+    async leaveMembership(authUserId, membershipId) {
+      const list = membershipsByAuth.get(authUserId) ?? [];
+      const target = list.find((m) => m.membershipId === membershipId);
+      // 他人の所属・既に脱退済み・存在しないは 0 件
+      if (!target || leftMembershipIds.has(membershipId)) return 0;
+      leftMembershipIds.add(membershipId);
+      return 1;
     },
     // プロフィール（人ごと1つ）を作成する。所属は含めない
     async createStaffProfile(params) {
@@ -138,9 +165,10 @@ function createMockRepo() {
         throw new Error("staff_not_found");
       }
       const current = membershipsByAuth.get(authUserId) ?? [];
-      // 既に同じ店に所属していれば already_member（招待は消費しない）
+      // 同じ (staff,store) の既存 membership（在籍/脱退を問わず）
       const existing = current.find((m) => m.storeId === invite.storeId);
-      if (existing) {
+      // 在籍中なら already_member（招待は消費しない・多重参加不可）
+      if (existing && !leftMembershipIds.has(existing.membershipId)) {
         return {
           outcome: "already_member",
           membershipId: existing.membershipId,
@@ -148,7 +176,18 @@ function createMockRepo() {
           storeName: existing.storeName,
         } satisfies JoinResultRow;
       }
-      // 新規所属を作成する
+      // 脱退済みなら再有効化（leftAt を外す・同じ membershipId が復活）
+      if (existing && leftMembershipIds.has(existing.membershipId)) {
+        leftMembershipIds.delete(existing.membershipId);
+        invites.set(code, { ...invite, inviteStatus: "accepted" });
+        return {
+          outcome: "rejoined",
+          membershipId: existing.membershipId,
+          storeId: existing.storeId,
+          storeName: existing.storeName,
+        } satisfies JoinResultRow;
+      }
+      // 存在しなければ新規所属を作成する
       membershipSeq += 1;
       const membershipId = `membership-${membershipSeq}`;
       const next = [
@@ -658,6 +697,79 @@ describe("staff.service", () => {
 
   it("getStaffMe: プロフィール未作成なら null（フロントは作成へ誘導）", async () => {
     expect(await getStaffMe(mock.repo, buildUrl, "no-staff")).toBeNull();
+  });
+
+  // --- 脱退（論理削除）・再参加（再有効化）・receiptStores（脱退店も残る） ---
+
+  it("leaveStoreMembership: 脱退すると active な所属一覧から消える（QR・所属一覧から外れる）", async () => {
+    const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    // 脱退前は1件
+    let me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.memberships).toHaveLength(1);
+
+    // 自分でその店を脱退する（本人スコープ）
+    const after = await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    // 脱退後は active な所属が0件（その店は消える）
+    expect(after!.memberships).toHaveLength(0);
+    me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.memberships).toHaveLength(0);
+  });
+
+  it("leaveStoreMembership: receiptStores には脱退店が残る（過去の収益を確認できる）", async () => {
+    const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    // active な所属は0だが、受取履歴の店フィルタには脱退店が残る
+    expect(me!.memberships).toHaveLength(0);
+    expect(me!.receiptStores.map((r) => r.storeName)).toContain("カフェ Arigato");
+  });
+
+  it("leaveStoreMembership: 他人の membership は脱退できない（スコープ検証・404）", async () => {
+    // 本人(user-1)が参加して membership を作る
+    const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    // 別人(user-2)もプロフィールを作る
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-2", {
+      displayName: "別の人",
+    });
+    // user-2 が user-1 の membership を脱退しようとしても作用しない（404）
+    await expect(
+      leaveStoreMembership(mock.repo, buildUrl, "auth-user-2", joined.membershipId),
+    ).rejects.toBeInstanceOf(MembershipNotFoundError);
+    // user-1 の所属は健在（脱退されていない）
+    const me1 = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me1!.memberships).toHaveLength(1);
+  });
+
+  it("leaveStoreMembership: 既に脱退済みの membership は 404（二重脱退不可）", async () => {
+    const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    await expect(
+      leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId),
+    ).rejects.toBeInstanceOf(MembershipNotFoundError);
+  });
+
+  it("joinStore: 脱退済みの店に再参加すると rejoined で再有効化し、同じ membershipId が復活する", async () => {
+    const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+
+    // 同じ店の別の pending 招待を用意する（再参加用）
+    mock.invites.set("INV-OK-REJOIN", {
+      code: "INV-OK-REJOIN",
+      storeId: "store-1",
+      storeName: "カフェ Arigato",
+      inviteStatus: "pending",
+      storeAdopted: true,
+    });
+    const rejoined = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-OK-REJOIN");
+    // 再有効化（新規行は作らない＝同じ membershipId）
+    expect(rejoined.status).toBe("rejoined");
+    expect(rejoined.membershipId).toBe(joined.membershipId);
+    // 同じ QR（/tip/:membershipId）が再び有効
+    expect(rejoined.tipUrl).toBe(`http://localhost:5173/tip/${joined.membershipId}`);
+    // active な所属一覧に再び現れる
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.memberships).toHaveLength(1);
+    expect(me!.memberships[0]!.membershipId).toBe(joined.membershipId);
   });
 
   // --- プロフィール編集（所属は変わらない） ---

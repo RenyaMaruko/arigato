@@ -59,6 +59,16 @@ export type StoreStaffRow = {
   avatarUrl: string | null;
 };
 
+// 在籍中スタッフ1人の詳細行（店スコープ・金額なし）。参加日は staff_store.created_at。
+export type StoreStaffDetailRow = {
+  id: string;
+  displayName: string;
+  headline: string | null;
+  avatarUrl: string | null;
+  // その店に参加した日時（staff_store.created_at。ISO 文字列）
+  joinedAt: string;
+};
+
 // 感謝の「お客さまの声」1件分（金額なし）
 export type GratitudeVoiceRow = {
   id: string;
@@ -124,8 +134,15 @@ export type StoreRepository = {
   findInviteByCode: (storeId: string, code: string) => Promise<StoreInviteRow | null>;
   // 自店の招待中（pending）を失効（revoked）にする。更新できた件数を返す（0 なら対象なし）
   revokeInvite: (storeId: string, code: string) => Promise<number>;
-  // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（在籍管理。中立な並び）
+  // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（在籍管理。中立な並び）。
+  // 在籍中（left_at IS NULL）のみ返す（脱退・在籍解除済みは外れる）。
   listStaff: (storeId: string) => Promise<StoreStaffRow[]>;
+  // 自店の在籍中スタッフ1人の詳細（表示名・一言・顔写真・参加日）を取得する（店スコープ・金額なし）。
+  // 在籍中（left_at IS NULL）のみ対象。見つからない（他店・脱退済み・存在しない）なら null。
+  findStaffDetail: (storeId: string, staffId: string) => Promise<StoreStaffDetailRow | null>;
+  // 自店のスタッフを在籍解除する（論理削除）。その (staff,store) の membership に left_at=now() を立てる。
+  // 在籍中（left_at IS NULL）のみ対象。物理削除しない（tip の履歴を保持）。解除できた件数を返す。
+  removeStaff: (storeId: string, staffId: string) => Promise<number>;
   // 自店宛の「お客さまの声」（成立済み投げ銭）を新しい順に取得する（金額なし）。
   // period（from/to）を渡すとその期間に絞る（未指定は全期間）。
   // staffId を渡すと、その店員さん宛の声だけに絞る（未指定は全スタッフ・スタッフ別タブの「特定スタッフ」用）。
@@ -326,6 +343,7 @@ export function createStoreRepository(): StoreRepository {
 
     // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（中立な並び・金額や件数では並べない）。
     // 多対多モデル: 所属は staff_store（membership）で表すため、staff_store 経由でこの店のメンバーを引く。
+    // 在籍中（left_at IS NULL）のみ返す（脱退・在籍解除済みは外れる）。
     // 並びは在籍（staff_store.created_at）が古い順にして、件数・金額では並べ替えない（中立）。
     async listStaff(storeId) {
       const db = getDb();
@@ -338,9 +356,46 @@ export function createStoreRepository(): StoreRepository {
         FROM staff_store ss
         JOIN staff s ON s.id = ss.staff_id
         WHERE ss.store_id = ${storeId}
+          AND ss.left_at IS NULL
         ORDER BY ss.created_at ASC
       `);
       return rows;
+    },
+
+    // 自店の在籍中スタッフ1人の詳細を取得する（店スコープ・金額なし）。
+    // 在籍中（left_at IS NULL）のみ対象。他店・脱退済み・存在しないなら null。
+    async findStaffDetail(storeId, staffId) {
+      const db = getDb();
+      const rows = await db.execute<StoreStaffDetailRow>(sql`
+        SELECT
+          s.id            AS "id",
+          s.display_name  AS "displayName",
+          s.headline      AS "headline",
+          s.avatar_url    AS "avatarUrl",
+          to_char(ss.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "joinedAt"
+        FROM staff_store ss
+        JOIN staff s ON s.id = ss.staff_id
+        WHERE ss.store_id = ${storeId}
+          AND ss.staff_id = ${staffId}
+          AND ss.left_at IS NULL
+        LIMIT 1
+      `);
+      return rows[0] ?? null;
+    },
+
+    // 自店のスタッフを在籍解除する（論理削除）。その (staff,store) の在籍中 membership に left_at=now()。
+    // 物理削除しない（tip の履歴を保持）。在籍中（left_at IS NULL）のみ対象。解除できた件数を返す。
+    async removeStaff(storeId, staffId) {
+      const db = getDb();
+      const rows = await db.execute<{ id: string }>(sql`
+        UPDATE staff_store
+        SET left_at = now()
+        WHERE store_id = ${storeId}
+          AND staff_id = ${staffId}
+          AND left_at IS NULL
+        RETURNING id AS "id"
+      `);
+      return rows.length;
     },
 
     // 自店宛の「お客さまの声」を新しい順に取得する（成立済みのみ・金額は SELECT しない）。
@@ -387,6 +442,9 @@ export function createStoreRepository(): StoreRepository {
     // COUNT のみで金額は扱わず、ORDER BY も在籍（名簿順）にして件数では並べ替えない（中立）。
     // 多対多モデル: この店のメンバー（staff_store）を引き、その店での成立済み tip だけを数える
     // （t.store_id でこの店分に限定するため、掛け持ちの他店分は混ざらない）。
+    // 在籍中（ss.left_at IS NULL）のスタッフのみ対象（脱退者はスタッフ別一覧・選択肢から外れる）。
+    //  ※ totalCount/voices（店全体）は脱退者の在籍当時分も含むが、ここ（perStaff）は active のみ。
+    //    その結果 sum(perStaff) < totalCount になり得るが、仕様どおり（在籍管理は active・総数は履歴保持）。
     // period（from/to）を渡すと、件数を数える tip をその期間に絞る（LEFT JOIN の ON 条件に AND）。
     // ON 側に置くことで、期間内に件数 0 のスタッフも名簿順で 0 件として残る（中立な並びを保つ）。
     async listGratitudePerStaff(storeId, period) {
@@ -405,6 +463,7 @@ export function createStoreRepository(): StoreRepository {
           AND t.status = 'succeeded'
           ${gratitudePeriodClause(period)}
         WHERE ss.store_id = ${storeId}
+          AND ss.left_at IS NULL
         GROUP BY s.id, s.display_name, s.avatar_url, ss.created_at
         ORDER BY ss.created_at ASC
       `);

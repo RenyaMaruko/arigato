@@ -29,6 +29,7 @@ import {
   getStaffMe,
   createStaffProfile,
   joinStore,
+  leaveStoreMembership,
   updateStaffProfile,
   uploadStaffAvatar,
   getStaffTips,
@@ -54,6 +55,8 @@ import {
   listStoreInvites,
   revokeStoreInvite,
   listStoreStaff,
+  getStoreStaffDetail,
+  removeStoreStaff,
   getStoreGratitude,
   uploadStoreLogo,
 } from "./features/store/store.service.js";
@@ -150,9 +153,12 @@ export function createApp() {
     // feature は Stripe SDK を直接知らない。infrastructure の createConnectedAccount を注入する。
     createStaffProfile: (authUserId, input) =>
       createStaffProfile(staffRepo, buildStaffTipUrl, createConnectedAccount, authUserId, input),
-    // 招待コードで所属（staff_store）を追加する（参加の確定点。新規/既存問わず）
+    // 招待コードで所属（staff_store）を追加する（参加の確定点。新規/既存/再参加を問わず）
     joinStore: (authUserId, inviteCode) =>
       joinStore(staffRepo, buildStaffTipUrl, authUserId, inviteCode),
+    // 自分でその店を脱退する（論理削除・本人スコープ）。脱退後の最新 StaffMe を返す
+    leaveStoreMembership: (authUserId, membershipId) =>
+      leaveStoreMembership(staffRepo, buildStaffTipUrl, authUserId, membershipId),
     updateStaffProfile: (authUserId, input) =>
       updateStaffProfile(staffRepo, buildStaffTipUrl, authUserId, input),
     // アバター画像のアップロード。Supabase Storage（infrastructure）へ保存し avatar_url を更新する。
@@ -207,6 +213,12 @@ export function createApp() {
     revokeStoreInvite: (authUserId, storeId, code) =>
       revokeStoreInvite(storeRepo, authUserId, storeId, code),
     listStoreStaff: (authUserId, storeId) => listStoreStaff(storeRepo, authUserId, storeId),
+    // 在籍中スタッフ1人の詳細（基本情報・金額なし・店スコープ）
+    getStoreStaffDetail: (authUserId, storeId, staffId) =>
+      getStoreStaffDetail(storeRepo, authUserId, storeId, staffId),
+    // 自店のスタッフを在籍解除する（論理削除・店スコープ）。お金は移動しない
+    removeStoreStaff: (authUserId, storeId, staffId) =>
+      removeStoreStaff(storeRepo, authUserId, storeId, staffId),
     // 感謝の集計の基準時刻はサーバーの現在時刻（now）を渡す。period（from/to）は記録画面の期間セレクタ由来
     getStoreGratitude: (authUserId, storeId, period) =>
       getStoreGratitude(storeRepo, authUserId, storeId, new Date(), period),

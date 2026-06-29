@@ -8,11 +8,14 @@ import {
   listStoreInvites,
   revokeStoreInvite,
   listStoreStaff,
+  getStoreStaffDetail,
+  removeStoreStaff,
   getStoreGratitude,
   uploadStoreLogo,
   StoreForbiddenError,
   StoreAlreadyExistsError,
   StoreInviteNotFoundError,
+  StoreStaffNotFoundError,
   InvalidImageError,
 } from "./store.service.js";
 import { buildInviteUrl } from "./store.model.js";
@@ -51,6 +54,9 @@ function createMockRepo() {
   const stores = new Map<string, StoreRow>();
   const invitesByStore = new Map<string, StoreInviteRow[]>();
   const staffByStore = new Map<string, StoreStaffRow[]>();
+  // 在籍解除（論理削除）済みの (storeId, staffId) 集合（left_at 相当）。在籍中＝この集合に無い
+  const removedStaff = new Set<string>();
+  const removedKey = (storeId: string, staffId: string) => `${storeId}::${staffId}`;
   // 声に staffId を持たせて、staffId 絞りの検証ができるようにする（実 DB の t.staff_id = ... と同じ振る舞い）
   const voicesByStore = new Map<string, (GratitudeVoiceRow & { staffId?: string })[]>();
   const timesByStore = new Map<string, GratitudeTimeRow[]>();
@@ -127,7 +133,29 @@ function createMockRepo() {
       return 1;
     },
     async listStaff(storeId) {
-      return [...(staffByStore.get(storeId) ?? [])];
+      // 在籍中（在籍解除集合に無い）のみ返す
+      return (staffByStore.get(storeId) ?? []).filter(
+        (s) => !removedStaff.has(removedKey(storeId, s.id)),
+      );
+    },
+    // 在籍中スタッフ1人の詳細（参加日付き・金額なし）。脱退済み・他店・存在しないは null
+    async findStaffDetail(storeId, staffId) {
+      const s = (staffByStore.get(storeId) ?? []).find((x) => x.id === staffId);
+      if (!s || removedStaff.has(removedKey(storeId, staffId))) return null;
+      return {
+        id: s.id,
+        displayName: s.displayName,
+        headline: s.headline,
+        avatarUrl: s.avatarUrl,
+        joinedAt: "2026-06-23T00:00:00Z",
+      };
+    },
+    // 自店のスタッフを在籍解除する（論理削除）。在籍中のみ対象。解除できた件数を返す
+    async removeStaff(storeId, staffId) {
+      const s = (staffByStore.get(storeId) ?? []).find((x) => x.id === staffId);
+      if (!s || removedStaff.has(removedKey(storeId, staffId))) return 0;
+      removedStaff.add(removedKey(storeId, staffId));
+      return 1;
     },
     async listGratitudeVoices(storeId, limit, period, staffId) {
       // 期間（from 含む・to 排他）が来たら受取日時で絞る。実 DB の SQL と同じ振る舞いをモックでも再現する
@@ -370,6 +398,74 @@ describe("store.service", () => {
     // 金額や件数のキーが含まれない
     const json = JSON.stringify(res);
     expect(json).not.toMatch(/amount|customer_total|platform_fee|balance|payout/i);
+  });
+
+  it("getStoreStaffDetail: 在籍中スタッフの基本情報（参加日付き・金額なし）を返す", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: "ホール", avatarUrl: null },
+    ]);
+    const detail = await getStoreStaffDetail(m.repo, "owner-1", "store-1", "s1");
+    expect(detail.id).toBe("s1");
+    expect(detail.displayName).toBe("山田 さくら");
+    expect(detail.joinedAt).toBeTruthy();
+    // 金額に関わるキーが含まれない（店はお金に触れない）
+    expect(JSON.stringify(detail)).not.toMatch(/amount|customer_total|platform_fee|balance|payout/i);
+  });
+
+  it("getStoreStaffDetail: 他店のオーナーは取得できない（店スコープ・404 相当）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: null, avatarUrl: null },
+    ]);
+    await expect(
+      getStoreStaffDetail(m.repo, "intruder", "store-1", "s1"),
+    ).rejects.toBeInstanceOf(StoreForbiddenError);
+  });
+
+  it("removeStoreStaff: 在籍解除すると在籍中一覧・スタッフ詳細から消える（論理削除・お金は移動しない）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: "ホール", avatarUrl: null },
+      { id: "s2", displayName: "田中 健一", headline: "バリスタ", avatarUrl: null },
+    ]);
+    // 在籍解除前は2人
+    expect((await listStoreStaff(m.repo, "owner-1", "store-1")).count).toBe(2);
+
+    // s1 を在籍解除する
+    await removeStoreStaff(m.repo, "owner-1", "store-1", "s1");
+
+    // 在籍中一覧から消える（1人になる）
+    const after = await listStoreStaff(m.repo, "owner-1", "store-1");
+    expect(after.count).toBe(1);
+    expect(after.items[0]!.id).toBe("s2");
+    // 在籍解除済みは詳細も 404 相当
+    await expect(
+      getStoreStaffDetail(m.repo, "owner-1", "store-1", "s1"),
+    ).rejects.toBeInstanceOf(StoreStaffNotFoundError);
+  });
+
+  it("removeStoreStaff: 他店のオーナーは在籍解除できない（店スコープ）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: null, avatarUrl: null },
+    ]);
+    await expect(
+      removeStoreStaff(m.repo, "intruder", "store-1", "s1"),
+    ).rejects.toBeInstanceOf(StoreForbiddenError);
+    // 在籍は健在
+    expect((await listStoreStaff(m.repo, "owner-1", "store-1")).count).toBe(1);
+  });
+
+  it("removeStoreStaff: 既に在籍解除済みのスタッフは 404（二重解除不可）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: null, avatarUrl: null },
+    ]);
+    await removeStoreStaff(m.repo, "owner-1", "store-1", "s1");
+    await expect(
+      removeStoreStaff(m.repo, "owner-1", "store-1", "s1"),
+    ).rejects.toBeInstanceOf(StoreStaffNotFoundError);
   });
 
   it("getStoreGratitude: 期間未指定なら全期間の件数・お客さまの声・スタッフ別件数を返す（店ホーム互換）", async () => {

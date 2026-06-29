@@ -9,6 +9,8 @@ import {
   revokeStoreInvite,
   fetchStoreInvites,
   fetchStoreStaff,
+  fetchStoreStaffDetail,
+  removeStoreStaff,
   fetchStoreGratitude,
 } from "../api/store.api.js";
 
@@ -129,6 +131,35 @@ export function useStoreStaff(storeId: string | undefined) {
     queryFn: () => fetchStoreStaff(storeId!),
     enabled: Boolean(storeId),
     retry: false,
+  });
+}
+
+/**
+ * 在籍中スタッフ1人の詳細（GET /store/:storeId/staff/:staffId）を取得する。
+ * storeId と staffId が確定しているときだけ走らせる。
+ */
+export function useStoreStaffDetail(storeId: string | undefined, staffId: string | undefined) {
+  return useQuery({
+    queryKey: ["store", "staff", storeId, staffId],
+    queryFn: () => fetchStoreStaffDetail(storeId!, staffId!),
+    enabled: Boolean(storeId) && Boolean(staffId),
+    retry: false,
+  });
+}
+
+/**
+ * 自店のスタッフを在籍解除する（POST /store/:storeId/staff/:staffId/remove・論理削除）。
+ * 成功時はスタッフ一覧・記録（スタッフ別件数）を取り直す（在籍解除した人が消える）。お金は移動しない。
+ */
+export function useRemoveStoreStaff(storeId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (staffId: string) => removeStoreStaff(storeId!, staffId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["store", "staff", storeId] });
+      // 記録（スタッフ別件数・選択肢）も active のみになるため取り直す
+      qc.invalidateQueries({ queryKey: ["store", "gratitude", storeId] });
+    },
   });
 }
 

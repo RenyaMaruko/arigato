@@ -59,7 +59,8 @@ export async function getStaffDisplayInfo(
   const row = await repo.findMembershipDisplay(membershipId);
   if (!row) return null;
 
-  // 表示に必要な項目だけに絞って返す
+  // 表示に必要な項目だけに絞って返す。
+  // accepting は在籍中（left=false）のときのみ true（脱退中の QR は受付停止＝再参加で再開）。
   return {
     membershipId: row.membershipId,
     staffId: row.staffId,
@@ -67,6 +68,7 @@ export async function getStaffDisplayInfo(
     headline: row.headline,
     avatarUrl: row.avatarUrl,
     storeName: row.storeName,
+    accepting: !row.left,
   };
 }
 
@@ -81,6 +83,15 @@ export class StaffNotChargeableError extends Error {
   constructor() {
     super("staff_not_chargeable");
     this.name = "StaffNotChargeableError";
+  }
+}
+
+// この membership（QR）が脱退・在籍解除済みで、新規投げ銭を受け付けていないことを示すエラー。
+// 店員さんが再参加すると同じ QR で受付を再開する（履歴・残高はその店で連続）。
+export class MembershipNotAcceptingError extends Error {
+  constructor() {
+    super("membership_not_accepting");
+    this.name = "MembershipNotAcceptingError";
   }
 }
 
@@ -105,6 +116,12 @@ export async function createTipIntent(
   // 送り先 membership（人×店）を解決（送信時点の店を tip に固定保存するため）
   const staffRow = await repo.findMembershipDisplay(membershipId);
   if (!staffRow) return null;
+
+  // 脱退・在籍解除済みの membership は新規投げ銭を受け付けない（再参加で再開する）。
+  // tip intent を作る前に弾く（お金を一切動かさない）。
+  if (staffRow.left) {
+    throw new MembershipNotAcceptingError();
+  }
 
   // Connected Account が無いと Direct charge の課金先が存在しない（着金口の準備が未了）
   if (!staffRow.stripeAccountId) {

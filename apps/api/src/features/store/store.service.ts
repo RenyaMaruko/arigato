@@ -4,6 +4,7 @@ import type {
   StoreInviteCreated,
   StoreInvitesResponse,
   StoreStaffResponse,
+  StoreStaffDetail,
   StoreGratitude,
   UpdateStoreProfileInput,
   CreateStoreInput,
@@ -354,6 +355,64 @@ export async function listStoreStaff(
     })),
     count: staff.length,
   };
+}
+
+// スタッフ詳細・在籍解除で対象スタッフが見つからない（他店・脱退済み・存在しない）ときのエラー。
+// Route で 404 に変換する（在籍中のスタッフのみ詳細表示・在籍解除できる）。
+export class StoreStaffNotFoundError extends Error {
+  constructor() {
+    super("store_staff_not_found");
+    this.name = "StoreStaffNotFoundError";
+  }
+}
+
+/**
+ * 在籍中スタッフ1人の詳細を取得する（GET /store/:storeId/staff/:staffId）。店スコープ。
+ * 自店のオーナーであることを確認し、在籍中（left_at IS NULL）のスタッフの基本情報だけを返す。
+ * 金額・受取件数は一切返さない（店はお金に触れない）。他店・脱退済み・存在しないは StoreStaffNotFoundError。
+ */
+export async function getStoreStaffDetail(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+  staffId: string,
+): Promise<StoreStaffDetail> {
+  await requireOwnedStore(repo, authUserId, storeId);
+  const detail = await repo.findStaffDetail(storeId, staffId);
+  if (!detail) {
+    throw new StoreStaffNotFoundError();
+  }
+  return {
+    id: detail.id,
+    displayName: detail.displayName,
+    headline: detail.headline,
+    avatarUrl: detail.avatarUrl,
+    joinedAt: detail.joinedAt,
+  };
+}
+
+/**
+ * 自店のスタッフを在籍解除する（POST /store/:storeId/staff/:staffId/remove）。店スコープ。
+ * 論理削除（staff_store.left_at = now()）。物理削除しない（tip の履歴を保持＝お金は移動しない）。
+ *
+ * - 自店のオーナーであることを確認する（他店のスタッフは触れない＝スコープ検証）。
+ * - 在籍中（left_at IS NULL）の (staff,store) のみ対象。他店・脱退済み・存在しないは StoreStaffNotFoundError。
+ * - 解除後はその店員さんが在籍中一覧・記録のスタッフ別・選択肢から消えるが、その店員さん本人の
+ *   受取履歴・収益はそのまま残る（お金は移動しない＝受け取り済みは本人のもの）。
+ * - その店員さんが再参加（招待からの join）すると left_at が null に戻り、同じ QR で復活する。
+ */
+export async function removeStoreStaff(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+  staffId: string,
+): Promise<void> {
+  // 自店のオーナーであることを先に確認する（他店のスタッフは触れない）
+  await requireOwnedStore(repo, authUserId, storeId);
+  const removed = await repo.removeStaff(storeId, staffId);
+  if (removed === 0) {
+    throw new StoreStaffNotFoundError();
+  }
 }
 
 // 感謝の可視化の絞り込み（記録画面の期間セレクタから渡る from/to と、スタッフ別タブの staffId）。

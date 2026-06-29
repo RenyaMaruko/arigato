@@ -1,11 +1,11 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { QRCodeSVG } from "qrcode.react";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
-import { useStaffMe } from "../hooks/useStaff.js";
+import { useStaffMe, useLeaveMembership } from "../hooks/useStaff.js";
 
 /**
  * 所属店舗の詳細画面（/staff/stores/:membershipId）。
@@ -21,6 +21,9 @@ export function StaffStoreDetailPage() {
   // ログイン状態と自分のプロフィール（所属一覧＝memberships を含む）を取得
   const { isAuthenticated, loading: authLoading } = useAuthSession();
   const meQuery = useStaffMe(isAuthenticated);
+  // この店を脱退する（論理削除）。確認ダイアログの開閉は UI 状態として持つ
+  const leaveMutation = useLeaveMembership();
+  const [confirmingLeave, setConfirmingLeave] = useState(false);
 
   // 未ログイン・未作成なら入口（認証ゲート）へ戻す。リダイレクトは副作用で行う
   const me = meQuery.data;
@@ -66,6 +69,16 @@ export function StaffStoreDetailPage() {
   // 印刷を実行する（QR と名前のみが出るようにレイアウトしている）
   const handlePrint = () => {
     window.print();
+  };
+
+  // この店を脱退する（確認ダイアログで実行）。成功したら所属一覧へ戻す（その店は一覧から消える）。
+  const handleLeave = () => {
+    leaveMutation.mutate(membership.membershipId, {
+      onSuccess: () => {
+        setConfirmingLeave(false);
+        navigate({ to: "/staff/stores" });
+      },
+    });
   };
 
   return (
@@ -148,7 +161,7 @@ export function StaffStoreDetailPage() {
           <div className="mt-1 text-token-sm text-ink">{membership.tipUrl}</div>
         </div>
 
-        {/* 印刷ボタン（画面のみ） */}
+        {/* 印刷ボタン・脱退ボタン（画面のみ） */}
         <div className="mt-auto flex flex-col gap-3 pt-8 print:hidden">
           <button
             type="button"
@@ -157,8 +170,53 @@ export function StaffStoreDetailPage() {
           >
             {t("staff.qrPrint")}
           </button>
+          {/* この店を脱退する（控えめなテキストボタン。実行は確認ダイアログを挟む） */}
+          <button
+            type="button"
+            onClick={() => setConfirmingLeave(true)}
+            className="py-2 text-center text-token-sm font-semibold text-muted underline-offset-2 hover:underline"
+          >
+            {t("staff.leaveStoreCta")}
+          </button>
         </div>
       </div>
+
+      {/* 脱退の確認ダイアログ（注意書き付き：脱退しても受取履歴で収益を確認できる） */}
+      {confirmingLeave && (
+        <div className="absolute inset-0 z-20 flex items-end justify-center bg-ink/40 print:hidden">
+          <div className="w-full rounded-t-2xl bg-page px-6 pb-7 pt-6">
+            <h2 className="text-token-lg font-bold text-ink">{t("staff.leaveConfirmTitle")}</h2>
+            <p className="mt-3 text-token-sm leading-relaxed text-ink-sub">
+              {t("staff.leaveConfirmBody", { store: membership.storeName })}
+            </p>
+            {/* 注意書き（脱退しても受け取った収益は受取履歴で引き続き確認できます） */}
+            <p className="mt-3 rounded-xl bg-rose-soft px-4 py-3 text-token-sm leading-relaxed text-rose">
+              {t("staff.leaveConfirmNote")}
+            </p>
+            {leaveMutation.isError && (
+              <p className="mt-3 text-token-sm text-rose">{t("staff.leaveError")}</p>
+            )}
+            <div className="mt-5 flex flex-col gap-2.5">
+              <button
+                type="button"
+                onClick={handleLeave}
+                disabled={leaveMutation.isPending}
+                className="rounded-xl bg-rose py-3.5 text-center text-token-md font-bold text-page disabled:opacity-60"
+              >
+                {leaveMutation.isPending ? t("staff.leaving") : t("staff.leaveConfirmCta")}
+              </button>
+              <button
+                type="button"
+                onClick={() => setConfirmingLeave(false)}
+                disabled={leaveMutation.isPending}
+                className="py-2 text-center text-token-sm font-semibold text-muted"
+              >
+                {t("staff.leaveCancel")}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* 下部ボトムナビ（現在地＝所属店舗。印刷時は隠す） */}
       <div className="print:hidden">

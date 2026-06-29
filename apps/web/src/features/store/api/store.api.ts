@@ -3,6 +3,7 @@ import {
   StoreInviteCreatedSchema,
   StoreInvitesResponseSchema,
   StoreStaffResponseSchema,
+  StoreStaffDetailSchema,
   StoreGratitudeSchema,
   LogoUploadResultSchema,
   type StoreProfile,
@@ -10,6 +11,7 @@ import {
   type StoreInviteCreated,
   type StoreInvitesResponse,
   type StoreStaffResponse,
+  type StoreStaffDetail,
   type StoreGratitude,
   type UpdateStoreProfileInput,
   type CreateStoreInput,
@@ -174,6 +176,50 @@ export async function fetchStoreStaff(storeId: string): Promise<StoreStaffRespon
     throw new Error(`store staff request failed: ${res.status}`);
   }
   return StoreStaffResponseSchema.parse(await res.json());
+}
+
+/**
+ * GET /store/:storeId/staff/:staffId — 在籍中スタッフ1人の詳細を取得する（基本情報・金額なし・店スコープ）。
+ * 他店・脱退済み・存在しないは error を投げる。
+ */
+export async function fetchStoreStaffDetail(
+  storeId: string,
+  staffId: string,
+): Promise<StoreStaffDetail> {
+  const res = await apiClient.store[":storeId"].staff[":staffId"].$get({
+    param: { storeId, staffId },
+  });
+  if (!res.ok) {
+    let code = `status_${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) code = body.error;
+    } catch {
+      // JSON でなければステータスのみ
+    }
+    throw new Error(code);
+  }
+  return StoreStaffDetailSchema.parse(await res.json());
+}
+
+/**
+ * POST /store/:storeId/staff/:staffId/remove — 自店のスタッフを在籍解除する（論理削除・店スコープ）。
+ * お金は移動しない（受け取り済みは本人のもの）。対象なし・他店は error を投げる。
+ */
+export async function removeStoreStaff(storeId: string, staffId: string): Promise<void> {
+  const res = await apiClient.store[":storeId"].staff[":staffId"].remove.$post({
+    param: { storeId, staffId },
+  });
+  if (!res.ok) {
+    let code = `status_${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) code = body.error;
+    } catch {
+      // JSON でなければステータスのみ
+    }
+    throw new Error(code);
+  }
 }
 
 /**

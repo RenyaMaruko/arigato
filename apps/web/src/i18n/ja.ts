@@ -27,6 +27,12 @@ export const ja = {
       send: "送る",
       loading: "読み込み中…",
       notFound: "店員さんが見つかりませんでした",
+      // この QR（所属）が脱退・在籍解除済みで、いま投げ銭を受け付けていないときの案内
+      notAcceptingTitle: "現在このQRは受け付けていません",
+      notAcceptingNote:
+        "この店員さんは現在このお店で受け付けを停止しています。再開されると、同じQRでまたお送りいただけます。",
+      // 投げ銭作成時に受付停止が判明したとき（intent が membership_not_accepting を返した）
+      notAcceptingError: "このQRは現在、投げ銭を受け付けていません。",
       // 支払い方法ボトムシート（アプリ内埋め込み決済）
       sheetTitle: "支払い方法を選ぶ",
       sheetClose: "閉じる",
@@ -156,6 +162,17 @@ export const ja = {
       qrNote: "このQRをお客さまに見せてください",
       qrPrint: "印刷する",
       qrUrlLabel: "QRが指すURL",
+      // この店を脱退する（所属店舗の詳細＝QR画面）＋確認ダイアログ
+      leaveStoreCta: "この店を脱退する",
+      leaveConfirmTitle: "この店を脱退しますか？",
+      // {{store}} に店名。脱退後も受取履歴で収益を確認できる旨の注意書き
+      leaveConfirmBody:
+        "{{store}} を脱退します。脱退すると、このお店のQRでは新しい投げ銭を受け付けなくなります。",
+      leaveConfirmNote: "脱退しても、受け取った収益は受取履歴で引き続き確認できます。",
+      leaveConfirmCta: "脱退する",
+      leaveCancel: "キャンセル",
+      leaving: "処理中…",
+      leaveError: "脱退できませんでした。もう一度お試しください。",
       back: "戻る",
       // プロフィール編集
       editTitle: "プロフィール編集",
@@ -345,6 +362,21 @@ export const ja = {
       staffTabInvited: "招待中",
       staffEmpty: "まだ在籍中のスタッフはいません",
       staffInviteCta: "スタッフを招待する",
+      // スタッフ詳細（一覧の行タップ→基本情報・在籍解除）
+      staffDetailTitle: "スタッフ詳細",
+      staffDetailJoinedAt: "参加日：{{date}}",
+      staffDetailNoHeadline: "一言は設定されていません",
+      staffDetailLoadError: "スタッフ情報を読み込めませんでした",
+      // 在籍解除（このスタッフを外す）＋確認ダイアログ
+      staffRemoveCta: "このスタッフを外す",
+      staffRemoveConfirmTitle: "このスタッフを外しますか？",
+      // {{name}} にスタッフ名。お金は移動しない旨を明記する
+      staffRemoveConfirmBody:
+        "{{name}} さんをこのお店から外します。外しても、これまでの「ありがとう」の記録や、ご本人が受け取った収益は変わりません（お金は移動しません）。",
+      staffRemoveConfirmCta: "外す",
+      staffRemoveCancel: "キャンセル",
+      staffRemoving: "処理中…",
+      staffRemoveError: "スタッフを外せませんでした。もう一度お試しください。",
       // スタッフ招待（04）
       inviteTitle: "スタッフ招待",
       inviteHeading: "スタッフを招待するための\nリンクを発行します",

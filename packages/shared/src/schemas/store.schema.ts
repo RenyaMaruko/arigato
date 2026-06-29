@@ -137,6 +137,7 @@ export type StoreStaffItem = z.infer<typeof StoreStaffItemSchema>;
 /**
  * GET /store/:storeId/staff の応答（所属スタッフ一覧）。
  * 名簿順（在籍が古い順）の中立な並びで返す。金額・件数での並べ替えはしない。
+ * 在籍中（left_at IS NULL）のスタッフだけを返す（脱退者は外れる）。
  */
 export const StoreStaffResponseSchema = z.object({
   items: z.array(StoreStaffItemSchema),
@@ -144,6 +145,21 @@ export const StoreStaffResponseSchema = z.object({
   count: z.number().int(),
 });
 export type StoreStaffResponse = z.infer<typeof StoreStaffResponseSchema>;
+
+/**
+ * GET /store/:storeId/staff/:staffId の応答（スタッフ詳細・店スコープ）。
+ * 在籍中スタッフの基本情報（表示名・一言・顔写真・参加日）のみ。金額は一切含めない（店はお金に触れない）。
+ * 参加日は staff_store.created_at（その店に在籍し始めた日）。
+ */
+export const StoreStaffDetailSchema = z.object({
+  id: z.string().uuid(),
+  displayName: z.string(),
+  headline: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+  // その店に参加した日（staff_store.created_at。ISO 文字列）
+  joinedAt: z.string(),
+});
+export type StoreStaffDetail = z.infer<typeof StoreStaffDetailSchema>;
 
 /**
  * GET /store/:storeId/gratitude のお客さまの声1件分。
