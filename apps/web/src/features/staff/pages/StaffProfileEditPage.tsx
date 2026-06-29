@@ -167,7 +167,7 @@ function EditForm({
             aria-label={t("staff.avatarChange")}
             className="relative rounded-full bg-rose-soft p-1 disabled:opacity-60"
           >
-            <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-stamp-bg text-token-sm text-muted ring-2 ring-page">
+            <div className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-stamp-bg text-muted ring-2 ring-page">
               {avatarPreview ? (
                 <img
                   src={avatarPreview}
@@ -175,7 +175,21 @@ function EditForm({
                   className="h-24 w-24 rounded-full object-cover"
                 />
               ) : (
-                "顔写真"
+                // 未設定は中立な人物アイコン（「顔写真」必須に見えないように）
+                <svg
+                  width="40"
+                  height="40"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="1.6"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="12" cy="8" r="4" />
+                  <path d="M4.5 20c0-4 3.5-6 7.5-6s7.5 2 7.5 6" />
+                </svg>
               )}
             </div>
             {/* カメラバッジ（白縁のローズ丸）。タップで画像選択を示す装飾 */}

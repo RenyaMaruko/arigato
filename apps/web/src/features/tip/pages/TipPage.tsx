@@ -110,7 +110,7 @@ export function TipPage() {
           <>
             {/* 顔写真枠（アバター） */}
             <div className="mt-1.5 flex justify-center">
-              <div className="flex h-[120px] w-[120px] items-center justify-center rounded-full bg-stamp-bg text-token-sm text-muted">
+              <div className="flex h-[120px] w-[120px] items-center justify-center rounded-full bg-stamp-bg text-muted">
                 {staff.avatarUrl ? (
                   <img
                     src={staff.avatarUrl}
@@ -118,7 +118,21 @@ export function TipPage() {
                     className="h-[120px] w-[120px] rounded-full object-cover"
                   />
                 ) : (
-                  "顔写真"
+                  // 未設定は中立な人物アイコン（「顔写真」必須に見えないように）
+                  <svg
+                    width="56"
+                    height="56"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <circle cx="12" cy="8" r="4" />
+                    <path d="M4.5 20c0-4 3.5-6 7.5-6s7.5 2 7.5 6" />
+                  </svg>
                 )}
               </div>
             </div>
