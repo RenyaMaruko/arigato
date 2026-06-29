@@ -370,9 +370,9 @@ export const ja = {
       // 在籍解除（このスタッフを外す）＋確認ダイアログ
       staffRemoveCta: "このスタッフを外す",
       staffRemoveConfirmTitle: "このスタッフを外しますか？",
-      // {{name}} にスタッフ名。お金は移動しない旨を明記する
+      // 外しても記録・本人の収益は変わらない旨の注意書き（簡潔に）
       staffRemoveConfirmBody:
-        "{{name}} さんをこのお店から外します。外しても、これまでの「ありがとう」の記録や、ご本人が受け取った収益は変わりません（お金は移動しません）。",
+        "外しても、これまでの記録や、ご本人が受け取った収益は変わりません。",
       staffRemoveConfirmCta: "外す",
       staffRemoveCancel: "キャンセル",
       staffRemoving: "処理中…",
