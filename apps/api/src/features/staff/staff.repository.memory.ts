@@ -208,8 +208,13 @@ export function createInMemoryStaffRepository(): StaffRepository {
     },
 
     // インメモリ実装は tip を保持しないため受取履歴は空（実 DB 環境で本実装が動く）
-    async listTipsByAuthUserId() {
+    async listTipsPageByAuthUserId() {
       return [];
+    },
+
+    // 同上。tip を保持しないため全件集計は 0（実 DB 環境で本実装が動く）
+    async getStaffTipsTotalsByAuthUserId() {
+      return { totalCount: 0, totalAmount: 0 };
     },
 
     // 同上。保留残高集計の元になる成立済み tip も空

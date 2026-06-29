@@ -26,7 +26,9 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
   // 保留残高サマリ（本人のみ）。このページはログイン済み＋プロフィール取得済みのときだけ描画されるため有効化する
   const balanceQuery = useStaffBalance(true);
   const balance = balanceQuery.data;
-  // 未取得・ローディング時は 0 として控えめに扱い、レイアウトを崩さない
+  // 残高を取得できたか。読み込み中は 0 を出さずプレースホルダにして、0→実値のチラつきを防ぐ
+  const balanceReady = balance !== undefined;
+  // 未取得・ローディング時は 0 として扱い計算を崩さない（表示は balanceReady で出し分ける）
   const heldAmount = balance?.heldAmount ?? 0;
   const payableAmount = balance?.payableAmount ?? 0;
   // 送金できる額＝Stripe の実 available（#5: 送金可能額の正）。未確認・残高取得前は 0
@@ -36,7 +38,7 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
 
   return (
     <PhoneFrame>
-      <div className="flex flex-1 flex-col overflow-y-auto px-6 pb-7 pt-4">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-6 pb-7 pt-4">
         {/* 残高カード。受け取った投げ銭の残高（保留＋着金可能の合計）を1つの「残高」として表示する。
             着金（銀行送金）には本人確認が要るため、未確認なら一言＋本人確認ボタンを残高のすぐ下に置く。
             金額は本人のみ表示（横断ルール）。本人の画面なのでアバター・名前・一言は出さない。 */}
@@ -45,21 +47,32 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           <div className="text-token-sm font-semibold text-rose/80">
             {t("staff.homeBalanceLabel")}
           </div>
-          <div className="mt-1 text-[30px] font-bold leading-none text-rose">
-            ¥{(heldAmount + payableAmount).toLocaleString()}
-          </div>
+          {balanceReady ? (
+            <div className="mt-1 text-[30px] font-bold leading-none text-rose">
+              ¥{(heldAmount + payableAmount).toLocaleString()}
+            </div>
+          ) : (
+            // 読み込み中はスケルトン（0 をチラ見せしない）
+            <div
+              className="mt-1.5 h-[26px] w-28 animate-pulse rounded-md bg-rose/20"
+              aria-hidden="true"
+            />
+          )}
           {/* 送金できる条件の一言。
               未確認＝本人確認で送金可能に／確認済＝いま送金できる額（Stripe available）を示す。
               残高（受取総額）は隠さず、そのうち今すぐ送れる額が available であることを伝える。 */}
           <div className="mt-2 text-token-xs text-rose/70">
-            {verified
-              ? sendableAmount < heldAmount + payableAmount
-                ? // 受取総額の一部だけが今すぐ送金できる（残りは準備中＝Stripe 確定待ち）
-                  t("staff.homeBalanceSendableNote", {
-                    amount: `¥${sendableAmount.toLocaleString()}`,
-                  })
-                : t("staff.homeBalanceVerifiedNote")
-              : t("staff.homeBalanceToSendNote")}
+            {!balanceReady
+              ? // 読み込み中は一言も出さない（高さは維持してボタン位置をずらさない）
+                " "
+              : verified
+                ? sendableAmount < heldAmount + payableAmount
+                  ? // 受取総額の一部だけが今すぐ送金できる（残りは準備中＝Stripe 確定待ち）
+                    t("staff.homeBalanceSendableNote", {
+                      amount: `¥${sendableAmount.toLocaleString()}`,
+                    })
+                  : t("staff.homeBalanceVerifiedNote")
+                : t("staff.homeBalanceToSendNote")}
           </div>
 
           {/* 残高のすぐ下のアクション。未確認なら本人確認へ、確認済なら送金（送金画面）へ */}
@@ -84,7 +97,7 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           )}
         </div>
 
-        {/* 所属しているお店（複数可・掛け持ち）。各店ごとに別QR（/tip/:membershipId）へ導く */}
+        {/* 所属しているお店（複数可・掛け持ち）。カードをタップで店舗詳細（店ごとのQR）へ導く */}
         <div className="mt-7">
           <div className="text-token-base font-bold text-ink-label">
             {t("staff.homeStoresLabel")}
@@ -97,10 +110,17 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           ) : (
             <div className="mt-3 flex flex-col gap-2.5">
               {me.memberships.map((m) => (
-                // 1店ぶんのカード（店アイコン＋店名＋その店のQRを表示する導線）
-                <div
+                // 1店ぶんのカード（タップで店舗詳細＝店ごとのQRへ）
+                <button
                   key={m.membershipId}
-                  className="flex items-center gap-3 rounded-xl border-[1.5px] border-line bg-page px-4 py-3"
+                  type="button"
+                  onClick={() =>
+                    navigate({
+                      to: "/staff/stores/$membershipId",
+                      params: { membershipId: m.membershipId },
+                    })
+                  }
+                  className="flex items-center gap-3 rounded-xl border-[1.5px] border-line bg-page px-4 py-3.5 text-left"
                 >
                   {/* 店のしるし（ローズ淡色の丸） */}
                   <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-rose">
@@ -109,36 +129,23 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
                   <span className="min-w-0 flex-1 truncate text-token-md font-semibold text-ink">
                     {m.storeName}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => navigate({ to: "/staff/qr", search: { m: m.membershipId } })}
-                    className="flex flex-none items-center gap-1.5 rounded-lg bg-rose px-3.5 py-2 text-token-sm font-bold text-page"
-                  >
-                    <QrIcon />
-                    {t("staff.homeStoreQr")}
-                  </button>
-                </div>
+                  {/* タップできることを示す右シェブロン */}
+                  <span className="flex-none text-muted-soft">
+                    <ChevronIcon />
+                  </span>
+                </button>
               ))}
             </div>
           )}
         </div>
 
-        {/* 機能アイコングリッド（モック01）。受取履歴・口座登録・データ出力・プロフィール編集へ導く */}
+        {/* 機能アイコングリッド（モック01）。受取履歴・データ出力・プロフィール編集へ導く。
+            送金・本人確認/口座登録は残高カードに一本化したため、重複を避けてグリッドからは外す。 */}
         <div className="mt-8 grid grid-cols-3 gap-x-2 gap-y-6">
           <FeatureTile
             label={t("staff.homeHistory")}
             onClick={() => navigate({ to: "/staff/history" })}
             icon={<HistoryIcon />}
-          />
-          <FeatureTile
-            label={t("staff.homePayout")}
-            onClick={() => navigate({ to: "/staff/payout" })}
-            icon={<WalletIcon />}
-          />
-          <FeatureTile
-            label={t("staff.homeAccount")}
-            onClick={() => navigate({ to: "/staff/identity" })}
-            icon={<CardIcon />}
           />
           <FeatureTile
             label={t("staff.exportLink")}
@@ -225,28 +232,6 @@ function StoreIcon() {
   );
 }
 
-/** QR アイコン（店ごとのQRを表示）。 */
-function QrIcon() {
-  return (
-    <svg
-      width="15"
-      height="15"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.9"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3" y="3" width="7" height="7" rx="1.2" />
-      <rect x="14" y="3" width="7" height="7" rx="1.2" />
-      <rect x="3" y="14" width="7" height="7" rx="1.2" />
-      <path d="M14 14h3v3M21 14v7M17 21h4M14 18.5v2.5" />
-    </svg>
-  );
-}
-
 /** 受取履歴（書類）アイコン。 */
 function HistoryIcon() {
   return (
@@ -263,47 +248,6 @@ function HistoryIcon() {
     >
       <rect x="5" y="3" width="14" height="18" rx="2.2" />
       <path d="M8.5 8h7M8.5 12h7M8.5 16h4" />
-    </svg>
-  );
-}
-
-/** 残高（財布）アイコン。 */
-function WalletIcon() {
-  return (
-    <svg
-      width="30"
-      height="30"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="3" y="6" width="18" height="13" rx="2.4" />
-      <path d="M3 10h18" />
-      <circle cx="16.5" cy="14" r="1.1" fill="currentColor" stroke="none" />
-    </svg>
-  );
-}
-
-/** 口座登録（カード）アイコン。 */
-function CardIcon() {
-  return (
-    <svg
-      width="30"
-      height="30"
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="1.7"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden="true"
-    >
-      <rect x="2.5" y="5" width="19" height="14" rx="2.5" />
-      <path d="M2.5 9.5h19" />
     </svg>
   );
 }

@@ -2,16 +2,19 @@ import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
 
 /**
- * 店員さん画面の共通ボトムナビ（ホーム / 履歴 / QR / 設定）。
+ * 店員さん画面の共通ボトムナビ（ホーム / 履歴 / 所属店舗 / 設定）。
  * 現在地（active）をローズで強調し、それ以外は淡色にする。モック01/10 共通の下部ナビ。
  * 店側 StoreBottomNav と同じ作法（feature 跨ぎ import はしないため staff 用に新規実装）。
+ * 掛け持ち（多対多）対応で、QR は所属店舗ごとに分かれるため、タブは「所属店舗」一覧への入口とする。
  */
-type NavKey = "home" | "history" | "qr" | "settings";
+type NavKey = "home" | "history" | "stores" | "settings";
 
-export function StaffBottomNav({ active }: { active: NavKey }) {
+// active は任意。タブに該当しない画面（送金・プロフィール編集・本人確認など）では未指定で渡し、
+// その場合はどのタブもハイライトしない（全タブを淡色にする）。
+export function StaffBottomNav({ active }: { active?: NavKey }) {
   const { t } = useTranslation();
 
-  // 各タブの色（現在地はローズ・それ以外は淡いグレー）
+  // 各タブの色（現在地はローズ・それ以外＝未指定含むは淡いグレー）
   const colorFor = (key: NavKey) => (active === key ? "text-rose" : "text-muted-soft");
 
   return (
@@ -57,8 +60,11 @@ export function StaffBottomNav({ active }: { active: NavKey }) {
         <span className="text-[10px]">{t("staff.navHistory")}</span>
       </Link>
 
-      {/* QR（店ごとのQR） */}
-      <Link to="/staff/qr" className={`flex flex-col items-center gap-[3px] ${colorFor("qr")}`}>
+      {/* 所属店舗（店一覧→店ごとのQR詳細へ） */}
+      <Link
+        to="/staff/stores"
+        className={`flex flex-col items-center gap-[3px] ${colorFor("stores")}`}
+      >
         <svg
           width="23"
           height="23"
@@ -70,12 +76,12 @@ export function StaffBottomNav({ active }: { active: NavKey }) {
           strokeLinejoin="round"
           aria-hidden="true"
         >
-          <rect x="3" y="3" width="7" height="7" rx="1" />
-          <rect x="14" y="3" width="7" height="7" rx="1" />
-          <rect x="3" y="14" width="7" height="7" rx="1" />
-          <path d="M14 14h3v3M21 14v7M17 21h4M14 18.5v2.5" />
+          <path d="M4 9.5 5.2 5h13.6L20 9.5" />
+          <path d="M4 9.5V20h16V9.5" />
+          <path d="M4 9.5a2 2 0 0 0 4 0 2 2 0 0 0 4 0 2 2 0 0 0 4 0 2 2 0 0 0 4 0" />
+          <path d="M10 20v-5h4v5" />
         </svg>
-        <span className="text-[10px]">{t("staff.navQr")}</span>
+        <span className="text-[10px]">{t("staff.navStores")}</span>
       </Link>
 
       {/* 設定 */}

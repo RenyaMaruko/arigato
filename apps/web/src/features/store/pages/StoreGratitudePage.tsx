@@ -65,7 +65,7 @@ function StoreGratitudeContent({ store }: { store: StoreProfile }) {
         </button>
       </div>
 
-      <div className="flex-1 overflow-y-auto px-5 pb-6 pt-5">
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-6 pt-5">
         {tab === "store" ? (
           <StoreWideTab gratitude={gratitude} />
         ) : (

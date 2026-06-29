@@ -3,6 +3,7 @@ import {
   createRoute,
   createRouter,
   Outlet,
+  redirect,
 } from "@tanstack/react-router";
 import { HomePage } from "../features/home/HomePage.js";
 import { TipPage } from "../features/tip/pages/TipPage.js";
@@ -10,7 +11,8 @@ import { TipCompletePage } from "../features/tip/pages/TipCompletePage.js";
 import { StaffPage } from "../features/staff/pages/StaffPage.js";
 import { StaffLoginPage } from "../features/staff/pages/StaffLoginPage.js";
 import { StaffProfileCreatePage } from "../features/staff/pages/StaffProfileCreatePage.js";
-import { StaffQrPage } from "../features/staff/pages/StaffQrPage.js";
+import { StaffStoresPage } from "../features/staff/pages/StaffStoresPage.js";
+import { StaffStoreDetailPage } from "../features/staff/pages/StaffStoreDetailPage.js";
 import { StaffProfileEditPage } from "../features/staff/pages/StaffProfileEditPage.js";
 import { StaffInviteAcceptPage } from "../features/staff/pages/StaffInviteAcceptPage.js";
 import { StaffJoinCompletePage } from "../features/staff/pages/StaffJoinCompletePage.js";
@@ -37,7 +39,8 @@ import { StoreProfilePage } from "../features/store/pages/StoreProfilePage.js";
  *  - /tip/$membershipId/complete 完了画面（?tipId= で当該 tip の再掲情報を引く）
  *  - /staff                      店員さん入口（認証ゲート: 未ログイン→ログイン / 未作成→作成 / 作成済→ホーム）
  *  - /staff/setup                プロフィール作成（?invite= で招待コードを引き継ぐ・作成済はガードで弾く）
- *  - /staff/qr                   店ごとのQR の発行（?m= で membership を指定・/tip/:membershipId を指す QR・印刷）
+ *  - /staff/stores               所属店舗の一覧（掛け持ち対応・店をタップで詳細へ）
+ *  - /staff/stores/$membershipId 所属店舗の詳細（その店ごとのQR・印刷。/tip/:membershipId を指す）
  *  - /staff/profile              プロフィール編集
  *  - /invite/$code               招待受け入れ（招待検証→ログイン/作成/参加→参加完了へ）
  * 認証ガードは StaffPage 系の各画面で session を見て出し分ける（未ログインはログインへ誘導）。
@@ -127,15 +130,27 @@ const staffOnboardRoute = createRoute({
   validateSearch: inviteSearch,
 });
 
-// "/staff/qr" 店ごとのQR 発行画面。?m= でどの所属（membership）のQRかを指定する
-const staffQrRoute = createRoute({
+// "/staff/stores" 所属店舗の一覧（ボトムナビ「所属店舗」の行き先）
+const staffStoresRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/stores",
+  component: StaffStoresPage,
+});
+
+// "/staff/stores/:membershipId" 所属店舗の詳細（その店ごとのQR）
+const staffStoreDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/staff/stores/$membershipId",
+  component: StaffStoreDetailPage,
+});
+
+// "/staff/qr" 旧QR画面は所属店舗一覧へリダイレクト（多対多対応で店ごとQRに分離したため）
+const staffQrRedirectRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/staff/qr",
-  component: StaffQrPage,
-  // 表示対象の membership ID（未指定なら最初の所属を使う）
-  validateSearch: (search: Record<string, unknown>): { m?: string } => ({
-    m: typeof search.m === "string" ? search.m : undefined,
-  }),
+  beforeLoad: () => {
+    throw redirect({ to: "/staff/stores" });
+  },
 });
 
 // "/staff/profile" プロフィール編集画面
@@ -283,7 +298,9 @@ const routeTree = rootRoute.addChildren([
   staffLoginRoute,
   staffSetupRoute,
   staffOnboardRoute,
-  staffQrRoute,
+  staffStoresRoute,
+  staffStoreDetailRoute,
+  staffQrRedirectRoute,
   staffProfileRoute,
   staffHistoryRoute,
   staffPayoutRoute,

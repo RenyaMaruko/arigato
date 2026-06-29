@@ -117,12 +117,33 @@ export async function fetchInviteInfo(code: string): Promise<InviteInfo | null> 
   return InviteInfoSchema.parse(await res.json());
 }
 
+// 受取履歴の絞り込み（店舗・期間）。未指定はフィルタ無し（クエリに載せない）。
+export type StaffTipsFilterParams = {
+  storeId?: string;
+  from?: string;
+  to?: string;
+};
+
 /**
- * GET /staff/me/tips — 自分の受取履歴（金額・メッセージ・受取日時）を取得する（本人のみ）。
+ * GET /staff/me/tips — 自分の受取履歴（金額・メッセージ・受取日時）を1ページ取得する（本人のみ）。
+ * 無限スクロール用にキーセットページングを使う。cursor（次ページの基点）を渡すと続きを取得する
+ * （先頭ページは cursor 省略）。応答の nextCursor が次ページの基点（無ければ null＝最後のページ）。
+ * 合計（totalAmount / totalCount）はフィルタ後の全受取の集計値で、ページに依らず一定。
+ * 店舗（storeId）・期間（from/to）フィルタを任意で渡せる（指定があるものだけクエリに載せる）。
  * 未作成（404）の場合は null。
  */
-export async function fetchStaffTips(): Promise<StaffTipsResponse | null> {
-  const res = await apiClient.staff.me.tips.$get();
+export async function fetchStaffTips(
+  cursor?: string,
+  filter?: StaffTipsFilterParams,
+): Promise<StaffTipsResponse | null> {
+  // cursor・フィルタは値があるものだけクエリに載せる（先頭ページ・フィルタ無しは付けない）
+  const query: Record<string, string> = {};
+  if (cursor) query.cursor = cursor;
+  if (filter?.storeId) query.storeId = filter.storeId;
+  if (filter?.from) query.from = filter.from;
+  if (filter?.to) query.to = filter.to;
+
+  const res = await apiClient.staff.me.tips.$get({ query });
   if (res.status === 404) {
     return null;
   }

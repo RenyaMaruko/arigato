@@ -1,4 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import type {
   CreateStaffProfileInput,
   UpdateStaffProfileInput,
@@ -14,6 +19,7 @@ import {
   startConnectOnboard,
   createPayout,
   fetchPayouts,
+  type StaffTipsFilterParams,
 } from "../api/staff.api.js";
 
 /**
@@ -97,12 +103,31 @@ export function useUpdateStaffProfile() {
 }
 
 /**
- * 受取履歴（GET /staff/me/tips）を取得する。本人のみ・ログイン済みのときだけ走らせる。
+ * 受取履歴（GET /staff/me/tips）を「20件ずつの無限スクロール」で取得する。
+ * 本人のみ・ログイン済みのときだけ走らせる。
+ * キーセットページング: getNextPageParam で前ページの nextCursor を次ページの基点に使う
+ * （null なら次ページなし＝末尾）。サマリー（totalAmount/totalCount）はフィルタ後の全件集計のため
+ * 各ページに同じ値が入る（画面は最初のページの値を使う）。
+ *
+ * 店舗・期間フィルタ（filter）を queryKey に含めるため、フィルタを変えると
+ * useInfiniteQuery が別キーとして自動リセットされ、先頭ページから取り直す。
+ * フィルタは fetch のクエリにも渡し、一覧・サマリーの両方がフィルタ後の値になる。
  */
-export function useStaffTips(enabled: boolean) {
-  return useQuery({
-    queryKey: ["staff", "tips"],
-    queryFn: fetchStaffTips,
+export function useStaffTips(enabled: boolean, filter: StaffTipsFilterParams = {}) {
+  // queryKey にフィルタ（店舗・期間）を含める。null/undefined を正規化して安定したキーにする。
+  const filterKey = {
+    storeId: filter.storeId ?? null,
+    from: filter.from ?? null,
+    to: filter.to ?? null,
+  };
+  return useInfiniteQuery({
+    queryKey: ["staff", "tips", filterKey],
+    // pageParam は次ページの基点 cursor（先頭ページは undefined）。フィルタも併せて渡す
+    queryFn: ({ pageParam }) => fetchStaffTips(pageParam, filter),
+    // 先頭ページは cursor 無し
+    initialPageParam: undefined as string | undefined,
+    // 前ページの nextCursor を次の pageParam にする（null/未作成なら undefined＝停止）
+    getNextPageParam: (lastPage) => lastPage?.nextCursor ?? undefined,
     enabled,
     retry: false,
   });

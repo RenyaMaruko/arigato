@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe } from "../hooks/useStaff.js";
 import { downloadTaxReport } from "../api/staff.api.js";
@@ -68,7 +69,7 @@ export function StaffTaxExportPage() {
         <span className="text-token-2xl font-bold text-ink">{t("staff.exportTitle")}</span>
       </div>
 
-      <div className="flex flex-1 flex-col overflow-y-auto px-[26px] pb-7 pt-6">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-[26px] pb-7 pt-6">
         {/* CSV ファイルのアイコン（装飾） */}
         <div className="mt-4 flex justify-center">
           <div className="relative h-[104px] w-[84px] rounded-[10px] border-2 border-line bg-page shadow-[0_4px_14px_rgba(20,20,40,.06)]">
@@ -134,6 +135,9 @@ export function StaffTaxExportPage() {
           {downloading ? t("staff.exportDownloading") : t("staff.exportDownload")}
         </button>
       </div>
+
+      {/* 下部ボトムナビ（申告データ出力はタブに該当しないため active 未指定） */}
+      <StaffBottomNav />
     </PhoneFrame>
   );
 }

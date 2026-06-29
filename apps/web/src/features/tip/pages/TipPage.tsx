@@ -92,7 +92,7 @@ export function TipPage() {
   return (
     <PhoneFrame>
       {/* スクロール領域 */}
-      <div className="flex-1 overflow-y-auto px-6 pb-7 pt-2">
+      <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-7 pt-2">
         {/* 言語切替（表示のみ・本スプリントは日本語固定） */}
         <div className="flex justify-end">
           <span className="text-token-base text-lang">🌐 {t("tip.lang")} ⌄</span>

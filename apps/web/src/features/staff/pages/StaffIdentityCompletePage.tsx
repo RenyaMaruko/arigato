@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { useQueryClient } from "@tanstack/react-query";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe, useStaffBalance } from "../hooks/useStaff.js";
 
@@ -51,7 +52,8 @@ export function StaffIdentityCompletePage() {
   return (
     <PhoneFrame>
       {verified ? (
-        // --- 完了演出（モック07） ---
+        // --- 完了演出（モック07）。紙吹雪を内側にとどめるため overflow-hidden を維持。
+        //     内容（チェック・タイトル・ホームボタン）は1画面に収まるため縦スクロールは不要。 ---
         <div className="relative flex flex-1 flex-col overflow-hidden px-7 pb-8">
           {/* 紙吹雪（装飾。読み取りや操作に影響しない） */}
           <Confetti />
@@ -110,6 +112,9 @@ export function StaffIdentityCompletePage() {
           </button>
         </div>
       )}
+
+      {/* 下部ボトムナビ（本人確認完了はタブに該当しないため active 未指定） */}
+      <StaffBottomNav />
     </PhoneFrame>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe, useUpdateStaffProfile } from "../hooks/useStaff.js";
 
@@ -112,7 +113,7 @@ function EditForm({
         <span className="text-token-2xl font-bold text-ink">{t("staff.editTitle")}</span>
       </div>
 
-      <div className="flex flex-1 flex-col overflow-y-auto px-[26px] pb-7 pt-2">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-[26px] pb-7 pt-2">
         {/* アバター（編集 UI は Sprint 5。現状は表示のみ）。ローズの淡いリングで包む */}
         <div className="mt-2 flex justify-center">
           <div className="rounded-full bg-rose-soft p-1">
@@ -171,6 +172,9 @@ function EditForm({
           {error && <div className="mt-3 text-center text-token-sm text-rose">{error}</div>}
         </form>
       </div>
+
+      {/* 下部ボトムナビ（プロフィール編集はタブに該当しないため active 未指定） */}
+      <StaffBottomNav />
     </PhoneFrame>
   );
 }

@@ -2,6 +2,7 @@ import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useRouter } from "@tanstack/react-router";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe, useStartConnectOnboard } from "../hooks/useStaff.js";
 
@@ -80,7 +81,7 @@ export function StaffIdentityFlowPage() {
         <span className="text-token-2xl font-bold text-ink">{t("staff.identityTitle")}</span>
       </div>
 
-      <div className="flex flex-1 flex-col overflow-y-auto px-[26px] pb-6 pt-3.5">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-[26px] pb-6 pt-3.5">
         {/* ステップのタイムライン */}
         <ol className="flex flex-col">
           {steps.map((step, index) => (
@@ -119,6 +120,9 @@ export function StaffIdentityFlowPage() {
           {onboard.isPending ? t("staff.identityStarting") : t("staff.identityStart")}
         </button>
       </div>
+
+      {/* 下部ボトムナビ（本人確認フローはタブに該当しないため active 未指定） */}
+      <StaffBottomNav />
     </PhoneFrame>
   );
 }

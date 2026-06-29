@@ -79,7 +79,7 @@ function StoreInviteResendContent({ store }: { store: StoreProfile }) {
         <span className="text-token-2xl font-bold text-ink">{t("store.inviteResendTitle")}</span>
       </div>
 
-      <div className="flex flex-1 flex-col overflow-y-auto px-7 pb-6 pt-2.5">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-7 pb-6 pt-2.5">
         {/* 招待が見つからない（取り消し済み・使用済み）場合の案内 */}
         {invitesQuery.isSuccess && !invite ? (
           <div className="mt-10 text-center text-token-sm leading-relaxed text-muted">

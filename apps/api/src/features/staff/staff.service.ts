@@ -10,7 +10,7 @@ import type {
   CreatePayoutResult,
   PayoutList,
 } from "@arigato/shared";
-import { CURRENCY } from "@arigato/shared";
+import { CURRENCY, STAFF_TIPS_DEFAULT_LIMIT, STAFF_TIPS_MAX_LIMIT } from "@arigato/shared";
 import {
   canPayout,
   isInviteUsable,
@@ -21,6 +21,8 @@ import {
   calculateStaffTakeAmount,
   evaluatePayoutEligibility,
   selectPayoutTipsWithinAvailable,
+  decodeTipCursor,
+  encodeTipCursor,
   type IdentityStatus,
 } from "./staff.model.js";
 import type {
@@ -275,24 +277,74 @@ export async function updateStaffProfile(
 }
 
 /**
- * 受取履歴を取得する（GET /staff/me/tips・本人スコープ）。
- * 認証済みの authUserId をキーに本人の成立済み投げ銭だけを新しい順に返す。
+ * 受取履歴を1ページ取得する（GET /staff/me/tips・本人スコープ・無限スクロール）。
+ * 認証済みの authUserId をキーに本人の成立済み投げ銭だけを新しい順に「20件ずつ」返す（キーセットページング）。
  * 金額・メッセージを含むのは本人スコープのこの経路だけ（横断ルール: 金額は本人のみ）。
  * 店ラベル（storeName）付き。プロフィール未作成なら null。
+ *
+ * ページング・合計の責務（Service）:
+ *  - cursor の解釈（decode）と次ページ cursor の組み立て（encode）を担う。
+ *    cursor が不正・壊れていても落とさず、先頭ページ扱いにフォールバックする（Model の decode が null を返す）。
+ *  - limit を 1〜50 にクランプ（既定 20）。limit+1 件取って「次があるか」を判定し、nextCursor を返す。
+ *  - 合計（totalAmount / totalCount）は「全受取」の別集計（Repository の SUM/COUNT）を使う。
+ *    ページの items から計算しないため、どのページでも一定（フィルタ後の手取り合計・件数）。
+ *
+ * フィルタ（任意・店舗 storeId・期間 from/to）:
+ *  - クエリの storeId/from/to をそのまま絞り込み条件として解釈し、
+ *    list 取得（listTipsPageByAuthUserId）と 合計集計（getStaffTipsTotalsByAuthUserId）の
+ *    **両方に同じ条件**を渡す。これにより合計もフィルタ後の値になり、サマリーが一覧と連動する。
+ *  - 不正値（Zod で undefined に倒したもの）は条件に入らない（フィルタ無し扱い・落とさない）。
+ *  - cursor 比較はフィルタ後の集合内で正しく動く（WHERE に AND で足すだけ・並びは不変）。
  */
 export async function getStaffTips(
   repo: StaffRepository,
   authUserId: string,
+  query: {
+    cursor?: string;
+    limit?: number;
+    // 絞り込み（店舗・期間。未指定はフィルタ無し）
+    storeId?: string;
+    from?: string;
+    to?: string;
+  } = {},
 ): Promise<StaffTipsResponse | null> {
   // 本人が存在するか（未作成なら履歴も無い）
   const me = await repo.findStaffByAuthUserId(authUserId);
   if (!me) return null;
 
-  // 本人の受取履歴を取得（Repository が auth_user_id で本人に限定する）
-  const rows = await repo.listTipsByAuthUserId(authUserId);
+  // limit を 1〜50 にクランプ（未指定・不正・1未満は既定 20）。上限超過は 50 にクランプ。
+  // 1未満・NaN・非数は「不正」として既定 20 に倒す（Zod の .min(1).catch(20) と整合させる）。
+  const requested = query.limit;
+  const limit =
+    typeof requested === "number" && Number.isFinite(requested) && requested >= 1
+      ? Math.min(STAFF_TIPS_MAX_LIMIT, Math.floor(requested))
+      : STAFF_TIPS_DEFAULT_LIMIT;
+
+  // cursor を解釈する（不正・壊れていれば null＝先頭ページ扱い。落とさない）
+  const cursor = decodeTipCursor(query.cursor);
+
+  // 絞り込み（店舗・期間）を1つにまとめる。list と合計で同じ条件を使う（サマリー連動）。
+  // 指定が無い項目は undefined のまま（Repository 側で条件を付けない＝フィルタ無し）。
+  const filter = {
+    storeId: query.storeId,
+    from: query.from,
+    to: query.to,
+  };
+
+  // 次ページの有無を判定するため limit+1 件を要求する（多く取れたら次がある）
+  const rows = await repo.listTipsPageByAuthUserId({
+    authUserId,
+    cursor,
+    take: limit + 1,
+    filter,
+  });
+
+  // 次ページがあるか（limit を超えて取れたか）。超過分は表示せず捨てる
+  const hasMore = rows.length > limit;
+  const pageRows = hasMore ? rows.slice(0, limit) : rows;
+
   // 手取り型: DB の amount は額面のため、店員さんに見せる金額は手取り（約85%）へ変換する。
-  // 1件ごとに手取りへ変換し、合計も変換後の金額で合算する（行表示と合計の整合）。
-  const items = rows.map((t) => ({
+  const items = pageRows.map((t) => ({
     id: t.id,
     // 額面 → 店員手取り（約85%）
     amount: calculateStaffTakeAmount(t.amount),
@@ -301,11 +353,24 @@ export async function getStaffTips(
     storeName: t.storeName,
     settlementStatus: t.settlementStatus,
   }));
-  // 受取総額（手取りベース・本人のみに見せる）
-  const totalAmount = items.reduce((sum, t) => sum + t.amount, 0);
+
+  // 次ページの基点（cursor）を組み立てる。次が無ければ null（最後のページ）。
+  // 基点は「このページの最後の行の (受取日時, id)」。次回はこれより後（DESC の続き）を取る。
+  const lastRow = pageRows[pageRows.length - 1];
+  const nextCursor =
+    hasMore && lastRow
+      ? encodeTipCursor({ receivedAt: lastRow.receivedAt, id: lastRow.id })
+      : null;
+
+  // 合計は必ず「全受取」の別集計（ページの items から計算しない・ページに依らず一定）。
+  // list とまったく同じフィルタを渡し、合計もフィルタ後の値にする（サマリー連動）。
+  const totals = await repo.getStaffTipsTotalsByAuthUserId(authUserId, filter);
+
   return {
     items,
-    totalAmount,
+    totalAmount: totals.totalAmount,
+    totalCount: totals.totalCount,
+    nextCursor,
   };
 }
 

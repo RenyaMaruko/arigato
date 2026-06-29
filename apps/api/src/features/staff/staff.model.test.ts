@@ -12,6 +12,9 @@ import {
   escapeCsvCell,
   evaluatePayoutEligibility,
   selectPayoutTipsWithinAvailable,
+  calculateStaffTakeAmount,
+  encodeTipCursor,
+  decodeTipCursor,
 } from "./staff.model.js";
 
 /**
@@ -161,5 +164,46 @@ describe("staff.model", () => {
     expect(normalizeHeadline(undefined)).toBeNull();
     expect(normalizeHeadline("   ")).toBeNull();
     expect(normalizeHeadline("  カフェ店員  ")).toBe("カフェ店員");
+  });
+
+  it("encode/decodeTipCursor: 往復で元の (受取日時, id) に戻る（不透明トークン）", () => {
+    const cursor = {
+      receivedAt: "2025-05-15T10:32:00Z",
+      id: "11111111-1111-1111-1111-111111111111",
+    };
+    const token = encodeTipCursor(cursor);
+    // トークンは中身（ISO・uuid）を直接含まない不透明文字列にする
+    expect(token).not.toContain(":");
+    expect(token).not.toContain(cursor.id);
+    // デコードで元に戻る
+    expect(decodeTipCursor(token)).toEqual(cursor);
+  });
+
+  it("decodeTipCursor: 不正・欠損・壊れたトークンは null（先頭ページ扱い・落とさない）", () => {
+    expect(decodeTipCursor(undefined)).toBeNull();
+    expect(decodeTipCursor(null)).toBeNull();
+    expect(decodeTipCursor("")).toBeNull();
+    // base64url だが区切りが無い（id を割れない）→ null
+    expect(decodeTipCursor(Buffer.from("noseparator", "utf8").toString("base64url"))).toBeNull();
+    // 区切りはあるが id が空 → null
+    expect(
+      decodeTipCursor(Buffer.from("2025-05-15T10:32:00Z__", "utf8").toString("base64url")),
+    ).toBeNull();
+    // 受取日時が空 → null
+    expect(decodeTipCursor(Buffer.from("__some-id", "utf8").toString("base64url"))).toBeNull();
+  });
+
+  it("calculateStaffTakeAmount は SQL の FLOOR(amount * 0.85) と一致する（代表値）", () => {
+    // 合計集計（SQL: FLOOR(amount*0.85)）と per-item 手取り（JS: Math.floor(amount*0.85)）の一致を担保する。
+    // 代表値で「JS の手取り」＝「SQL を JS で再現した floor(amount*0.85)」を確認する。
+    const cases = [100, 300, 333, 1000, 5000, 50000];
+    for (const amount of cases) {
+      // SQL の FLOOR(amount * 0.85) と同じ計算（浮動小数の床関数）
+      const sqlEquivalent = Math.floor(amount * 0.85);
+      expect(calculateStaffTakeAmount(amount)).toBe(sqlEquivalent);
+    }
+    // 具体値での確認（333 → 283.05 → 283 / 50000 → 42500）
+    expect(calculateStaffTakeAmount(333)).toBe(283);
+    expect(calculateStaffTakeAmount(50000)).toBe(42500);
   });
 });

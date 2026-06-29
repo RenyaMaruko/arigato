@@ -138,14 +138,68 @@ export const StaffTipItemSchema = z.object({
 });
 export type StaffTipItem = z.infer<typeof StaffTipItemSchema>;
 
+// 1ページに返す受取履歴の件数（無限スクロール用）。既定 20・上限はサーバ側で 50 にクランプする。
+export const STAFF_TIPS_DEFAULT_LIMIT = 20;
+export const STAFF_TIPS_MAX_LIMIT = 50;
+
 /**
- * GET /staff/me/tips の応答（受取履歴・本人のみ）。
- * 成立済み（succeeded）の投げ銭を新しい順に返す。合計も併せて本人に返す。
+ * ISO 日時文字列の妥当性チェック（フィルタ用の from/to）。
+ * Date.parse できる文字列だけを通し、それ以外（空・壊れた値）は undefined に倒す
+ * （フィルタ無し扱い＝安全側）。フロント・バック共有で同じ検証を使う。
+ */
+const IsoDateTimeQuery = z
+  .string()
+  .refine((s) => !Number.isNaN(Date.parse(s)), { message: "invalid_datetime" })
+  .optional()
+  .catch(undefined);
+
+/**
+ * GET /staff/me/tips のクエリ入力（キーセットページング＋フィルタ）。
+ * cursor は「最後に取得した行の (receivedAt, id)」を表す不透明文字列（先頭ページは省略）。
+ * limit は1ページの件数（既定 20・サーバ側で 1〜50 にクランプ）。
+ * フロント・バック共有で同じ検証を使い、不正値は安全側に倒す（cursor 不正は先頭ページ扱い）。
+ *
+ * フィルタ（任意・list と合計の両方に同じ条件で効く）:
+ *  - storeId: 店舗で絞り込む（uuid・不正値はフィルタ無し扱いに倒す）
+ *  - from:    受取日時の下限（ISO 日時・>= で含む）
+ *  - to:      受取日時の上限（ISO 日時・< で排他＝期間末は翌月/翌年の頭を渡す前提）
+ * いずれも不正値は 400 にせず undefined（フィルタ無し）に倒す（明確に安全側）。
+ */
+export const StaffTipsQuerySchema = z.object({
+  // 次ページの基点（不透明文字列）。先頭ページでは未指定
+  cursor: z.string().optional(),
+  // 1ページの件数（文字列クエリを数値に変換）。未指定・不正は既定 20、範囲外はクランプ
+  limit: z.coerce
+    .number()
+    .int()
+    .min(1)
+    .max(STAFF_TIPS_MAX_LIMIT)
+    .catch(STAFF_TIPS_DEFAULT_LIMIT)
+    .optional(),
+  // 店舗フィルタ（uuid）。不正値はフィルタ無し扱い（undefined）に倒す
+  storeId: z.string().uuid().optional().catch(undefined),
+  // 期間フィルタの下限（ISO 日時・含む）。不正値はフィルタ無し扱い
+  from: IsoDateTimeQuery,
+  // 期間フィルタの上限（ISO 日時・排他）。不正値はフィルタ無し扱い
+  to: IsoDateTimeQuery,
+});
+export type StaffTipsQuery = z.infer<typeof StaffTipsQuerySchema>;
+
+/**
+ * GET /staff/me/tips の応答（受取履歴・本人のみ・無限スクロール）。
+ * 成立済み（succeeded）の投げ銭を新しい順に20件ずつ返す（キーセットページング）。
+ * items はそのページ分のみ。合計（totalAmount・totalCount）は「全受取」の集計値で、
+ * ページに依らず一定（ページの items から計算しない・必ず全件の別集計）。本人のみ。
  */
 export const StaffTipsResponseSchema = z.object({
+  // このページ分の受取履歴（最大 limit 件）
   items: z.array(StaffTipItemSchema),
-  // 受取総額（成立済み・円）。本人のみ
+  // 受取総額（全受取・成立済み・手取りベース・円）。ページに依らず一定。本人のみ
   totalAmount: z.number().int(),
+  // 受取総件数（全受取・成立済み）。ページに依らず一定。本人のみ
+  totalCount: z.number().int(),
+  // 次ページの基点（不透明文字列）。次が無ければ null（最後のページ）
+  nextCursor: z.string().nullable(),
 });
 export type StaffTipsResponse = z.infer<typeof StaffTipsResponseSchema>;
 

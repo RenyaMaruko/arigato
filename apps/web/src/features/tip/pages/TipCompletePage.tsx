@@ -102,7 +102,9 @@ export function TipCompletePage() {
 
   return (
     <PhoneFrame>
-      <div className="flex flex-1 flex-col px-[26px] pb-[30px] pt-2">
+      {/* 本文は内部スクロール（PhoneFrame の高さ固定に合わせ、縦に長くても破綻させない）。
+          各状態の下部ボタンは mt-auto で下寄せ、内容が長い場合はこの領域内でスクロールする。 */}
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-[26px] pb-[30px] pt-2">
         {isLoading && (
           <p className="mt-10 text-center text-token-md text-ink-sub">{t("tip.loading")}</p>
         )}

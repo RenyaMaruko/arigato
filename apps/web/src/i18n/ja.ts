@@ -146,7 +146,9 @@ export const ja = {
       identityPending: "本人確認を確認中です",
       identityVerified: "本人確認済み",
       logout: "ログアウト",
-      // QR
+      // 所属店舗（一覧画面のタイトル）
+      storesTitle: "所属店舗",
+      // QR（所属店舗の詳細＝店ごとのQR）
       qrTitle: "QRコード",
       qrHeading: "あなた専用の投げ銭QR",
       // 店ごとのQR であることを示すサブ見出し（{{store}} に店名）
@@ -167,7 +169,22 @@ export const ja = {
       // 受取履歴（04）
       tipsTitle: "受取履歴",
       tipsTotalLabel: "合計",
+      // 受取サマリー（全店・全期間の累計）の2指標ラベル
+      tipsTotalAmountLabel: "総受取金額",
+      tipsTotalCountLabel: "総受取件数",
       tipsEmpty: "まだ受け取った投げ銭はありません",
+      // フィルタ（店舗・期間）で1件も該当しないときの空表示（全体0件とは文言を分ける）
+      tipsFilteredEmpty: "この条件の受取はありません",
+      // 店舗・期間フィルタのラベル・選択肢
+      tipsFilterStoreLabel: "店舗",
+      tipsFilterAllStores: "すべての店舗",
+      tipsFilterPeriodLabel: "期間",
+      tipsFilterPeriodAll: "すべて",
+      tipsFilterPeriodThisMonth: "今月",
+      tipsFilterPeriodLastMonth: "先月",
+      tipsFilterPeriodThisYear: "今年",
+      // 受取履歴の取得に失敗したとき（空・ローディングと分岐）
+      loadError: "受取履歴を読み込めませんでした",
       tipsSettlementHeld: "保留中",
       tipsSettlementPayable: "着金可能",
       tipsSettlementPaid: "着金済",
@@ -185,7 +202,7 @@ export const ja = {
       balanceSeeFlow: "本人確認の流れを見る",
       balanceVerifiedNote: "本人確認が完了しています。着金可能額をご確認ください。",
       // 手取り型の補足（店員さんに届くのは受取の約85%。手数料15%・決済料込み）
-      balanceTakeNote: "表示金額は手取り額です（投げ銭の約85%。手数料15%・決済料込み）",
+      balanceTakeNote: "金額はすべて手数料15%を引いた額です",
       // 送金（振込申請・手動送金）
       payoutTitle: "送金",
       payoutAvailableLabel: "送金できる額",
@@ -258,10 +275,10 @@ export const ja = {
       exportDownloading: "出力中…",
       exportError: "出力に失敗しました。もう一度お試しください。",
       exportLink: "申告データ（CSV）",
-      // ボトムナビ（モック01）。ホーム / 履歴 / QR / 設定
+      // ボトムナビ（モック01）。ホーム / 履歴 / 所属店舗 / 設定
       navHome: "ホーム",
-      navHistory: "履歴",
-      navQr: "QR",
+      navHistory: "受取履歴",
+      navStores: "所属店舗",
       navSettings: "設定",
       // 設定画面（10）。プロフィール・本人確認/口座・申告データ・ログアウトへの導線
       settingsTitle: "設定",
