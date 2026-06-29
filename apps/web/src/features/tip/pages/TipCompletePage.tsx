@@ -13,7 +13,7 @@ const CONFIRM_TIMEOUT_MS = 30000;
  * 完了画面（/tip/:membershipId/complete?tipId=&status=、モック 04）。
  * 見出しは置かず、誰に・¥◯◯（当該 tip の送金額）・入力したメッセージを再掲する。
  * メッセージ未入力なら枠は出さない。
- * 「もう一度送る」で投げ銭画面へ戻り、「閉じる」も同様に投げ銭画面へ戻る。
+ * 「閉じる」で投げ銭画面へ戻る（「もう一度送る」は同一動作だったため廃止）。
  *
  * 表示の「正」は2段構え:
  *  - お客さま向けの完了/失敗表示は、決済画面の confirmPayment が返した即時結果（search の status、
@@ -242,19 +242,12 @@ export function TipCompletePage() {
               </div>
             )}
 
-            {/* アクション（下寄せ） */}
+            {/* アクション（下寄せ）。「もう一度送る」は「閉じる」と同じ動作だったため廃止し、閉じるのみにする */}
             <div className="mt-auto flex flex-col gap-3 pt-[30px]">
               <button
                 type="button"
                 onClick={backToTip}
                 className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
-              >
-                {t("tip.sendAgain")}
-              </button>
-              <button
-                type="button"
-                onClick={backToTip}
-                className="rounded-xl border-[1.5px] border-line bg-page py-4 text-center text-token-lg font-semibold text-ink"
               >
                 {t("tip.close")}
               </button>
