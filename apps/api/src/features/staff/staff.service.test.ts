@@ -153,7 +153,7 @@ function createMockRepo() {
       const membershipId = `membership-${membershipSeq}`;
       const next = [
         ...current,
-        { membershipId, storeId: invite.storeId, storeName: invite.storeName },
+        { membershipId, storeId: invite.storeId, storeName: invite.storeName, logoUrl: null },
       ];
       membershipsByAuth.set(authUserId, next);
       // 招待を消費する

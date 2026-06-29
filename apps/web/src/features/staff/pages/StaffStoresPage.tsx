@@ -66,9 +66,17 @@ export function StaffStoresPage() {
                 }
                 className="flex items-center gap-3 rounded-xl border-[1.5px] border-line bg-page px-4 py-3.5 text-left"
               >
-                {/* 店のしるし（ローズ淡色の丸） */}
-                <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-rose">
-                  <StoreIcon />
+                {/* 店のロゴ（未設定はローズ淡色の丸＋建物アイコン） */}
+                <span className="flex h-9 w-9 flex-none items-center justify-center overflow-hidden rounded-full bg-rose-soft text-rose">
+                  {m.logoUrl ? (
+                    <img
+                      src={m.logoUrl}
+                      alt={m.storeName}
+                      className="h-9 w-9 rounded-full object-cover"
+                    />
+                  ) : (
+                    <StoreIcon />
+                  )}
                 </span>
                 <span className="min-w-0 flex-1 truncate text-token-md font-semibold text-ink">
                   {m.storeName}

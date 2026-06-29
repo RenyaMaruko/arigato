@@ -41,6 +41,8 @@ export type StaffMembershipRow = {
   membershipId: string;
   storeId: string;
   storeName: string;
+  // 店のロゴ画像URL（未設定は null）
+  logoUrl: string | null;
 };
 
 // プロフィール作成時に Repository が受け取る値（所属は含めない。人ごと1つ）
@@ -405,7 +407,8 @@ export function createStaffRepository(): StaffRepository {
         SELECT
           ss.id      AS "membershipId",
           ss.store_id AS "storeId",
-          st.name    AS "storeName"
+          st.name    AS "storeName",
+          st.logo_url AS "logoUrl"
         FROM staff_store ss
         JOIN staff s ON s.id = ss.staff_id
         JOIN store st ON st.id = ss.store_id

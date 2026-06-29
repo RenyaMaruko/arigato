@@ -88,6 +88,8 @@ function toStaffMe(
       membershipId: m.membershipId,
       storeId: m.storeId,
       storeName: m.storeName,
+      // 店のロゴ（未設定は null。一覧・ホームの店カードで表示）
+      logoUrl: m.logoUrl,
       // QR が指す固定 URL（/tip/:membershipId）
       tipUrl: buildUrl(m.membershipId),
     })),

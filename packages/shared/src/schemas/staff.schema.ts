@@ -81,6 +81,8 @@ export const StaffMembershipSchema = z.object({
   membershipId: z.string().uuid(),
   storeId: z.string().uuid(),
   storeName: z.string(),
+  // 店のロゴ画像URL（未設定は null。所属店舗一覧・ホームの店カードで表示し、無ければプレースホルダ）
+  logoUrl: z.string().nullable(),
   // この所属（人×店）の QR が指す固定 URL（/tip/:membershipId）。一度発行したら不変
   tipUrl: z.string(),
 });

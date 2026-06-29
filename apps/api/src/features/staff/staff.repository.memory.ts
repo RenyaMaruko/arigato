@@ -63,6 +63,8 @@ export function createInMemoryStaffRepository(): StaffRepository {
         membershipId: id,
         storeId: m.storeId,
         storeName: m.storeName,
+        // メモリ実装ではロゴは持たない
+        logoUrl: null,
       }));
     },
 
