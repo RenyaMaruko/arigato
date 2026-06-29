@@ -105,7 +105,7 @@ export const ja = {
       inviteTitle: "お店からの招待",
       inviteLead: "このお店の店員さんとして登録します",
       inviteStoreLabel: "所属するお店",
-      inviteStart: "はじめる",
+      inviteStart: "参加する",
       // 参加（join）の処理中・完了・既に所属
       joining: "参加処理中…",
       joinErrorInvite: "招待が無効です。コードを確認してください。",

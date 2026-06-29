@@ -109,7 +109,6 @@ export function StaffInviteAcceptPage() {
           >
             {t("staff.inviteStart")}
           </button>
-          <div className="mt-3 text-center text-token-xs text-muted">{t("staff.createNote")}</div>
         </div>
       </div>
     </PhoneFrame>
