@@ -85,13 +85,37 @@ function StoreGratitudeContent({ store }: { store: StoreProfile }) {
         </button>
       </div>
 
-      {/* 期間セレクタ（タブの下・お店全体/スタッフ別どちらにも効く）。すべて／今月／先月／今年 */}
-      <div className="flex flex-none items-center px-5 pb-1 pt-3.5">
-        <PeriodSelect
-          ariaLabel={t("store.gratitudePeriodLabel")}
-          value={period}
-          onChange={(v) => setPeriod(v)}
-        />
+      {/* フィルタ（期間・スタッフ）。各ピルの左に小さなラベルを置き横並びにして、
+          何の絞り込みかを一目で分かるようにする。期間は両タブに効く。
+          スタッフはスタッフ別タブのときだけ横に追加する。 */}
+      <div className="flex flex-none flex-wrap items-start gap-x-4 gap-y-2 px-5 pb-1 pt-3.5">
+        <div className="flex flex-col gap-1">
+          <span className="pl-1 text-token-xs font-semibold text-muted">
+            {t("store.gratitudePeriodLabel")}
+          </span>
+          <PeriodSelect
+            ariaLabel={t("store.gratitudePeriodLabel")}
+            value={period}
+            onChange={(v) => setPeriod(v)}
+          />
+        </div>
+        {tab === "staff" && (
+          <div className="flex flex-col gap-1">
+            <span className="pl-1 text-token-xs font-semibold text-muted">
+              {t("store.gratitudeStaffLabel")}
+            </span>
+            <StaffSelect
+              ariaLabel={t("store.gratitudeStaffLabel")}
+              value={selectedStaffId}
+              options={(gratitude?.perStaff ?? []).map((p) => ({
+                id: p.staffId,
+                name: p.staffName,
+              }))}
+              allLabel={t("store.gratitudeStaffAll")}
+              onChange={setSelectedStaffId}
+            />
+          </div>
+        )}
       </div>
 
       <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-6 pt-4">
@@ -101,7 +125,6 @@ function StoreGratitudeContent({ store }: { store: StoreProfile }) {
           <PerStaffTab
             gratitude={gratitude}
             selectedStaffId={selectedStaffId}
-            onSelectStaff={setSelectedStaffId}
             staffVoices={staffGratitudeQuery.data?.voices}
             staffVoicesLoading={staffGratitudeQuery.isLoading}
           />
@@ -183,14 +206,12 @@ function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) 
 function PerStaffTab({
   gratitude,
   selectedStaffId,
-  onSelectStaff,
   staffVoices,
   staffVoicesLoading,
 }: {
   gratitude: StoreGratitude | undefined;
-  // 選択中のスタッフ（""＝すべて）
+  // 選択中のスタッフ（""＝すべて）。セレクタは親（フィルタ行）に置く
   selectedStaffId: string;
-  onSelectStaff: (staffId: string) => void;
   // 特定スタッフ選択時のメッセージ一覧（staffId 絞りの追加クエリ由来）
   staffVoices: GratitudeVoice[] | undefined;
   staffVoicesLoading: boolean;
@@ -203,17 +224,6 @@ function PerStaffTab({
 
   return (
     <>
-      {/* スタッフ選択（すべて＋各スタッフ・名簿順）。期間セレクタと同じピル型トーン */}
-      <div className="mb-4 flex items-center">
-        <StaffSelect
-          ariaLabel={t("store.gratitudeStaffLabel")}
-          value={selectedStaffId}
-          options={perStaff.map((p) => ({ id: p.staffId, name: p.staffName }))}
-          allLabel={t("store.gratitudeStaffAll")}
-          onChange={onSelectStaff}
-        />
-      </div>
-
       {selectedStaffId === "" ? (
         // すべて: スタッフ別件数の内訳（名簿順・中立。件数で順位付けしない）
         <div className="flex flex-col gap-3">
