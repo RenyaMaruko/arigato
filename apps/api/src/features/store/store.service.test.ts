@@ -35,6 +35,15 @@ import type {
 
 const buildUrl = (code: string) => buildInviteUrl("http://localhost:5173", code);
 
+// 受取日時が期間（from 含む・to 排他）に入るか判定するテスト用ヘルパ（実 DB の SQL と同じ規則）
+function inPeriod(receivedAt: string, period?: { from?: string; to?: string }): boolean {
+  if (!period) return true;
+  const t = new Date(receivedAt).getTime();
+  if (period.from && t < new Date(period.from).getTime()) return false;
+  if (period.to && t >= new Date(period.to).getTime()) return false;
+  return true;
+}
+
 // テスト用のモック Repository（実 DB を使わず Service のロジックを検証する）
 function createMockRepo() {
   const stores = new Map<string, StoreRow>();
@@ -43,6 +52,11 @@ function createMockRepo() {
   const voicesByStore = new Map<string, GratitudeVoiceRow[]>();
   const timesByStore = new Map<string, GratitudeTimeRow[]>();
   const perStaffByStore = new Map<string, GratitudePerStaffRow[]>();
+  // スタッフ別の受取日時明細（期間でスタッフ別件数を数え直す検証に使う）
+  const perStaffTimesByStore = new Map<
+    string,
+    { staffId: string; staffName: string; times: string[] }[]
+  >();
 
   const repo: StoreRepository = {
     async findStoreById(storeId) {
@@ -107,18 +121,40 @@ function createMockRepo() {
     async listStaff(storeId) {
       return [...(staffByStore.get(storeId) ?? [])];
     },
-    async listGratitudeVoices(storeId, limit) {
-      return (voicesByStore.get(storeId) ?? []).slice(0, limit);
+    async listGratitudeVoices(storeId, limit, period) {
+      // 期間（from 含む・to 排他）が来たら受取日時で絞る。実 DB の SQL と同じ振る舞いをモックでも再現する
+      const all = voicesByStore.get(storeId) ?? [];
+      const filtered = all.filter((v) => inPeriod(v.receivedAt, period));
+      return filtered.slice(0, limit);
     },
     async listGratitudeTimes(storeId) {
+      // 件数集計用は全期間を返す（期間絞りと今週判定は Model 側で行う）
       return [...(timesByStore.get(storeId) ?? [])];
     },
-    async listGratitudePerStaff(storeId) {
+    async listGratitudePerStaff(storeId, period) {
+      // 期間が来たら、件数を期間で数え直す（perStaffTimesByStore に明細があればそれを使う）
+      const detail = perStaffTimesByStore.get(storeId);
+      if (detail && period && (period.from || period.to)) {
+        return detail.map((d) => ({
+          staffId: d.staffId,
+          staffName: d.staffName,
+          count: d.times.filter((tm) => inPeriod(tm, period)).length,
+        }));
+      }
       return [...(perStaffByStore.get(storeId) ?? [])];
     },
   };
 
-  return { repo, stores, invitesByStore, staffByStore, voicesByStore, timesByStore, perStaffByStore };
+  return {
+    repo,
+    stores,
+    invitesByStore,
+    staffByStore,
+    voicesByStore,
+    timesByStore,
+    perStaffByStore,
+    perStaffTimesByStore,
+  };
 }
 
 // 所有者付きの店を1件用意するヘルパ（既に作成済みの店をシードする）
@@ -319,7 +355,7 @@ describe("store.service", () => {
     expect(json).not.toMatch(/amount|customer_total|platform_fee|balance|payout/i);
   });
 
-  it("getStoreGratitude: 件数・お客さまの声・スタッフ別件数を返す", async () => {
+  it("getStoreGratitude: 期間未指定なら全期間の件数・お客さまの声・スタッフ別件数を返す（店ホーム互換）", async () => {
     seedOwnedStore(m, "store-1", "owner-1");
     // 受取日時（件数集計用・金額なし）
     m.timesByStore.set("store-1", [
@@ -336,13 +372,60 @@ describe("store.service", () => {
     ]);
 
     const g = await getStoreGratitude(m.repo, "owner-1", "store-1", new Date("2026-06-23T03:00:00Z"));
+    // 期間未指定 → 全期間の3件、今週は直近7日の2件
     expect(g.totalCount).toBe(3);
-    expect(g.todayCount).toBe(1);
     expect(g.weekCount).toBe(2);
-    expect(g.monthCount).toBe(2);
     expect(g.voices[0]!.message).toBe("笑顔が素敵で癒されました！");
     expect(g.voices[0]!.staffName).toBe("山田 さくら");
     expect(g.perStaff.length).toBe(2);
+    // today/month は廃止済み（応答に含まれない）
+    expect((g as Record<string, unknown>).todayCount).toBeUndefined();
+    expect((g as Record<string, unknown>).monthCount).toBeUndefined();
+  });
+
+  it("getStoreGratitude: 期間（from/to）指定で totalCount・voices・perStaff がその期間に絞られる。weekCount は常に今週", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    // 受取日時（全期間。Model が totalCount を期間で絞り、weekCount は常に今週）
+    m.timesByStore.set("store-1", [
+      { receivedAt: "2026-06-23T01:00:00Z" }, // 今週・今月
+      { receivedAt: "2026-06-10T03:00:00Z" }, // 今月（今週ではない）
+      { receivedAt: "2026-05-15T03:00:00Z" }, // 先月
+    ]);
+    // お客さまの声（期間で絞られることを確認する）
+    m.voicesByStore.set("store-1", [
+      { id: "v-jun-1", message: "6月の声A", receivedAt: "2026-06-23T01:00:00Z", staffName: "山田" },
+      { id: "v-jun-2", message: "6月の声B", receivedAt: "2026-06-10T03:00:00Z", staffName: "山田" },
+      { id: "v-may-1", message: "5月の声", receivedAt: "2026-05-15T03:00:00Z", staffName: "田中" },
+    ]);
+    // スタッフ別の受取日時明細（期間で件数を数え直す）
+    m.perStaffTimesByStore.set("store-1", [
+      { staffId: "s1", staffName: "山田", times: ["2026-06-23T01:00:00Z", "2026-06-10T03:00:00Z"] },
+      { staffId: "s2", staffName: "田中", times: ["2026-05-15T03:00:00Z"] },
+    ]);
+
+    const now = new Date("2026-06-23T03:00:00Z");
+
+    // 今月（6/1 〜 7/1 排他）
+    const jun = await getStoreGratitude(m.repo, "owner-1", "store-1", now, {
+      from: "2026-06-01T00:00:00Z",
+      to: "2026-07-01T00:00:00Z",
+    });
+    expect(jun.totalCount).toBe(2); // 6/23, 6/10
+    expect(jun.weekCount).toBe(1); // 常に今週（6/23 のみ）
+    expect(jun.voices.map((v) => v.id)).toEqual(["v-jun-1", "v-jun-2"]); // 5月の声は除外
+    expect(jun.perStaff.find((p) => p.staffId === "s1")!.count).toBe(2);
+    expect(jun.perStaff.find((p) => p.staffId === "s2")!.count).toBe(0);
+
+    // 先月（5/1 〜 6/1 排他）
+    const may = await getStoreGratitude(m.repo, "owner-1", "store-1", now, {
+      from: "2026-05-01T00:00:00Z",
+      to: "2026-06-01T00:00:00Z",
+    });
+    expect(may.totalCount).toBe(1); // 5/15
+    expect(may.weekCount).toBe(1); // 先月を選んでも今週は今週のまま
+    expect(may.voices.map((v) => v.id)).toEqual(["v-may-1"]);
+    expect(may.perStaff.find((p) => p.staffId === "s1")!.count).toBe(0);
+    expect(may.perStaff.find((p) => p.staffId === "s2")!.count).toBe(1);
   });
 
   it("金額非表示: 感謝の可視化の応答に金額・残高・着金キーが一切含まれない", async () => {

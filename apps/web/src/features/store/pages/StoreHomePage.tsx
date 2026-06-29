@@ -64,9 +64,6 @@ export function StoreHomePage({ store }: { store: StoreProfile }) {
               {gratitude?.totalCount ?? 0}
             </span>
             <span className="text-token-xl font-semibold text-ink">{t("store.homeCountSuffix")}</span>
-            <span className="ml-0.5 text-[24px]" aria-hidden="true">
-              ❤️
-            </span>
           </div>
           <div className="mt-1.5">
             <span className="inline-block rounded-pill bg-rose-soft px-2.5 py-[3px] text-token-sm font-bold text-rose">

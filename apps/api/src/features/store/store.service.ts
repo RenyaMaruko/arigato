@@ -288,11 +288,19 @@ export async function listStoreStaff(
   };
 }
 
+// 感謝の可視化の期間フィルタ（記録画面の期間セレクタから渡る from/to。未指定は全期間＝店ホーム互換）。
+// from は含む（>=）・to は排他（<）。ISO 文字列。
+export type GratitudePeriod = {
+  from?: string;
+  to?: string;
+};
+
 /**
  * 感謝の可視化を取得する（GET /store/:storeId/gratitude）。店スコープ。
  *
- * 店全体の「ありがとう」件数（累計・今日・今週・今月）と、お客さまの声フィード（メッセージ・いつ・誰宛か）、
- * スタッフ別の件数を返す。
+ * 期間（period.from/to）で絞った店全体の件数（totalCount）・お客さまの声フィード・スタッフ別件数と、
+ * 期間に関わらず常に「今週」の件数（weekCount・店ホームの今週バッジ用）を返す。
+ * period 未指定なら全期間を返す（店ホーム互換）。
  *
  * 金額（amount / customer_total / platform_fee）・残高・着金は一切返さない（店はお金に触れない）。
  * 件数集計は Model の純粋関数に委ね、スタッフ別件数は名簿順（中立）のまま——件数で並べ替え・順位付けしない。
@@ -302,24 +310,29 @@ export async function getStoreGratitude(
   authUserId: string,
   storeId: string,
   now: Date,
+  period: GratitudePeriod = {},
 ): Promise<StoreGratitude> {
   await requireOwnedStore(repo, authUserId, storeId);
 
-  // 件数集計（受取日時だけを取得し、Model で累計/今日/今週/今月を算出する。金額は扱わない）
+  // 件数集計（受取日時の全件を取得し、Model で totalCount を期間に絞り weekCount は常に今週を算出。金額は扱わない）
   const times = await repo.listGratitudeTimes(storeId);
-  const counts = summarizeGratitudeCounts(times, now);
+  const counts = summarizeGratitudeCounts(times, now, { from: period.from, to: period.to });
 
-  // お客さまの声（メッセージのある成立済みを新しい順に。金額なし）
-  const voices = await repo.listGratitudeVoices(storeId, GRATITUDE_VOICES_LIMIT);
+  // お客さまの声（メッセージのある成立済みを新しい順に。期間で絞る。金額なし）
+  const voices = await repo.listGratitudeVoices(storeId, GRATITUDE_VOICES_LIMIT, {
+    from: period.from,
+    to: period.to,
+  });
 
-  // スタッフ別件数（名簿順・中立。件数で並べ替えない）
-  const perStaff = await repo.listGratitudePerStaff(storeId);
+  // スタッフ別件数（名簿順・中立。期間で絞る。件数で並べ替えない）
+  const perStaff = await repo.listGratitudePerStaff(storeId, {
+    from: period.from,
+    to: period.to,
+  });
 
   return {
     totalCount: counts.totalCount,
-    todayCount: counts.todayCount,
     weekCount: counts.weekCount,
-    monthCount: counts.monthCount,
     voices: voices.map((v) => ({
       id: v.id,
       message: v.message,

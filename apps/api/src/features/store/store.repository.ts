@@ -95,6 +95,13 @@ export type UpdateStoreParams = {
  * Service が依存する Repository の契約（注入点）。
  * 実装は下の createStoreRepository（実 DB）。テストではこの型を満たすモックを渡す。
  */
+// 感謝の可視化の期間フィルタ（from は含む・>=、to は排他・<。ISO 文字列。未指定はその端をフィルタしない）。
+// COALESCE(succeeded_at, created_at) を受取日時として WHERE に AND する。
+export type GratitudePeriodFilter = {
+  from?: string;
+  to?: string;
+};
+
 export type StoreRepository = {
   // 店プロフィールを取得する（店スコープのアクセス制御に owner も併せて返す）
   findStoreById: (storeId: string) => Promise<StoreRow | null>;
@@ -114,13 +121,42 @@ export type StoreRepository = {
   revokeInvite: (storeId: string, code: string) => Promise<number>;
   // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（在籍管理。中立な並び）
   listStaff: (storeId: string) => Promise<StoreStaffRow[]>;
-  // 自店宛の「お客さまの声」（メッセージのある成立済み投げ銭）を新しい順に取得する（金額なし）
-  listGratitudeVoices: (storeId: string, limit: number) => Promise<GratitudeVoiceRow[]>;
-  // 自店宛の成立済み投げ銭の受取日時だけを取得する（件数集計用・金額なし）
+  // 自店宛の「お客さまの声」（メッセージのある成立済み投げ銭）を新しい順に取得する（金額なし）。
+  // period（from/to）を渡すとその期間に絞る（未指定は全期間）。
+  listGratitudeVoices: (
+    storeId: string,
+    limit: number,
+    period?: GratitudePeriodFilter,
+  ) => Promise<GratitudeVoiceRow[]>;
+  // 自店宛の成立済み投げ銭の受取日時だけを取得する（件数集計用・金額なし）。
+  // 期間で絞らず全期間を返す（totalCount の期間絞り込みと weekCount の常時今週は Model 側で算出する）。
   listGratitudeTimes: (storeId: string) => Promise<GratitudeTimeRow[]>;
-  // 自店のスタッフ別「ありがとう件数」を名簿順（中立）で取得する（金額なし・件数で並べ替えない）
-  listGratitudePerStaff: (storeId: string) => Promise<GratitudePerStaffRow[]>;
+  // 自店のスタッフ別「ありがとう件数」を名簿順（中立）で取得する（金額なし・件数で並べ替えない）。
+  // period（from/to）を渡すとその期間に絞る（未指定は全期間）。
+  listGratitudePerStaff: (
+    storeId: string,
+    period?: GratitudePeriodFilter,
+  ) => Promise<GratitudePerStaffRow[]>;
 };
+
+/**
+ * 感謝の可視化の期間フィルタ（from/to）を SQL の AND 条件に変換するヘルパ。
+ * 受取日時 = COALESCE(succeeded_at, created_at)。from は含む（>=）・to は排他（<）。
+ * 未指定の端は条件を足さない（全期間）。生 SQL は Repository 内に閉じる。
+ */
+function gratitudePeriodClause(period?: GratitudePeriodFilter) {
+  const parts = [];
+  // from: その時刻を含む（>=）
+  if (period?.from) {
+    parts.push(sql`AND COALESCE(t.succeeded_at, t.created_at) >= ${period.from}`);
+  }
+  // to: その時刻を含まない（<・排他）
+  if (period?.to) {
+    parts.push(sql`AND COALESCE(t.succeeded_at, t.created_at) < ${period.to}`);
+  }
+  // 条件が無ければ空フラグメント（全期間）
+  return parts.length > 0 ? sql.join(parts, sql` `) : sql``;
+}
 
 // 共通の SELECT 句（店プロフィール行。金額・残高カラムは一切含めない）
 const STORE_SELECT = sql`
@@ -288,8 +324,9 @@ export function createStoreRepository(): StoreRepository {
       return rows;
     },
 
-    // 自店宛の「お客さまの声」を新しい順に取得する（メッセージのある成立済みのみ・金額は SELECT しない）
-    async listGratitudeVoices(storeId, limit) {
+    // 自店宛の「お客さまの声」を新しい順に取得する（メッセージのある成立済みのみ・金額は SELECT しない）。
+    // period（from/to）を渡すとその期間に絞る（COALESCE(succeeded_at, created_at) を受取日時として AND）。
+    async listGratitudeVoices(storeId, limit, period) {
       const db = getDb();
       const rows = await db.execute<GratitudeVoiceRow>(sql`
         SELECT
@@ -304,6 +341,7 @@ export function createStoreRepository(): StoreRepository {
           AND t.status = 'succeeded'
           AND t.message IS NOT NULL
           AND btrim(t.message) <> ''
+          ${gratitudePeriodClause(period)}
         ORDER BY COALESCE(t.succeeded_at, t.created_at) DESC
         LIMIT ${limit}
       `);
@@ -328,7 +366,9 @@ export function createStoreRepository(): StoreRepository {
     // COUNT のみで金額は扱わず、ORDER BY も在籍（名簿順）にして件数では並べ替えない（中立）。
     // 多対多モデル: この店のメンバー（staff_store）を引き、その店での成立済み tip だけを数える
     // （t.store_id でこの店分に限定するため、掛け持ちの他店分は混ざらない）。
-    async listGratitudePerStaff(storeId) {
+    // period（from/to）を渡すと、件数を数える tip をその期間に絞る（LEFT JOIN の ON 条件に AND）。
+    // ON 側に置くことで、期間内に件数 0 のスタッフも名簿順で 0 件として残る（中立な並びを保つ）。
+    async listGratitudePerStaff(storeId, period) {
       const db = getDb();
       const rows = await db.execute<GratitudePerStaffRow>(sql`
         SELECT
@@ -341,6 +381,7 @@ export function createStoreRepository(): StoreRepository {
           ON t.staff_id = s.id
           AND t.store_id = ${storeId}
           AND t.status = 'succeeded'
+          ${gratitudePeriodClause(period)}
         WHERE ss.store_id = ${storeId}
         GROUP BY s.id, s.display_name, ss.created_at
         ORDER BY ss.created_at ASC

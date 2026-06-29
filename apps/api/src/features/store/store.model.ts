@@ -33,16 +33,12 @@ export function buildInviteUrl(webBaseUrl: string, code: string): string {
   return `${base}/invite/${code}`;
 }
 
-// 感謝集計の対象期間（件数の集計に使う。金額の集計は一切しない）
+// 感謝集計の結果（件数のみ。金額は一切扱わない）
 export type GratitudePeriods = {
-  // 累計件数
+  // 期間で絞った件数（from/to 未指定なら全期間の件数＝累計）
   totalCount: number;
-  // 今日（JST）の件数
-  todayCount: number;
-  // 直近7日（今週相当）の件数
+  // 今週（直近7日）の件数。期間指定に関わらず常に今週（店ホームの今週バッジ用）
   weekCount: number;
-  // 今月（暦月・JST）の件数
-  monthCount: number;
 };
 
 // 感謝集計の入力1件分（成立済み投げ銭の「いつ」だけ。金額は持ち込まない）
@@ -51,62 +47,51 @@ export type GratitudeCountInput = {
   receivedAt: string;
 };
 
+// 件数集計の期間レンジ（from は含む・>=、to は排他・<。ISO 文字列。未指定はその端をフィルタしない）
+export type GratitudeCountRange = {
+  from?: string;
+  to?: string;
+};
+
 /**
- * 成立済み投げ銭の受取日時の配列から、件数の集計（累計/今日/今週/今月）を行う純粋関数。
+ * 成立済み投げ銭の受取日時の配列から、件数（totalCount / weekCount）を集計する純粋関数。
  *
  * 金額は引数にも結果にも一切含めない（店はお金に触れない）。
- * 期間は JST（+09:00）基準で判定する。`now` は判定基準時刻（テスト容易性のため引数で受ける）。
+ * - totalCount: range（from/to）で絞った件数。range 未指定なら全期間の件数。
+ *               from は含む（>=）・to は排他（<）。
+ * - weekCount:  range に関わらず常に「今週（直近7日）」の件数（店ホームの今週バッジ用）。
+ *
+ * `now` は今週判定の基準時刻（テスト容易性のため引数で受ける）。
  */
 export function summarizeGratitudeCounts(
   tips: GratitudeCountInput[],
   now: Date,
+  range: GratitudeCountRange = {},
 ): GratitudePeriods {
-  // JST のミリ秒オフセット（+9時間）
-  const JST_OFFSET = 9 * 60 * 60 * 1000;
-
-  // ある日時を JST の年月日（YYYY-MM-DD 相当の数値キー）に落とす
-  const jstDateKey = (d: Date): string => {
-    const jst = new Date(d.getTime() + JST_OFFSET);
-    // UTC ゲッターで JST 換算後の年月日を取り出す
-    const y = jst.getUTCFullYear();
-    const m = jst.getUTCMonth();
-    const day = jst.getUTCDate();
-    return `${y}-${m}-${day}`;
-  };
-
-  // 今日（JST）の年月日キー
-  const todayKey = jstDateKey(now);
-  // 今月（JST）の年と月
-  const nowJst = new Date(now.getTime() + JST_OFFSET);
-  const curYear = nowJst.getUTCFullYear();
-  const curMonth = nowJst.getUTCMonth();
+  // 期間レンジの境界（ミリ秒）。未指定の端は無制限にする
+  const fromMs = range.from ? new Date(range.from).getTime() : Number.NEGATIVE_INFINITY;
+  const toMs = range.to ? new Date(range.to).getTime() : Number.POSITIVE_INFINITY;
   // 今週（直近7日）の下限時刻
   const weekAgo = now.getTime() - 7 * 24 * 60 * 60 * 1000;
 
   const periods: GratitudePeriods = {
     totalCount: 0,
-    todayCount: 0,
     weekCount: 0,
-    monthCount: 0,
   };
 
   for (const tip of tips) {
     const d = new Date(tip.receivedAt);
     if (Number.isNaN(d.getTime())) continue;
+    const ms = d.getTime();
 
-    // 累計
-    periods.totalCount += 1;
+    // totalCount: 期間レンジ内（from <= t < to）だけ数える
+    if (ms >= fromMs && ms < toMs) {
+      periods.totalCount += 1;
+    }
 
-    // 今日
-    if (jstDateKey(d) === todayKey) periods.todayCount += 1;
-
-    // 今週（直近7日）
-    if (d.getTime() >= weekAgo) periods.weekCount += 1;
-
-    // 今月（暦月・JST）
-    const dJst = new Date(d.getTime() + JST_OFFSET);
-    if (dJst.getUTCFullYear() === curYear && dJst.getUTCMonth() === curMonth) {
-      periods.monthCount += 1;
+    // weekCount: 期間レンジに関わらず常に今週（直近7日）
+    if (ms >= weekAgo) {
+      periods.weekCount += 1;
     }
   }
 

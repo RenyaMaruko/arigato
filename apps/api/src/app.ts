@@ -196,9 +196,9 @@ export function createApp() {
     revokeStoreInvite: (authUserId, storeId, code) =>
       revokeStoreInvite(storeRepo, authUserId, storeId, code),
     listStoreStaff: (authUserId, storeId) => listStoreStaff(storeRepo, authUserId, storeId),
-    // 感謝の件数集計の基準時刻はサーバーの現在時刻（now）を渡す（Model で JST 判定）
-    getStoreGratitude: (authUserId, storeId) =>
-      getStoreGratitude(storeRepo, authUserId, storeId, new Date()),
+    // 感謝の集計の基準時刻はサーバーの現在時刻（now）を渡す。period（from/to）は記録画面の期間セレクタ由来
+    getStoreGratitude: (authUserId, storeId, period) =>
+      getStoreGratitude(storeRepo, authUserId, storeId, new Date(), period),
   });
 
   // Webhook ルートを配線（署名検証＝infrastructure、処理＝webhook Service + tip 更新）。

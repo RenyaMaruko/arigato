@@ -32,19 +32,15 @@ describe("store.model", () => {
     );
   });
 
-  it("summarizeGratitudeCounts: 累計/今日/今週/今月を件数で集計する（金額は扱わない）", () => {
+  it("summarizeGratitudeCounts: range 未指定なら全期間の件数を totalCount に、今週は weekCount に集計する", () => {
     // 基準時刻: 2026-06-23 12:00 JST（= 2026-06-23 03:00 UTC）
     const now = new Date("2026-06-23T03:00:00Z");
     const counts = summarizeGratitudeCounts(
       [
-        // 今日（JST 6/23）
+        // 今週（直近7日）
         { receivedAt: "2026-06-23T01:00:00Z" },
-        { receivedAt: "2026-06-22T16:00:00Z" }, // JST では 6/23 01:00 → 今日
-        // 今週（直近7日）・今月だが今日ではない
         { receivedAt: "2026-06-20T03:00:00Z" },
-        // 今月だが今週より前
-        { receivedAt: "2026-06-05T03:00:00Z" },
-        // 先月（今月でも今週でもない）
+        // 今週より前（先月）
         { receivedAt: "2026-05-15T03:00:00Z" },
         // 不正な日時は無視される
         { receivedAt: "not-a-date" },
@@ -52,18 +48,49 @@ describe("store.model", () => {
       now,
     );
 
-    // 累計は有効な5件
-    expect(counts.totalCount).toBe(5);
-    // 今日（JST 6/23）は2件
-    expect(counts.todayCount).toBe(2);
-    // 今週（直近7日: 6/16〜6/23）は 6/23×2 + 6/20 = 3件
-    expect(counts.weekCount).toBe(3);
-    // 今月（6月）は 6/23×2 + 6/20 + 6/5 = 4件
-    expect(counts.monthCount).toBe(4);
+    // range 未指定 → 全期間の有効3件
+    expect(counts.totalCount).toBe(3);
+    // 今週（直近7日: 6/16〜6/23）は 6/23 + 6/20 = 2件
+    expect(counts.weekCount).toBe(2);
+  });
+
+  it("summarizeGratitudeCounts: range（from/to）指定で totalCount をその期間に絞る（from は含む・to は排他）", () => {
+    const now = new Date("2026-06-23T03:00:00Z");
+    const tips = [
+      { receivedAt: "2026-05-31T23:59:59Z" }, // 6月の from より前 → 除外
+      { receivedAt: "2026-06-01T00:00:00Z" }, // from と同時刻 → 含む（>=）
+      { receivedAt: "2026-06-15T03:00:00Z" }, // 期間内
+      { receivedAt: "2026-06-30T23:59:59Z" }, // 期間内（to の直前）
+      { receivedAt: "2026-07-01T00:00:00Z" }, // to と同時刻 → 排他（<）で除外
+    ];
+    // 6月（6/1 〜 7/1 排他）
+    const counts = summarizeGratitudeCounts(tips, now, {
+      from: "2026-06-01T00:00:00Z",
+      to: "2026-07-01T00:00:00Z",
+    });
+    // from を含み to を排他 → 3件
+    expect(counts.totalCount).toBe(3);
+  });
+
+  it("summarizeGratitudeCounts: weekCount は range 指定に関わらず常に今週（直近7日）", () => {
+    const now = new Date("2026-06-23T03:00:00Z");
+    const tips = [
+      { receivedAt: "2026-06-23T01:00:00Z" }, // 今週
+      { receivedAt: "2026-06-20T03:00:00Z" }, // 今週
+      { receivedAt: "2026-05-15T03:00:00Z" }, // 先月（今週ではない）
+    ];
+    // 先月レンジを指定しても weekCount は今週のまま（2件）
+    const counts = summarizeGratitudeCounts(tips, now, {
+      from: "2026-05-01T00:00:00Z",
+      to: "2026-06-01T00:00:00Z",
+    });
+    // totalCount は先月レンジ → 1件、weekCount は常に今週 → 2件
+    expect(counts.totalCount).toBe(1);
+    expect(counts.weekCount).toBe(2);
   });
 
   it("summarizeGratitudeCounts: 空配列なら全件数 0", () => {
     const counts = summarizeGratitudeCounts([], new Date("2026-06-23T03:00:00Z"));
-    expect(counts).toEqual({ totalCount: 0, todayCount: 0, weekCount: 0, monthCount: 0 });
+    expect(counts).toEqual({ totalCount: 0, weekCount: 0 });
   });
 });

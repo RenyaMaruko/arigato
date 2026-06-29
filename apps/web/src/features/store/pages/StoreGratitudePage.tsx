@@ -1,17 +1,18 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { StoreProfile, StoreGratitude } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { computePeriodRange, PERIODS, type Period } from "../../../lib/period.js";
 import { StoreBottomNav } from "../components/StoreBottomNav.js";
 import { StoreGuard } from "../components/StoreGuard.js";
 import { useStoreGratitude } from "../hooks/useStore.js";
 import { formatRelativeTime } from "../utils/format.js";
 
 /**
- * 感謝の可視化画面（/store/gratitude）。モック06に対応。
+ * 感謝の記録画面（/store/gratitude）。モック06に対応。
  *
- * 店全体の「ありがとう」件数（累計・今日・今週・今月）と、お客さまの声（メッセージ・いつ・誰宛か）、
- * スタッフ別の件数を表示する。
+ * 期間（すべて／今月／先月／今年）で絞り込める。総投げ銭（totalCount）・お客さまの声・スタッフ別件数が
+ * 選んだ期間に連動する。期間セレクタは店員側の受取履歴と同じピル型のトーン（rose 系・絞り込み中が分かる）。
  *
  * 最重要原則: 金額（amount / customer_total / platform_fee）・残高・着金は画面のどこにも表示しない。
  * スタッフ別件数は名簿順（中立）で並べ、件数で順位付け・並べ替えしない。
@@ -22,7 +23,12 @@ export function StoreGratitudePage() {
 
 function StoreGratitudeContent({ store }: { store: StoreProfile }) {
   const { t } = useTranslation();
-  const gratitudeQuery = useStoreGratitude(store.id);
+
+  // 期間プリセット（すべて／今月／先月／今年）。選択を from/to（ISO）に変換して取得に渡す
+  const [period, setPeriod] = useState<Period>("all");
+  // period から from/to を計算する（純粋関数）。期間が変わると useStoreGratitude が自動再取得する
+  const range = useMemo(() => computePeriodRange(period), [period]);
+  const gratitudeQuery = useStoreGratitude(store.id, range);
   const gratitude = gratitudeQuery.data;
 
   // タブ（お店全体 / スタッフ別）
@@ -33,6 +39,15 @@ function StoreGratitudeContent({ store }: { store: StoreProfile }) {
       {/* タイトル */}
       <div className="flex-none px-5 pb-3.5 pt-2 text-center">
         <span className="text-token-2xl font-bold text-ink">{t("store.gratitudeTitle")}</span>
+      </div>
+
+      {/* 期間セレクタ（ヒーローの上・タブの近く）。すべて／今月／先月／今年 */}
+      <div className="flex flex-none items-center px-5 pb-3">
+        <PeriodSelect
+          ariaLabel={t("store.gratitudePeriodLabel")}
+          value={period}
+          onChange={(v) => setPeriod(v)}
+        />
       </div>
 
       {/* タブ */}
@@ -79,7 +94,8 @@ function StoreGratitudeContent({ store }: { store: StoreProfile }) {
 }
 
 /**
- * お店全体タブ: 件数（累計・今日・今週・今月）とお客さまの声フィード。金額は出さない。
+ * お店全体タブ: 選んだ期間の総投げ銭（件数）とお客さまの声フィード。金額は出さない。
+ * 期間別の3カード（今日/今週/今月）と今週バッジは期間セレクタと重複するため置かない。
  */
 function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) {
   const { t } = useTranslation();
@@ -87,7 +103,7 @@ function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) 
 
   return (
     <>
-      {/* 累計件数 */}
+      {/* 総投げ銭（選んだ期間の件数。金額ではない） */}
       <div className="whitespace-pre-line text-token-md leading-snug text-ink-label">
         {t("store.gratitudeHeroTitle")}
       </div>
@@ -98,21 +114,6 @@ function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) 
         <span className="text-token-xl font-semibold text-ink">
           {t("store.gratitudeCountSuffix")}
         </span>
-        <span className="ml-0.5 text-[24px]" aria-hidden="true">
-          ❤️
-        </span>
-      </div>
-      <div className="mt-1.5">
-        <span className="inline-block rounded-pill bg-rose-soft px-2.5 py-[3px] text-token-sm font-bold text-rose">
-          {t("store.gratitudeWeekBadge", { count: gratitude?.weekCount ?? 0 })}
-        </span>
-      </div>
-
-      {/* 期間別件数（今日 / 今週 / 今月）。金額ではなく件数 */}
-      <div className="mt-5 grid grid-cols-3 gap-3">
-        <PeriodCard label={t("store.gratitudeToday")} count={gratitude?.todayCount ?? 0} />
-        <PeriodCard label={t("store.gratitudeWeek")} count={gratitude?.weekCount ?? 0} />
-        <PeriodCard label={t("store.gratitudeMonth")} count={gratitude?.monthCount ?? 0} />
       </div>
 
       {/* お客さまの声 */}
@@ -152,7 +153,7 @@ function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) 
 }
 
 /**
- * スタッフ別タブ: スタッフごとの「ありがとう件数」。名簿順（中立）で、件数で順位付けしない。金額は出さない。
+ * スタッフ別タブ: スタッフごとの「ありがとう件数」（選んだ期間）。名簿順（中立）で、件数で順位付けしない。金額は出さない。
  */
 function PerStaffTab({ gratitude }: { gratitude: StoreGratitude | undefined }) {
   const { t } = useTranslation();
@@ -193,13 +194,67 @@ function PerStaffTab({ gratitude }: { gratitude: StoreGratitude | undefined }) {
 }
 
 /**
- * 期間別件数カード（今日 / 今週 / 今月）。件数のみ。
+ * 期間セレクタ（すべて／今月／先月／今年）。
+ * ネイティブ select を「軽やかで押しやすい」ピル型に整える（店員側の受取履歴と同じトーン）。
+ * 既定（すべて）以外を選ぶと、絞り込み中と分かるようにローズ塗りにする。
+ * インラインスタイルは使わず Tailwind ユーティリティで書く。
  */
-function PeriodCard({ label, count }: { label: string; count: number }) {
+function PeriodSelect({
+  ariaLabel,
+  value,
+  onChange,
+}: {
+  ariaLabel: string;
+  value: Period;
+  onChange: (value: Period) => void;
+}) {
+  const { t } = useTranslation();
+  // 各プリセットの表示ラベル（i18n）
+  const labels: Record<Period, string> = {
+    all: t("store.gratitudePeriodAll"),
+    thisMonth: t("store.gratitudePeriodThisMonth"),
+    lastMonth: t("store.gratitudePeriodLastMonth"),
+    thisYear: t("store.gratitudePeriodThisYear"),
+  };
+  // 「すべて」以外を選んでいたら「絞り込み中」として強調する
+  const isActive = value !== "all";
+  // 選択状態に応じてピルの色を切り替える（既定=白枠、絞り込み中=ローズ塗り）
+  const pillClass = isActive ? "border-rose bg-rose text-page" : "border-line bg-page text-ink-label";
+
   return (
-    <div className="rounded-xl border border-line-soft px-3 py-3 text-center">
-      <div className="text-token-2xl font-bold text-ink">{count}</div>
-      <div className="mt-0.5 text-token-xs text-muted">{label}</div>
+    <div className="relative inline-flex">
+      <select
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(e) => onChange(e.target.value as Period)}
+        className={`h-9 appearance-none rounded-pill border-[1.5px] pl-3.5 pr-8 text-token-sm font-semibold focus:outline-none focus:ring-2 focus:ring-rose-spark/60 ${pillClass}`}
+      >
+        {PERIODS.map((p) => (
+          <option key={p} value={p}>
+            {labels[p]}
+          </option>
+        ))}
+      </select>
+      {/* 右端の▾（クリックは下の select に通す）。色はピルの状態に合わせる */}
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-y-0 right-2.5 flex items-center ${
+          isActive ? "text-page" : "text-ink-sub"
+        }`}
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </span>
     </div>
   );
 }

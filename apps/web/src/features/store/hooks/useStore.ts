@@ -118,11 +118,17 @@ export function useStoreStaff(storeId: string | undefined) {
 
 /**
  * 感謝の可視化（GET /store/:storeId/gratitude）を取得する。件数・お客さまの声・スタッフ別件数。
+ *
+ * period（from/to・ISO）で期間を絞れる（記録画面の期間セレクタ用）。未指定は全期間（店ホーム互換）。
+ * period を queryKey に含めるので、期間が変わると自動で再取得し、件数・声・スタッフ別が連動する。
  */
-export function useStoreGratitude(storeId: string | undefined) {
+export function useStoreGratitude(storeId: string | undefined, period?: { from?: string; to?: string }) {
+  // period の各端を queryKey に含める（undefined は全期間を表す安定キー）
+  const from = period?.from ?? null;
+  const to = period?.to ?? null;
   return useQuery({
-    queryKey: ["store", "gratitude", storeId],
-    queryFn: () => fetchStoreGratitude(storeId!),
+    queryKey: ["store", "gratitude", storeId, from, to],
+    queryFn: () => fetchStoreGratitude(storeId!, period),
     enabled: Boolean(storeId),
     retry: false,
   });

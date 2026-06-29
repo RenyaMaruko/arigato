@@ -315,7 +315,7 @@ export const ja = {
       createAlreadyExists: "このアカウントには既にお店があります。",
       // ホーム（01）
       homeBell: "通知",
-      homeHeroTitle: "お店全体に届いた\n「ありがとう」",
+      homeHeroTitle: "総投げ銭",
       homeCountSuffix: "件",
       homeWeekBadge: "今週 +{{count}} 件",
       homeRecentVoices: "最近のお客さまの声",
@@ -324,7 +324,7 @@ export const ja = {
       // ボトムナビ
       navHome: "ホーム",
       navStaff: "スタッフ",
-      navGratitude: "感謝の可視化",
+      navGratitude: "記録",
       navSettings: "設定",
       // 導入・承認（08）— 作成時に同意済みの記録を表示する読み取り専用画面
       approvalTitle: "導入・承認",
@@ -368,12 +368,14 @@ export const ja = {
       gratitudeTitle: "感謝の記録",
       gratitudeTabStore: "お店全体",
       gratitudeTabStaff: "スタッフ別",
-      gratitudeHeroTitle: "お店全体に届いた\n「ありがとう」",
+      gratitudeHeroTitle: "総投げ銭",
       gratitudeCountSuffix: "件",
-      gratitudeWeekBadge: "今週 +{{count}} 件",
-      gratitudeToday: "今日",
-      gratitudeWeek: "今週",
-      gratitudeMonth: "今月",
+      // 期間セレクタ（すべて／今月／先月／今年）
+      gratitudePeriodLabel: "期間",
+      gratitudePeriodAll: "すべて",
+      gratitudePeriodThisMonth: "今月",
+      gratitudePeriodLastMonth: "先月",
+      gratitudePeriodThisYear: "今年",
       gratitudeVoicesTitle: "お客さまの声",
       gratitudeVoicesNote: "（最新の一部）",
       gratitudeNoVoices: "まだお客さまの声はありません",

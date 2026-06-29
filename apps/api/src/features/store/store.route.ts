@@ -4,6 +4,7 @@ import {
   UpdateStoreProfileInputSchema,
   CreateStoreInputSchema,
   CreateStoreInviteInputSchema,
+  StoreGratitudeQuerySchema,
   type StoreProfile,
   type StoreInviteCreated,
   type StoreInvitesResponse,
@@ -59,8 +60,13 @@ type StoreDeps = {
   revokeStoreInvite: (authUserId: string, storeId: string, code: string) => Promise<void>;
   // 所属スタッフ一覧（在籍管理・店スコープ）
   listStoreStaff: (authUserId: string, storeId: string) => Promise<StoreStaffResponse>;
-  // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）
-  getStoreGratitude: (authUserId: string, storeId: string) => Promise<StoreGratitude>;
+  // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）。
+  // period（from/to・任意）でその期間に絞る（未指定は全期間＝店ホーム互換）。
+  getStoreGratitude: (
+    authUserId: string,
+    storeId: string,
+    period: { from?: string; to?: string },
+  ) => Promise<StoreGratitude>;
 };
 
 // 店スコープのアクセス制御エラーを HTTP ステータスに変換する共通ハンドラ。
@@ -188,12 +194,14 @@ export function createStoreRoute(deps: StoreDeps) {
         throw err;
       }
     })
-    // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）
-    .get("/:storeId/gratitude", async (c) => {
+    // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）。
+    // 任意クエリ from/to（ISO）で期間を絞る。不正値は安全側（フィルタ無し）に倒す（.catch(undefined)）。
+    .get("/:storeId/gratitude", zValidator("query", StoreGratitudeQuerySchema), async (c) => {
       const authUser = c.get("authUser");
       const storeId = c.req.param("storeId");
+      const { from, to } = c.req.valid("query");
       try {
-        const gratitude = await deps.getStoreGratitude(authUser.id, storeId);
+        const gratitude = await deps.getStoreGratitude(authUser.id, storeId, { from, to });
         return c.json(gratitude);
       } catch (err) {
         const mapped = handleStoreScopeError(err);

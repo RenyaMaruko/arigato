@@ -173,24 +173,40 @@ export const GratitudePerStaffSchema = z.object({
 export type GratitudePerStaff = z.infer<typeof GratitudePerStaffSchema>;
 
 /**
+ * GET /store/:storeId/gratitude の任意クエリ（期間フィルタ）。
+ * from（含む・>=）/ to（排他・<）を ISO 文字列で受ける。記録画面の期間セレクタ
+ * （すべて／今月／先月／今年）から渡す。未指定は全期間（店ホーム互換）。
+ *
+ * 不正値は安全側に倒し、フィルタ無し（undefined）として扱う（.catch(undefined)）。
+ * これにより壊れた値が来てもエラーにせず、全期間として返す。
+ */
+export const StoreGratitudeQuerySchema = z.object({
+  // 期間の下限（含む・ISO 文字列）。不正・未指定はフィルタ無し
+  from: z.string().datetime().optional().catch(undefined),
+  // 期間の上限（排他・ISO 文字列）。不正・未指定はフィルタ無し
+  to: z.string().datetime().optional().catch(undefined),
+});
+export type StoreGratitudeQuery = z.infer<typeof StoreGratitudeQuerySchema>;
+
+/**
  * GET /store/:storeId/gratitude の応答（感謝の可視化）。
- * 店全体の件数（合計・今日・今週・今月）と、お客さまの声フィード、スタッフ別件数を返す。
+ * 期間で絞った店全体の件数（totalCount）とお客さまの声フィード・スタッフ別件数、
+ * および「今週」の件数（weekCount・店ホームの今週バッジ用に常に今週）を返す。
+ *
+ * from/to を指定すると totalCount・voices・perStaff がその期間に絞られる。未指定は全期間。
+ * weekCount は期間指定に関わらず常に「今週（直近7日）」を表す（店ホーム互換のため）。
  *
  * 金額（amount / customer_total / platform_fee）・残高・着金は一切含めない（横断ルール: 店はお金に触れない）。
  * スタッフ別件数は件数で並べ替え・順位付けせず、名簿順（中立）で返す。
  */
 export const StoreGratitudeSchema = z.object({
-  // 店全体に届いた「ありがとう」の累計件数
+  // 店全体に届いた「ありがとう」の件数（期間指定時はその期間に絞った件数）
   totalCount: z.number().int(),
-  // 今日の件数（JST）
-  todayCount: z.number().int(),
-  // 今週の件数（JST・直近7日）
+  // 今週の件数（JST・直近7日）。期間指定に関わらず常に今週（店ホームの今週バッジ用）
   weekCount: z.number().int(),
-  // 今月の件数（JST・暦月）
-  monthCount: z.number().int(),
-  // お客さまの声フィード（メッセージのある投げ銭を新しい順に。金額なし）
+  // お客さまの声フィード（メッセージのある投げ銭を新しい順に。期間で絞る。金額なし）
   voices: z.array(GratitudeVoiceSchema),
-  // スタッフ別件数（名簿順・中立な並び。件数で順位付けしない）
+  // スタッフ別件数（名簿順・中立な並び。期間で絞る。件数で順位付けしない）
   perStaff: z.array(GratitudePerStaffSchema),
 });
 export type StoreGratitude = z.infer<typeof StoreGratitudeSchema>;
