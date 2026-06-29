@@ -174,8 +174,8 @@ function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) 
               key={v.id}
               className="flex items-center gap-3 rounded-xl border border-line-soft px-4 py-3.5"
             >
-              <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-token-lg">
-                🙂
+              <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-rose">
+                <MessageAvatarIcon />
               </span>
               <div className="flex-1">
                 {/* メッセージ。無い投げ銭は淡色で「メッセージなし」 */}
@@ -276,8 +276,8 @@ function PerStaffTab({
                   key={v.id}
                   className="flex items-center gap-3 rounded-xl border border-line-soft px-4 py-3.5"
                 >
-                  <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-token-lg">
-                    🙂
+                  <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-rose">
+                    <MessageAvatarIcon />
                   </span>
                   <div className="flex-1">
                     {/* メッセージ。無い投げ銭は淡色で「メッセージなし」 */}
@@ -431,5 +431,27 @@ function PeriodSelect({
         </svg>
       </span>
     </div>
+  );
+}
+
+/**
+ * メッセージ行の左に置く中立アイコン（お客さまは匿名のため、顔写真の代わりの吹き出し）。
+ * 以前の 🙂 絵文字（スタンプのように見える）を、メッセージらしい吹き出しアイコンに置き換えたもの。
+ */
+function MessageAvatarIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 9 9 0 0 1-3.8-.8L3 21l1.8-5.7a8.5 8.5 0 0 1-.8-3.8A8.38 8.38 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z" />
+    </svg>
   );
 }
