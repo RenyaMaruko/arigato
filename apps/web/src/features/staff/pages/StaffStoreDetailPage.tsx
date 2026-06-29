@@ -170,11 +170,11 @@ export function StaffStoreDetailPage() {
           >
             {t("staff.qrPrint")}
           </button>
-          {/* この店を脱退する（控えめなテキストボタン。実行は確認ダイアログを挟む） */}
+          {/* この店を脱退する（脱退＝注意操作なのでローズの枠線ボタン。実行は確認ダイアログを挟む） */}
           <button
             type="button"
             onClick={() => setConfirmingLeave(true)}
-            className="py-2 text-center text-token-sm font-semibold text-muted underline-offset-2 hover:underline"
+            className="rounded-xl border-[1.5px] border-rose bg-page py-4 text-center text-token-lg font-bold text-rose"
           >
             {t("staff.leaveStoreCta")}
           </button>
