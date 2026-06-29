@@ -167,7 +167,7 @@ export function StaffProfileCreatePage() {
 
   return (
     <PhoneFrame>
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-7 pt-2">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-6 pb-7 pt-2">
         {/* 見出し */}
         <div className="mt-6">
           <div className="text-token-3xl font-bold text-ink">{t("staff.createTitle")}</div>

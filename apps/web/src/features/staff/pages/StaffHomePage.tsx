@@ -38,7 +38,7 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
 
   return (
     <PhoneFrame>
-      <div className="flex-1 min-h-0 overflow-y-auto px-6 pb-7 pt-4">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-6 pb-7 pt-4">
         {/* 残高カード。受け取った投げ銭の残高（保留＋着金可能の合計）を1つの「残高」として表示する。
             着金（銀行送金）には本人確認が要るため、未確認なら一言＋本人確認ボタンを残高のすぐ下に置く。
             金額は本人のみ表示（横断ルール）。本人の画面なのでアバター・名前・一言は出さない。 */}

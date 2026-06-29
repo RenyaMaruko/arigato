@@ -81,7 +81,7 @@ export function StaffIdentityFlowPage() {
         <span className="text-token-2xl font-bold text-ink">{t("staff.identityTitle")}</span>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-[26px] pb-6 pt-3.5">
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-[26px] pb-6 pt-3.5">
         {/* ステップのタイムライン */}
         <ol className="flex flex-col">
           {steps.map((step, index) => (
