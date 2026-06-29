@@ -7,6 +7,7 @@ import type {
   StaffTipsResponse,
   StaffBalance,
   ConnectOnboardResponse,
+  ConnectAccountSessionResponse,
   CreatePayoutResult,
   PayoutList,
 } from "@arigato/shared";
@@ -631,6 +632,49 @@ export async function startConnectOnboarding(
   }
 
   return { onboardingUrl: result.onboardingUrl };
+}
+
+// 埋め込み型オンボーディング用の Account Session を発行する infrastructure 関数の型（コンポジションルートで注入）
+export type CreateAccountSession = (
+  connectedAccountId: string,
+) => Promise<{ clientSecret: string }>;
+
+/**
+ * 埋め込み型オンボーディング（Connect Embedded Components）用の Account Session を発行する
+ * （POST /staff/me/connect/account-session・本人スコープ）。
+ *
+ * 全画面リダイレクト（Account Links）に代わり、アプリ内に Stripe の本人確認 UI を埋め込むための入口。
+ *
+ * 流れ:
+ *  1. 本人の Connect 連携状態を取得（プロフィール未作成なら null → 404）。
+ *  2. Connected Account を保証する。プロフィール作成時に自動作成済みのはずだが、
+ *     万一未作成（自動作成失敗の後追い）なら createConnectedAccount で作成し staff に保存する（人ごと1つ）。
+ *  3. その Connected Account に対して Account Session を発行し、client_secret を返す。
+ *
+ * 完了の判定はこの session の戻りではなく account.updated Webhook（payouts_enabled=true）を正とする。
+ */
+export async function createConnectAccountSession(
+  repo: StaffRepository,
+  createConnectedAccount: CreateConnectedAccount,
+  createSession: CreateAccountSession,
+  authUserId: string,
+): Promise<ConnectAccountSessionResponse | null> {
+  // 【手順1】本人の Connect 連携状態を取得（未作成なら null → 404）
+  const connect = await repo.findStaffConnect(authUserId);
+  if (!connect) return null;
+
+  // 【手順2】Connected Account を保証する（無ければ作成し、人ごと1つだけ保存する）。
+  // プロフィール作成時の自動作成が失敗していたケースの後追い経路（既存の保証ロジックを踏襲）。
+  let connectedAccountId = connect.stripeAccountId;
+  if (!connectedAccountId) {
+    const created = await createConnectedAccount(connect.displayName);
+    connectedAccountId = created.connectedAccountId;
+    await repo.setStripeAccountId(authUserId, connectedAccountId);
+  }
+
+  // 【手順3】Account Session を発行し client_secret を返す（埋め込み UI の初期化に使う）
+  const session = await createSession(connectedAccountId);
+  return { clientSecret: session.clientSecret };
 }
 
 /**

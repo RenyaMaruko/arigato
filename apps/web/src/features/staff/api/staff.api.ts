@@ -4,6 +4,7 @@ import {
   StaffTipsResponseSchema,
   StaffBalanceSchema,
   ConnectOnboardResponseSchema,
+  ConnectAccountSessionResponseSchema,
   JoinStoreResultSchema,
   CreatePayoutResultSchema,
   PayoutListSchema,
@@ -14,6 +15,7 @@ import {
   type StaffTipsResponse,
   type StaffBalance,
   type ConnectOnboardResponse,
+  type ConnectAccountSessionResponse,
   type JoinStoreResult,
   type CreatePayoutResult,
   type PayoutList,
@@ -238,6 +240,19 @@ export async function startConnectOnboard(): Promise<ConnectOnboardResponse> {
     throw new Error(`connect onboard failed: ${res.status}`);
   }
   return ConnectOnboardResponseSchema.parse(await res.json());
+}
+
+/**
+ * POST /staff/me/connect/account-session — 埋め込み型オンボーディング用の Account Session を発行する。
+ * 返る client_secret を埋め込み UI の初期化（loadConnectAndInitialize の fetchClientSecret）に渡す。
+ * client_secret は短命のためキャッシュせず、必要なたびにこの関数で取り直す。
+ */
+export async function createConnectAccountSession(): Promise<ConnectAccountSessionResponse> {
+  const res = await apiClient.staff.me.connect["account-session"].$post();
+  if (!res.ok) {
+    throw new Error(`connect account-session failed: ${res.status}`);
+  }
+  return ConnectAccountSessionResponseSchema.parse(await res.json());
 }
 
 /**

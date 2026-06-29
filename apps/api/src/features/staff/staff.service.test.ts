@@ -11,6 +11,7 @@ import {
   getStaffBalance,
   getStaffTaxReport,
   startConnectOnboarding,
+  createConnectAccountSession,
   applyConnectAccountUpdate,
   createStaffPayout,
   getStaffPayouts,
@@ -1192,6 +1193,81 @@ describe("staff.service", () => {
     );
     expect(res).toBeNull();
     expect(createLink).not.toHaveBeenCalled();
+  });
+
+  // --- 埋め込み型オンボーディング（Account Session）の発行 ---
+
+  it("createConnectAccountSession: 既存の連結アカウントに対して Account Session（client_secret）を発行する", async () => {
+    await setupAndJoin(mock, "auth-A", "Aさん", "INV-OK");
+    // プロフィール作成時に連結アカウントが自動作成済み（既存アカウントを使い回す）
+    const before = await mock.repo.findStaffConnect("auth-A");
+    const existingAccountId = before!.stripeAccountId!;
+
+    // 新規作成は呼ばれないことを確認するためのモック
+    const createAccount = makeCreateConnectedAccount();
+    // Account Session 発行をモック（対象 Connected Account に対して client_secret を返す）
+    const createSession = vi.fn(async (_accountId: string) => ({
+      clientSecret: "accs_test_secret_xxx",
+    }));
+
+    const result = await createConnectAccountSession(
+      mock.repo,
+      createAccount,
+      createSession,
+      "auth-A",
+    );
+    expect(result).not.toBeNull();
+    expect(result!.clientSecret).toBe("accs_test_secret_xxx");
+    // 既存アカウントに対して発行する（新規作成しない）
+    expect(createSession).toHaveBeenCalledWith(existingAccountId);
+    expect(createAccount).not.toHaveBeenCalled();
+    // アカウント ID は変わらない
+    const after = await mock.repo.findStaffConnect("auth-A");
+    expect(after!.stripeAccountId).toBe(existingAccountId);
+  });
+
+  it("createConnectAccountSession: 連結アカウント未作成なら作成して保存してから発行する（保証経路）", async () => {
+    // 自動作成が失敗していたケースを再現する（プロフィール作成時の連結アカウント作成を失敗させる）。
+    // createStaffProfile は作成失敗を握りつぶすため、stripe_account_id は null のまま残る。
+    const failingCreate = vi.fn(async () => {
+      throw new Error("自動作成失敗（テスト）");
+    });
+    await createStaffProfile(mock.repo, buildUrl, failingCreate, "auth-A", { displayName: "Aさん" });
+    const before = await mock.repo.findStaffConnect("auth-A");
+    expect(before!.stripeAccountId).toBeNull();
+
+    const createAccount = makeCreateConnectedAccount();
+    const createSession = vi.fn(async (accountId: string) => ({
+      clientSecret: `accs_secret_for_${accountId}`,
+    }));
+
+    const result = await createConnectAccountSession(
+      mock.repo,
+      createAccount,
+      createSession,
+      "auth-A",
+    );
+    expect(result).not.toBeNull();
+    // 連結アカウントを新規作成して staff に保存し、その口座で session を発行する
+    expect(createAccount).toHaveBeenCalledTimes(1);
+    const after = await mock.repo.findStaffConnect("auth-A");
+    expect(after!.stripeAccountId).not.toBeNull();
+    expect(createSession).toHaveBeenCalledWith(after!.stripeAccountId);
+    expect(result!.clientSecret).toBe(`accs_secret_for_${after!.stripeAccountId}`);
+  });
+
+  it("createConnectAccountSession: プロフィール未作成なら null（発行しない）", async () => {
+    const createAccount = makeCreateConnectedAccount();
+    const createSession = vi.fn(async () => ({ clientSecret: "accs_x" }));
+    const res = await createConnectAccountSession(
+      mock.repo,
+      createAccount,
+      createSession,
+      "no-staff",
+    );
+    expect(res).toBeNull();
+    expect(createSession).not.toHaveBeenCalled();
+    expect(createAccount).not.toHaveBeenCalled();
   });
 
   // --- account.updated 反映（本人確認→着金の遷移・冪等性） ---

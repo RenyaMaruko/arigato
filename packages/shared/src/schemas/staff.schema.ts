@@ -269,3 +269,16 @@ export const ConnectOnboardResponseSchema = z.object({
   onboardingUrl: z.string().url(),
 });
 export type ConnectOnboardResponse = z.infer<typeof ConnectOnboardResponseSchema>;
+
+/**
+ * POST /staff/me/connect/account-session の応答。
+ * 埋め込み型オンボーディング（Connect Embedded Components）の初期化に使う client_secret を返す。
+ * フロントは loadConnectAndInitialize({ fetchClientSecret }) でこの値を使い、アプリ内に
+ * Stripe の本人確認 UI（ConnectAccountOnboarding）を埋め込む（Stripe ドメインへ全画面遷移しない）。
+ * 完了の判定はこの session の戻りではなく account.updated Webhook を正とする。
+ */
+export const ConnectAccountSessionResponseSchema = z.object({
+  // Account Session の client_secret（短命・秘匿。埋め込み UI 初期化にのみ使う）
+  clientSecret: z.string().min(1),
+});
+export type ConnectAccountSessionResponse = z.infer<typeof ConnectAccountSessionResponseSchema>;

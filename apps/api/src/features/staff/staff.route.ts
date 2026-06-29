@@ -13,6 +13,7 @@ import {
   type StaffTipsResponse,
   type StaffBalance,
   type ConnectOnboardResponse,
+  type ConnectAccountSessionResponse,
   type CreatePayoutResult,
   type PayoutList,
   type AvatarUploadResult,
@@ -75,6 +76,10 @@ type StaffDeps = {
   getStaffTaxReport: (authUserId: string, year: number) => Promise<string | null>;
   // Connect オンボーディングリンク発行。未作成なら null
   startConnectOnboarding: (authUserId: string) => Promise<ConnectOnboardResponse | null>;
+  // 埋め込み型オンボーディング用の Account Session 発行（client_secret）。未作成なら null
+  createConnectAccountSession: (
+    authUserId: string,
+  ) => Promise<ConnectAccountSessionResponse | null>;
   // 送金（振込申請）。着金可能額の全額を銀行へ。未作成なら null（verified必須・最低額は Service が判定）
   createStaffPayout: (authUserId: string) => Promise<CreatePayoutResult | null>;
   // 送金履歴（金額・状態・申請日時・着金日時・本人のみ）。未作成なら null
@@ -216,6 +221,17 @@ export function createStaffRoute(deps: StaffDeps) {
     .post("/me/connect/onboard", async (c) => {
       const authUser = c.get("authUser");
       const result = await deps.startConnectOnboarding(authUser.id);
+      if (!result) {
+        return c.json({ error: "staff_not_found" }, 404);
+      }
+      return c.json(result);
+    })
+    // 埋め込み型オンボーディング（Connect Embedded Components）用の Account Session を発行する。
+    // 返す client_secret をフロントの埋め込み UI 初期化（loadConnectAndInitialize）に使う。
+    // 完了の判定はこの戻りではなく account.updated Webhook を正とする。
+    .post("/me/connect/account-session", async (c) => {
+      const authUser = c.get("authUser");
+      const result = await deps.createConnectAccountSession(authUser.id);
       if (!result) {
         return c.json({ error: "staff_not_found" }, 404);
       }

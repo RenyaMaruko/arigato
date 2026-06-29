@@ -36,6 +36,7 @@ import {
   getStaffBalance,
   getStaffTaxReport,
   startConnectOnboarding,
+  createConnectAccountSession,
   applyConnectAccountUpdate,
   createStaffPayout,
   getStaffPayouts,
@@ -72,6 +73,7 @@ import { createAuthMiddleware } from "./middleware/auth.js";
 import {
   createDirectChargePaymentIntent,
   createConnectOnboardingLink,
+  createAccountSession,
   createPayout,
   createConnectedAccount,
   retrieveConnectBalance,
@@ -179,6 +181,17 @@ export function createApp() {
         staffRepo,
         createConnectOnboardingLink,
         buildOnboardingUrls,
+        authUserId,
+      ),
+    // 埋め込み型オンボーディング（Connect Embedded Components）用の Account Session 発行。
+    // Connected Account を保証（無ければ自動作成）→ infrastructure の createAccountSession で
+    // account_onboarding を有効にした session を発行し client_secret を返す。
+    // feature は Stripe SDK を直接知らない（infrastructure の関数を注入する）。
+    createConnectAccountSession: (authUserId) =>
+      createConnectAccountSession(
+        staffRepo,
+        createConnectedAccount,
+        createAccountSession,
         authUserId,
       ),
     // 送金（振込申請）。Stripe payout（infrastructure）を注入。送金可能額・送金額は Stripe の実 available を正とし、

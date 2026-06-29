@@ -1,9 +1,13 @@
+import { useEffect, useRef, useState } from "react";
 import {
   useInfiniteQuery,
   useMutation,
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
+import type { StripeConnectInstance } from "@stripe/connect-js";
+import { initConnectOnboarding } from "../lib/connect.js";
+import { shouldInitConnectOnboarding } from "../lib/connect-init.js";
 import type {
   CreateStaffProfileInput,
   UpdateStaffProfileInput,
@@ -183,12 +187,49 @@ export function useStaffBalance(enabled: boolean) {
 
 /**
  * Stripe Connect オンボーディングの開始（POST /staff/me/connect/onboard）。
- * 成功時に返る URL へ遷移して本人確認・口座登録を行う。
+ * 成功時に返る URL へ遷移して本人確認・口座登録を行う（旧・全画面リダイレクト方式）。
+ * 埋め込み型（useConnectOnboarding）へ移行済みのため通常は使わないが、後方互換のため残す。
  */
 export function useStartConnectOnboard() {
   return useMutation({
     mutationFn: () => startConnectOnboard(),
   });
+}
+
+/**
+ * 埋め込み型オンボーディング（Connect Embedded Components）用の Connect インスタンスを用意する。
+ *
+ * 全画面リダイレクトをやめ、アプリ内に Stripe の本人確認 UI を埋め込むための初期化。
+ *
+ * 初期化のタイミングが肝:
+ *  - ログイン・プロフィールが確定（enabled が false→true）した時点で一度だけ初期化する。
+ *  - useStaffMe が未キャッシュのコールド読み込み（/staff/identity 直リンク・ハードリフレッシュ）では
+ *    初回マウント時 enabled=false で、その後データ到着で true に変わる。この遷移を取りこぼさず初期化する
+ *    （useState の遅延初期化だと初回の false が固定され、永久に未初期化になるため useEffect で行う）。
+ *  - 一度生成したインスタンスは再レンダー・再 enabled でも作り直さない（ref ガードで多重生成を防ぐ）。
+ *  - fetchClientSecret の参照は initConnectOnboarding 内で生成され、初期化は一度きりのため安定。
+ *  - 公開可能キー未設定など初期化に失敗した場合は error に保持し、画面側でエラー表示する。
+ */
+export function useConnectOnboarding(enabled: boolean) {
+  const [instance, setInstance] = useState<StripeConnectInstance | null>(null);
+  const [error, setError] = useState<Error | null>(null);
+  // 初期化を一度だけに固定するガード（再レンダー・enabled の再 true で作り直さない）
+  const initializedRef = useRef(false);
+
+  useEffect(() => {
+    // 有効化前・初期化済みなら何もしない（enabled の false→true 遷移で一度だけ通る）
+    if (!shouldInitConnectOnboarding(enabled, initializedRef.current)) return;
+    initializedRef.current = true;
+    try {
+      // Connect インスタンスを生成（fetchClientSecret は内部で都度 Account Session を発行する）
+      setInstance(initConnectOnboarding());
+    } catch (err) {
+      // 公開可能キー未設定などの初期化失敗。画面側でエラー表示に使う
+      setError(err instanceof Error ? err : new Error(String(err)));
+    }
+  }, [enabled]);
+
+  return { instance, error };
 }
 
 /**

@@ -84,6 +84,15 @@ export type CreateOnboardingLinkResult = {
   connectedAccountId: string;
 };
 
+// 埋め込み型オンボーディング（Connect Embedded Components）用の Account Session 発行結果。
+// フロントの loadConnectAndInitialize({ fetchClientSecret }) に渡す client_secret を返す
+// （アプリ内に Stripe の本人確認 UI を埋め込み、Stripe ドメインへの全画面遷移をなくす）。
+export type CreateAccountSessionResult = {
+  // Account Session の client_secret（accs_… の secret）。フロントの埋め込み UI 初期化に使う。
+  // 短命のためキャッシュせず、毎回 fetchClientSecret 経由で取り直す。秘匿値（ログ・レスポンス以外に出さない）。
+  clientSecret: string;
+};
+
 // 突合ジョブが Stripe へ問い合わせて得る PaymentIntent の状態（DB の tip と突合する）
 export type PaymentIntentStatusSnapshot = {
   paymentIntentId: string;
