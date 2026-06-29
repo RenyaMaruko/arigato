@@ -41,15 +41,6 @@ function StoreGratitudeContent({ store }: { store: StoreProfile }) {
         <span className="text-token-2xl font-bold text-ink">{t("store.gratitudeTitle")}</span>
       </div>
 
-      {/* 期間セレクタ（ヒーローの上・タブの近く）。すべて／今月／先月／今年 */}
-      <div className="flex flex-none items-center px-5 pb-3">
-        <PeriodSelect
-          ariaLabel={t("store.gratitudePeriodLabel")}
-          value={period}
-          onChange={(v) => setPeriod(v)}
-        />
-      </div>
-
       {/* タブ */}
       <div className="flex flex-none px-6">
         <button
@@ -80,7 +71,16 @@ function StoreGratitudeContent({ store }: { store: StoreProfile }) {
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-6 pt-5">
+      {/* 期間セレクタ（タブの下・お店全体/スタッフ別どちらにも効く）。すべて／今月／先月／今年 */}
+      <div className="flex flex-none items-center px-5 pb-1 pt-3.5">
+        <PeriodSelect
+          ariaLabel={t("store.gratitudePeriodLabel")}
+          value={period}
+          onChange={(v) => setPeriod(v)}
+        />
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-6 pt-4">
         {tab === "store" ? (
           <StoreWideTab gratitude={gratitude} />
         ) : (
@@ -116,12 +116,9 @@ function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) 
         </span>
       </div>
 
-      {/* お客さまの声 */}
+      {/* メッセージ（投げ銭の一言。無い投げ銭は「メッセージなし」と表示） */}
       <div className="mt-7 text-token-md font-bold text-ink">
-        {t("store.gratitudeVoicesTitle")}{" "}
-        <span className="text-token-sm font-normal text-muted">
-          {t("store.gratitudeVoicesNote")}
-        </span>
+        {t("store.gratitudeVoicesTitle")}
       </div>
       <div className="mt-3.5 flex flex-col gap-3">
         {voices.length === 0 ? (
@@ -138,7 +135,12 @@ function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) 
                 🙂
               </span>
               <div className="flex-1">
-                <div className="text-token-base text-ink">{v.message}</div>
+                {/* メッセージ。無い投げ銭は淡色で「メッセージなし」 */}
+                {v.message ? (
+                  <div className="text-token-base text-ink">{v.message}</div>
+                ) : (
+                  <div className="text-token-base text-muted">{t("store.gratitudeNoMessage")}</div>
+                )}
                 <div className="mt-1 text-token-xs text-muted">
                   {formatRelativeTime(v.receivedAt)} ・ {v.staffName}
                   {t("store.san")}
@@ -161,12 +163,7 @@ function PerStaffTab({ gratitude }: { gratitude: StoreGratitude | undefined }) {
 
   return (
     <>
-      <div className="text-token-md font-bold text-ink">
-        {t("store.gratitudePerStaffTitle")}
-      </div>
-      <div className="mt-1 text-token-sm text-muted">{t("store.gratitudePerStaffNote")}</div>
-
-      <div className="mt-4 flex flex-col gap-3">
+      <div className="flex flex-col gap-3">
         {perStaff.length === 0 ? (
           <div className="rounded-xl border border-line-soft px-4 py-5 text-center text-token-sm text-muted">
             {t("store.gratitudeNoStaff")}

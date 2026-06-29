@@ -151,8 +151,8 @@ export type StoreStaffResponse = z.infer<typeof StoreStaffResponseSchema>;
  */
 export const GratitudeVoiceSchema = z.object({
   id: z.string().uuid(),
-  // お客さまの一言メッセージ
-  message: z.string(),
+  // お客さまの一言メッセージ（無い投げ銭もあるため null 可）
+  message: z.string().nullable(),
   // 届いた日時（ISO 文字列）
   receivedAt: z.string(),
   // 誰宛か（受け取った店員さんの表示名）

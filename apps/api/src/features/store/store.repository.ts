@@ -62,7 +62,8 @@ export type StoreStaffRow = {
 // 感謝の「お客さまの声」1件分（金額なし）
 export type GratitudeVoiceRow = {
   id: string;
-  message: string;
+  // メッセージは無い投げ銭もあるため null 可（フロントで「メッセージなし」と表示）
+  message: string | null;
   // 受け取った日時（ISO 文字列・UTC）
   receivedAt: string;
   // 誰宛か（受け取った店員さんの表示名）
@@ -339,8 +340,6 @@ export function createStoreRepository(): StoreRepository {
         JOIN staff s ON s.id = t.staff_id
         WHERE t.store_id = ${storeId}
           AND t.status = 'succeeded'
-          AND t.message IS NOT NULL
-          AND btrim(t.message) <> ''
           ${gratitudePeriodClause(period)}
         ORDER BY COALESCE(t.succeeded_at, t.created_at) DESC
         LIMIT ${limit}

@@ -89,7 +89,14 @@ export function StoreHomePage({ store }: { store: StoreProfile }) {
                   🙂
                 </span>
                 <div className="flex-1">
-                  <div className="text-token-base text-ink">{v.message}</div>
+                  {/* メッセージ。無い投げ銭は淡色で「メッセージなし」 */}
+                  {v.message ? (
+                    <div className="text-token-base text-ink">{v.message}</div>
+                  ) : (
+                    <div className="text-token-base text-muted">
+                      {t("store.gratitudeNoMessage")}
+                    </div>
+                  )}
                   <div className="mt-1 text-token-xs text-muted">
                     {formatRelativeTime(v.receivedAt)} ・ {v.staffName}
                     {t("store.san")}
