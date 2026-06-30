@@ -13,8 +13,10 @@ import {
   type StaffTipsResponse,
   type StaffBalance,
   type ConnectOnboardResponse,
+  type ConnectAccountSessionResponse,
   type CreatePayoutResult,
   type PayoutList,
+  type AvatarUploadResult,
 } from "@arigato/shared";
 import type { MiddlewareHandler } from "hono";
 import type { AuthVariables } from "../../middleware/auth.js";
@@ -22,8 +24,10 @@ import {
   InviteNotUsableError,
   StaffAlreadyExistsError,
   StaffNotFoundError,
+  MembershipNotFoundError,
   PayoutNotVerifiedError,
   PayoutBelowMinimumError,
+  InvalidImageError,
 } from "./staff.service.js";
 
 /**
@@ -43,12 +47,23 @@ type StaffDeps = {
     authUserId: string,
     input: CreateStaffProfileInput,
   ) => Promise<StaffMe>;
-  // 招待コードで所属（staff_store）を追加する（参加の確定点）。joined / already_member を返す
+  // 招待コードで所属（staff_store）を追加する（参加の確定点）。joined / rejoined / already_member を返す
   joinStore: (authUserId: string, inviteCode: string) => Promise<JoinStoreResult>;
+  // 自分でその店を脱退する（論理削除）。本人スコープ。脱退後の最新 StaffMe を返す。未作成なら null。
+  leaveStoreMembership: (
+    authUserId: string,
+    membershipId: string,
+  ) => Promise<StaffMe | null>;
   updateStaffProfile: (
     authUserId: string,
     input: UpdateStaffProfileInput,
   ) => Promise<StaffMe | null>;
+  // アバター画像をアップロードして avatar_url を更新する（本人のみ）。
+  // 画像本体（ArrayBuffer）と MIME を受け取り、公開URLを返す。未作成なら null（404）、検証違反は例外（400）。
+  uploadStaffAvatar: (
+    authUserId: string,
+    file: { body: ArrayBuffer; contentType: string },
+  ) => Promise<AvatarUploadResult | null>;
   // 受取履歴を1ページ取得する（金額・メッセージ含む・本人のみ・キーセットページング）。未作成なら null。
   // cursor（次ページの基点）・limit（1ページ件数・既定20）を受け取る。
   getStaffTips: (
@@ -61,6 +76,10 @@ type StaffDeps = {
   getStaffTaxReport: (authUserId: string, year: number) => Promise<string | null>;
   // Connect オンボーディングリンク発行。未作成なら null
   startConnectOnboarding: (authUserId: string) => Promise<ConnectOnboardResponse | null>;
+  // 埋め込み型オンボーディング用の Account Session 発行（client_secret）。未作成なら null
+  createConnectAccountSession: (
+    authUserId: string,
+  ) => Promise<ConnectAccountSessionResponse | null>;
   // 送金（振込申請）。着金可能額の全額を銀行へ。未作成なら null（verified必須・最低額は Service が判定）
   createStaffPayout: (authUserId: string) => Promise<CreatePayoutResult | null>;
   // 送金履歴（金額・状態・申請日時・着金日時・本人のみ）。未作成なら null
@@ -117,6 +136,25 @@ export function createStaffRoute(deps: StaffDeps) {
         throw err;
       }
     })
+    // 自分でその店を脱退する（論理削除・本人スコープ）。本人かつ在籍中の membership のみ脱退できる。
+    // 対象が無い（他人の所属・既に脱退済み・存在しない）は 404、未作成も 404。脱退後の StaffMe を返す。
+    .post("/me/memberships/:membershipId/leave", async (c) => {
+      const authUser = c.get("authUser");
+      const membershipId = c.req.param("membershipId");
+      try {
+        const me = await deps.leaveStoreMembership(authUser.id, membershipId);
+        if (!me) {
+          return c.json({ error: "staff_not_found" }, 404);
+        }
+        return c.json(me);
+      } catch (err) {
+        // 対象 membership が見つからない（他人の所属・既に脱退済み・存在しない）
+        if (err instanceof MembershipNotFoundError) {
+          return c.json({ error: "membership_not_found" }, 404);
+        }
+        throw err;
+      }
+    })
     // 自分のプロフィール編集（display_name・headline・avatar のみ）
     .patch("/me", zValidator("json", UpdateStaffProfileInputSchema), async (c) => {
       const authUser = c.get("authUser");
@@ -126,6 +164,35 @@ export function createStaffRoute(deps: StaffDeps) {
         return c.json({ error: "staff_not_found" }, 404);
       }
       return c.json(me);
+    })
+    // アバター画像のアップロード（multipart/form-data・画像1枚。本人のみ）。
+    // field 名 "file" の画像を受け取り、検証 → Storage 保存 → avatar_url 更新 → { avatarUrl } を返す。
+    // 検証違反（非画像・過大）は 400、ファイル欠落は 400、未作成は 404。
+    .post("/me/avatar", async (c) => {
+      const authUser = c.get("authUser");
+      // multipart を取得する（Hono の parseBody。file フィールドに画像本体が載る）
+      const body = await c.req.parseBody();
+      const file = body["file"];
+      // ファイルが無い・File でない場合は不正リクエスト（400）
+      if (!(file instanceof File)) {
+        return c.json({ error: "invalid_image" }, 400);
+      }
+      try {
+        const result = await deps.uploadStaffAvatar(authUser.id, {
+          body: await file.arrayBuffer(),
+          contentType: file.type,
+        });
+        if (!result) {
+          return c.json({ error: "staff_not_found" }, 404);
+        }
+        return c.json(result);
+      } catch (err) {
+        // MIME が画像でない／サイズ上限超過などの検証違反は 400
+        if (err instanceof InvalidImageError) {
+          return c.json({ error: "invalid_image" }, 400);
+        }
+        throw err;
+      }
     })
     // 受取履歴（金額・メッセージ・受取日時。本人のみ・20件ずつの無限スクロール）。
     // cursor（次ページの基点）・limit（既定20・上限50）はクエリで受ける。
@@ -154,6 +221,17 @@ export function createStaffRoute(deps: StaffDeps) {
     .post("/me/connect/onboard", async (c) => {
       const authUser = c.get("authUser");
       const result = await deps.startConnectOnboarding(authUser.id);
+      if (!result) {
+        return c.json({ error: "staff_not_found" }, 404);
+      }
+      return c.json(result);
+    })
+    // 埋め込み型オンボーディング（Connect Embedded Components）用の Account Session を発行する。
+    // 返す client_secret をフロントの埋め込み UI 初期化（loadConnectAndInitialize）に使う。
+    // 完了の判定はこの戻りではなく account.updated Webhook を正とする。
+    .post("/me/connect/account-session", async (c) => {
+      const authUser = c.get("authUser");
+      const result = await deps.createConnectAccountSession(authUser.id);
       if (!result) {
         return c.json({ error: "staff_not_found" }, 404);
       }

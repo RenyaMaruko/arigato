@@ -4,20 +4,25 @@ import {
   getStaffMe,
   createStaffProfile,
   joinStore,
+  leaveStoreMembership,
+  MembershipNotFoundError,
   updateStaffProfile,
   getStaffTips,
   getStaffBalance,
   getStaffTaxReport,
   startConnectOnboarding,
+  createConnectAccountSession,
   applyConnectAccountUpdate,
   createStaffPayout,
   getStaffPayouts,
   applyPayoutWebhookUpdate,
+  uploadStaffAvatar,
   InviteNotUsableError,
   StaffAlreadyExistsError,
   StaffNotFoundError,
   PayoutNotVerifiedError,
   PayoutBelowMinimumError,
+  InvalidImageError,
 } from "./staff.service.js";
 import { buildTipUrl } from "./staff.model.js";
 import type {
@@ -75,6 +80,8 @@ function createMockRepo() {
   const authByStaffId = new Map<string, string>();
   // payout（送金）の簡易ストア（payoutId をキー）
   const payoutsByStaff = new Map<string, TestPayout>();
+  // 脱退済み（論理削除）の membershipId 集合（leftAt 相当）。在籍中＝この集合に無い
+  const leftMembershipIds = new Set<string>();
   // membership ID の採番カウンタ
   let membershipSeq = 0;
   // payout ID の採番カウンタ
@@ -105,7 +112,30 @@ function createMockRepo() {
       return staffByAuth.get(authUserId) ?? null;
     },
     async listMembershipsByAuthUserId(authUserId) {
-      return membershipsByAuth.get(authUserId) ?? [];
+      // 在籍中（脱退集合に無い）のみ返す（脱退店は QR・所属一覧から消える）
+      return (membershipsByAuth.get(authUserId) ?? []).filter(
+        (m) => !leftMembershipIds.has(m.membershipId),
+      );
+    },
+    // 受取履歴の店フィルタ用の店一覧（在籍中＋脱退済み）。membership（脱退済み含む）から distinct で返す
+    async listReceiptStoresByAuthUserId(authUserId) {
+      const seen = new Set<string>();
+      const result: { storeId: string; storeName: string }[] = [];
+      for (const m of membershipsByAuth.get(authUserId) ?? []) {
+        if (seen.has(m.storeId)) continue;
+        seen.add(m.storeId);
+        result.push({ storeId: m.storeId, storeName: m.storeName });
+      }
+      return result;
+    },
+    // 本人かつ在籍中の membership のみ脱退（leftAt 相当の集合に入れる）。0/1 件を返す（スコープ検証）
+    async leaveMembership(authUserId, membershipId) {
+      const list = membershipsByAuth.get(authUserId) ?? [];
+      const target = list.find((m) => m.membershipId === membershipId);
+      // 他人の所属・既に脱退済み・存在しないは 0 件
+      if (!target || leftMembershipIds.has(membershipId)) return 0;
+      leftMembershipIds.add(membershipId);
+      return 1;
     },
     // プロフィール（人ごと1つ）を作成する。所属は含めない
     async createStaffProfile(params) {
@@ -136,9 +166,10 @@ function createMockRepo() {
         throw new Error("staff_not_found");
       }
       const current = membershipsByAuth.get(authUserId) ?? [];
-      // 既に同じ店に所属していれば already_member（招待は消費しない）
+      // 同じ (staff,store) の既存 membership（在籍/脱退を問わず）
       const existing = current.find((m) => m.storeId === invite.storeId);
-      if (existing) {
+      // 在籍中なら already_member（招待は消費しない・多重参加不可）
+      if (existing && !leftMembershipIds.has(existing.membershipId)) {
         return {
           outcome: "already_member",
           membershipId: existing.membershipId,
@@ -146,12 +177,23 @@ function createMockRepo() {
           storeName: existing.storeName,
         } satisfies JoinResultRow;
       }
-      // 新規所属を作成する
+      // 脱退済みなら再有効化（leftAt を外す・同じ membershipId が復活）
+      if (existing && leftMembershipIds.has(existing.membershipId)) {
+        leftMembershipIds.delete(existing.membershipId);
+        invites.set(code, { ...invite, inviteStatus: "accepted" });
+        return {
+          outcome: "rejoined",
+          membershipId: existing.membershipId,
+          storeId: existing.storeId,
+          storeName: existing.storeName,
+        } satisfies JoinResultRow;
+      }
+      // 存在しなければ新規所属を作成する
       membershipSeq += 1;
       const membershipId = `membership-${membershipSeq}`;
       const next = [
         ...current,
-        { membershipId, storeId: invite.storeId, storeName: invite.storeName },
+        { membershipId, storeId: invite.storeId, storeName: invite.storeName, logoUrl: null },
       ];
       membershipsByAuth.set(authUserId, next);
       // 招待を消費する
@@ -182,6 +224,11 @@ function createMockRepo() {
     },
     async setStripeAccountId(authUserId, stripeAccountId) {
       accountByAuth.set(authUserId, stripeAccountId);
+    },
+    async setAvatarUrl(authUserId, avatarUrl) {
+      const existing = staffByAuth.get(authUserId);
+      if (!existing) return;
+      staffByAuth.set(authUserId, { ...existing, avatarUrl });
     },
     // 本人スコープ: その authUserId の履歴のみ「1ページ分」返す（キーセットページング）。
     // 実 DB と同じ並び（受取日時 DESC, id DESC）にし、cursor 以降を take 件返す。
@@ -653,6 +700,79 @@ describe("staff.service", () => {
     expect(await getStaffMe(mock.repo, buildUrl, "no-staff")).toBeNull();
   });
 
+  // --- 脱退（論理削除）・再参加（再有効化）・receiptStores（脱退店も残る） ---
+
+  it("leaveStoreMembership: 脱退すると active な所属一覧から消える（QR・所属一覧から外れる）", async () => {
+    const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    // 脱退前は1件
+    let me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.memberships).toHaveLength(1);
+
+    // 自分でその店を脱退する（本人スコープ）
+    const after = await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    // 脱退後は active な所属が0件（その店は消える）
+    expect(after!.memberships).toHaveLength(0);
+    me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.memberships).toHaveLength(0);
+  });
+
+  it("leaveStoreMembership: receiptStores には脱退店が残る（過去の収益を確認できる）", async () => {
+    const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    // active な所属は0だが、受取履歴の店フィルタには脱退店が残る
+    expect(me!.memberships).toHaveLength(0);
+    expect(me!.receiptStores.map((r) => r.storeName)).toContain("カフェ Arigato");
+  });
+
+  it("leaveStoreMembership: 他人の membership は脱退できない（スコープ検証・404）", async () => {
+    // 本人(user-1)が参加して membership を作る
+    const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    // 別人(user-2)もプロフィールを作る
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-2", {
+      displayName: "別の人",
+    });
+    // user-2 が user-1 の membership を脱退しようとしても作用しない（404）
+    await expect(
+      leaveStoreMembership(mock.repo, buildUrl, "auth-user-2", joined.membershipId),
+    ).rejects.toBeInstanceOf(MembershipNotFoundError);
+    // user-1 の所属は健在（脱退されていない）
+    const me1 = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me1!.memberships).toHaveLength(1);
+  });
+
+  it("leaveStoreMembership: 既に脱退済みの membership は 404（二重脱退不可）", async () => {
+    const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    await expect(
+      leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId),
+    ).rejects.toBeInstanceOf(MembershipNotFoundError);
+  });
+
+  it("joinStore: 脱退済みの店に再参加すると rejoined で再有効化し、同じ membershipId が復活する", async () => {
+    const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+
+    // 同じ店の別の pending 招待を用意する（再参加用）
+    mock.invites.set("INV-OK-REJOIN", {
+      code: "INV-OK-REJOIN",
+      storeId: "store-1",
+      storeName: "カフェ Arigato",
+      inviteStatus: "pending",
+      storeAdopted: true,
+    });
+    const rejoined = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-OK-REJOIN");
+    // 再有効化（新規行は作らない＝同じ membershipId）
+    expect(rejoined.status).toBe("rejoined");
+    expect(rejoined.membershipId).toBe(joined.membershipId);
+    // 同じ QR（/tip/:membershipId）が再び有効
+    expect(rejoined.tipUrl).toBe(`http://localhost:5173/tip/${joined.membershipId}`);
+    // active な所属一覧に再び現れる
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.memberships).toHaveLength(1);
+    expect(me!.memberships[0]!.membershipId).toBe(joined.membershipId);
+  });
+
   // --- プロフィール編集（所属は変わらない） ---
 
   it("updateStaffProfile: 本人の display_name / headline を更新でき、所属は変わらない", async () => {
@@ -1075,6 +1195,81 @@ describe("staff.service", () => {
     expect(createLink).not.toHaveBeenCalled();
   });
 
+  // --- 埋め込み型オンボーディング（Account Session）の発行 ---
+
+  it("createConnectAccountSession: 既存の連結アカウントに対して Account Session（client_secret）を発行する", async () => {
+    await setupAndJoin(mock, "auth-A", "Aさん", "INV-OK");
+    // プロフィール作成時に連結アカウントが自動作成済み（既存アカウントを使い回す）
+    const before = await mock.repo.findStaffConnect("auth-A");
+    const existingAccountId = before!.stripeAccountId!;
+
+    // 新規作成は呼ばれないことを確認するためのモック
+    const createAccount = makeCreateConnectedAccount();
+    // Account Session 発行をモック（対象 Connected Account に対して client_secret を返す）
+    const createSession = vi.fn(async (_accountId: string) => ({
+      clientSecret: "accs_test_secret_xxx",
+    }));
+
+    const result = await createConnectAccountSession(
+      mock.repo,
+      createAccount,
+      createSession,
+      "auth-A",
+    );
+    expect(result).not.toBeNull();
+    expect(result!.clientSecret).toBe("accs_test_secret_xxx");
+    // 既存アカウントに対して発行する（新規作成しない）
+    expect(createSession).toHaveBeenCalledWith(existingAccountId);
+    expect(createAccount).not.toHaveBeenCalled();
+    // アカウント ID は変わらない
+    const after = await mock.repo.findStaffConnect("auth-A");
+    expect(after!.stripeAccountId).toBe(existingAccountId);
+  });
+
+  it("createConnectAccountSession: 連結アカウント未作成なら作成して保存してから発行する（保証経路）", async () => {
+    // 自動作成が失敗していたケースを再現する（プロフィール作成時の連結アカウント作成を失敗させる）。
+    // createStaffProfile は作成失敗を握りつぶすため、stripe_account_id は null のまま残る。
+    const failingCreate = vi.fn(async () => {
+      throw new Error("自動作成失敗（テスト）");
+    });
+    await createStaffProfile(mock.repo, buildUrl, failingCreate, "auth-A", { displayName: "Aさん" });
+    const before = await mock.repo.findStaffConnect("auth-A");
+    expect(before!.stripeAccountId).toBeNull();
+
+    const createAccount = makeCreateConnectedAccount();
+    const createSession = vi.fn(async (accountId: string) => ({
+      clientSecret: `accs_secret_for_${accountId}`,
+    }));
+
+    const result = await createConnectAccountSession(
+      mock.repo,
+      createAccount,
+      createSession,
+      "auth-A",
+    );
+    expect(result).not.toBeNull();
+    // 連結アカウントを新規作成して staff に保存し、その口座で session を発行する
+    expect(createAccount).toHaveBeenCalledTimes(1);
+    const after = await mock.repo.findStaffConnect("auth-A");
+    expect(after!.stripeAccountId).not.toBeNull();
+    expect(createSession).toHaveBeenCalledWith(after!.stripeAccountId);
+    expect(result!.clientSecret).toBe(`accs_secret_for_${after!.stripeAccountId}`);
+  });
+
+  it("createConnectAccountSession: プロフィール未作成なら null（発行しない）", async () => {
+    const createAccount = makeCreateConnectedAccount();
+    const createSession = vi.fn(async () => ({ clientSecret: "accs_x" }));
+    const res = await createConnectAccountSession(
+      mock.repo,
+      createAccount,
+      createSession,
+      "no-staff",
+    );
+    expect(res).toBeNull();
+    expect(createSession).not.toHaveBeenCalled();
+    expect(createAccount).not.toHaveBeenCalled();
+  });
+
   // --- account.updated 反映（本人確認→着金の遷移・冪等性） ---
 
   it("applyConnectAccountUpdate: payouts_enabled=true で verified にし held→payable へ遷移する", async () => {
@@ -1460,5 +1655,73 @@ describe("staff.service", () => {
     const target = payouts!.items.find((p) => p.id === pending.id);
     expect(target!.status).toBe("paid");
     expect(target!.arrivedAt).not.toBeNull();
+  });
+});
+
+// アバター画像アップロード（POST /staff/me/avatar）のユースケース検証。
+// 検証（MIME・サイズ）・本人スコープ・Storage 保存・avatar_url 更新・公開URL返却を確認する。
+describe("staff.service uploadStaffAvatar", () => {
+  let mock: ReturnType<typeof createMockRepo>;
+
+  // テスト用の Storage アップロード（保存先 path を公開URLに見立てて返す。実 Supabase は叩かない）
+  const fakeUpload = vi.fn(async (params: { path: string; body: ArrayBuffer | Uint8Array; contentType: string }) => ({
+    path: params.path,
+    publicUrl: `https://example.test/storage/v1/object/public/media/${params.path}`,
+  }));
+
+  beforeEach(async () => {
+    mock = createMockRepo();
+    fakeUpload.mockClear();
+    // 本人の staff を1件用意する
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-A", {
+      displayName: "山田 さくら",
+    });
+  });
+
+  it("画像を保存し、公開URLで avatar_url を更新して返す（avatars/<staffId>/ 配下）", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer; // ダミー本体
+    const result = await uploadStaffAvatar(mock.repo, fakeUpload, "auth-A", {
+      body: png,
+      contentType: "image/png",
+    });
+    // 公開URLが返る
+    expect(result?.avatarUrl).toMatch(/^https:\/\/example\.test\//);
+    // 保存パスは avatars/<staffId>/<uuid>.png
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-A");
+    expect(fakeUpload).toHaveBeenCalledTimes(1);
+    const callPath = fakeUpload.mock.calls[0]![0].path;
+    expect(callPath).toMatch(new RegExp(`^avatars/${me!.id}/[0-9a-f-]+\\.png$`));
+    // DB（モック）の avatar_url が公開URLに更新されている
+    expect(me!.avatarUrl).toBe(result!.avatarUrl);
+  });
+
+  it("MIME が画像でなければ 400 相当（InvalidImageError）。Storage は呼ばない", async () => {
+    await expect(
+      uploadStaffAvatar(mock.repo, fakeUpload, "auth-A", {
+        body: new Uint8Array([1, 2, 3]).buffer,
+        contentType: "application/pdf",
+      }),
+    ).rejects.toBeInstanceOf(InvalidImageError);
+    expect(fakeUpload).not.toHaveBeenCalled();
+  });
+
+  it("サイズ上限（5MB）超過は 400 相当（InvalidImageError）。Storage は呼ばない", async () => {
+    const tooBig = new Uint8Array(5 * 1024 * 1024 + 1).buffer;
+    await expect(
+      uploadStaffAvatar(mock.repo, fakeUpload, "auth-A", {
+        body: tooBig,
+        contentType: "image/png",
+      }),
+    ).rejects.toBeInstanceOf(InvalidImageError);
+    expect(fakeUpload).not.toHaveBeenCalled();
+  });
+
+  it("プロフィール未作成（他人/未登録）なら null（404 相当）。Storage は呼ばない", async () => {
+    const result = await uploadStaffAvatar(mock.repo, fakeUpload, "auth-UNKNOWN", {
+      body: new Uint8Array([0x89]).buffer,
+      contentType: "image/png",
+    });
+    expect(result).toBeNull();
+    expect(fakeUpload).not.toHaveBeenCalled();
   });
 });

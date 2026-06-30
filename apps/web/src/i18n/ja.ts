@@ -27,6 +27,12 @@ export const ja = {
       send: "送る",
       loading: "読み込み中…",
       notFound: "店員さんが見つかりませんでした",
+      // この QR（所属）が脱退・在籍解除済みで、いま投げ銭を受け付けていないときの案内
+      notAcceptingTitle: "現在このQRは受け付けていません",
+      notAcceptingNote:
+        "この店員さんは現在このお店で受け付けを停止しています。再開されると、同じQRでまたお送りいただけます。",
+      // 投げ銭作成時に受付停止が判明したとき（intent が membership_not_accepting を返した）
+      notAcceptingError: "このQRは現在、投げ銭を受け付けていません。",
       // 支払い方法ボトムシート（アプリ内埋め込み決済）
       sheetTitle: "支払い方法を選ぶ",
       sheetClose: "閉じる",
@@ -99,7 +105,7 @@ export const ja = {
       inviteTitle: "お店からの招待",
       inviteLead: "このお店の店員さんとして登録します",
       inviteStoreLabel: "所属するお店",
-      inviteStart: "はじめる",
+      inviteStart: "参加する",
       // 参加（join）の処理中・完了・既に所属
       joining: "参加処理中…",
       joinErrorInvite: "招待が無効です。コードを確認してください。",
@@ -127,7 +133,7 @@ export const ja = {
       // 所属店一覧（複数可・掛け持ち）。各店ごとにQRへ導く
       homeStoresLabel: "所属しているお店",
       homeStoreQr: "QRを表示",
-      homeNoStores: "まだお店に所属していません。招待リンクから参加してください。",
+      homeNoStores: "まだお店に所属していません。\n招待リンクから参加してください。",
       homeAccount: "口座登録",
       // ホームの残高カード（残高を1つにまとめて表示し、すぐ下に本人確認の導線を置く）
       homeBalanceLabel: "残高",
@@ -156,6 +162,17 @@ export const ja = {
       qrNote: "このQRをお客さまに見せてください",
       qrPrint: "印刷する",
       qrUrlLabel: "QRが指すURL",
+      // この店を脱退する（所属店舗の詳細＝QR画面）＋確認ダイアログ
+      leaveStoreCta: "この店を脱退する",
+      leaveConfirmTitle: "この店を脱退しますか？",
+      // {{store}} に店名。脱退後も受取履歴で収益を確認できる旨の注意書き
+      leaveConfirmBody:
+        "{{store}} を脱退します。脱退すると、このお店のQRでは新しい投げ銭を受け付けなくなります。",
+      leaveConfirmNote: "脱退しても、受け取った収益は受取履歴で引き続き確認できます。",
+      leaveConfirmCta: "脱退する",
+      leaveCancel: "キャンセル",
+      leaving: "処理中…",
+      leaveError: "脱退できませんでした。もう一度お試しください。",
       back: "戻る",
       // プロフィール編集
       editTitle: "プロフィール編集",
@@ -163,6 +180,12 @@ export const ja = {
       editSubmit: "保存する",
       editSaved: "保存しました",
       editError: "保存に失敗しました。もう一度お試しください。",
+      // アバター画像のアップロード
+      avatarChange: "顔写真を変更",
+      avatarUploading: "アップロード中…",
+      avatarError: "画像のアップロードに失敗しました。もう一度お試しください。",
+      avatarInvalidType: "画像ファイル（PNG / JPEG / WebP）を選んでください。",
+      avatarTooLarge: "画像サイズが大きすぎます（5MB まで）。",
       // ホームの導線（受取履歴・送金）
       homeHistory: "受取履歴",
       homePayout: "送金",
@@ -315,16 +338,16 @@ export const ja = {
       createAlreadyExists: "このアカウントには既にお店があります。",
       // ホーム（01）
       homeBell: "通知",
-      homeHeroTitle: "お店全体に届いた\n「ありがとう」",
+      homeHeroTitle: "総投げ銭",
       homeCountSuffix: "件",
       homeWeekBadge: "今週 +{{count}} 件",
-      homeRecentVoices: "最近のお客さまの声",
-      homeSeeAllVoices: "すべての声を見る",
-      homeNoVoices: "まだお客さまの声はありません",
+      homeRecentVoices: "最近のメッセージ",
+      homeSeeAllVoices: "すべてのメッセージを見る",
+      homeNoVoices: "まだ投げ銭はありません",
       // ボトムナビ
       navHome: "ホーム",
       navStaff: "スタッフ",
-      navGratitude: "感謝の可視化",
+      navGratitude: "記録",
       navSettings: "設定",
       // 導入・承認（08）— 作成時に同意済みの記録を表示する読み取り専用画面
       approvalTitle: "導入・承認",
@@ -339,6 +362,21 @@ export const ja = {
       staffTabInvited: "招待中",
       staffEmpty: "まだ在籍中のスタッフはいません",
       staffInviteCta: "スタッフを招待する",
+      // スタッフ詳細（一覧の行タップ→基本情報・在籍解除）
+      staffDetailTitle: "スタッフ詳細",
+      staffDetailJoinedAt: "参加日：{{date}}",
+      staffDetailNoHeadline: "一言は設定されていません",
+      staffDetailLoadError: "スタッフ情報を読み込めませんでした",
+      // 在籍解除（このスタッフを外す）＋確認ダイアログ
+      staffRemoveCta: "このスタッフを外す",
+      staffRemoveConfirmTitle: "このスタッフを外しますか？",
+      // 外しても記録・本人の収益は変わらない旨の注意書き（簡潔に）
+      staffRemoveConfirmBody:
+        "外しても、これまでの記録や、ご本人が受け取った収益は変わりません。",
+      staffRemoveConfirmCta: "外す",
+      staffRemoveCancel: "キャンセル",
+      staffRemoving: "処理中…",
+      staffRemoveError: "スタッフを外せませんでした。もう一度お試しください。",
       // スタッフ招待（04）
       inviteTitle: "スタッフ招待",
       inviteHeading: "スタッフを招待するための\nリンクを発行します",
@@ -365,22 +403,30 @@ export const ja = {
       invitesIssuedAt: "招待日：{{date}}",
       inviteStatusPending: "招待中",
       // 感謝の可視化（06）
-      gratitudeTitle: "感謝の記録",
+      gratitudeTitle: "記録",
       gratitudeTabStore: "お店全体",
       gratitudeTabStaff: "スタッフ別",
-      gratitudeHeroTitle: "お店全体に届いた\n「ありがとう」",
+      gratitudeHeroTitle: "総投げ銭",
       gratitudeCountSuffix: "件",
-      gratitudeWeekBadge: "今週 +{{count}} 件",
-      gratitudeToday: "今日",
-      gratitudeWeek: "今週",
-      gratitudeMonth: "今月",
-      gratitudeVoicesTitle: "お客さまの声",
-      gratitudeVoicesNote: "（最新の一部）",
-      gratitudeNoVoices: "まだお客さまの声はありません",
+      // 期間セレクタ（すべて／今月／先月／今年）
+      gratitudePeriodLabel: "期間",
+      gratitudePeriodAll: "すべて",
+      gratitudePeriodThisMonth: "今月",
+      gratitudePeriodLastMonth: "先月",
+      gratitudePeriodThisYear: "今年",
+      gratitudeVoicesTitle: "メッセージ",
+      gratitudeNoVoices: "まだ投げ銭はありません",
+      // メッセージが無い投げ銭の表示
+      gratitudeNoMessage: "メッセージなし",
       gratitudePerStaffTitle: "スタッフ別の「ありがとう」",
       gratitudePerStaffNote: "（名簿順・件数で順位はつけません）",
       gratitudeNoStaff: "スタッフがいません",
       gratitudePerStaffCount: "{{count}} 件",
+      // スタッフ別タブのスタッフ選択（ドロップダウン）
+      gratitudeStaffLabel: "スタッフ",
+      gratitudeStaffAll: "すべて",
+      // 特定スタッフ選択時にメッセージが無いときの表示
+      gratitudeStaffNoVoices: "この期間のメッセージはありません",
       // 設定（07）
       settingsTitle: "設定",
       settingsProfile: "店舗プロフィール",
@@ -404,6 +450,12 @@ export const ja = {
       profileSaving: "保存中…",
       profileSaved: "保存しました",
       profileError: "保存に失敗しました。もう一度お試しください。",
+      // ロゴ画像のアップロード
+      logoChange: "店舗ロゴを変更",
+      logoUploading: "アップロード中…",
+      logoError: "画像のアップロードに失敗しました。もう一度お試しください。",
+      logoInvalidType: "画像ファイル（PNG / JPEG / WebP）を選んでください。",
+      logoTooLarge: "画像サイズが大きすぎます（5MB まで）。",
       // 共通
       back: "戻る",
     },

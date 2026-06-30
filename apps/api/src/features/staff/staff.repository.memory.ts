@@ -4,6 +4,7 @@ import type {
   InviteRow,
   StaffProfileRow,
   StaffMembershipRow,
+  StaffReceiptStoreRow,
   StaffConnectRow,
 } from "./staff.repository.js";
 import type { IdentityStatus } from "./staff.model.js";
@@ -23,10 +24,17 @@ export function createInMemoryStaffRepository(): StaffRepository {
   const invites = new Map<string, InviteRow>();
   // staff プロフィールの簡易ストア（authUserId をキー）
   const profileByAuth = new Map<string, StaffProfileRow>();
-  // 所属（membership）の簡易ストア（membershipId をキー）。staff(人)＝authUserId と店を結ぶ
+  // 所属（membership）の簡易ストア（membershipId をキー）。staff(人)＝authUserId と店を結ぶ。
+  // leftAt は論理削除（脱退・在籍解除）の時刻。null＝在籍中（active）、値あり＝脱退済み。
   const memberships = new Map<
     string,
-    { authUserId: string; storeId: string; storeName: string; createdAt: number }
+    {
+      authUserId: string;
+      storeId: string;
+      storeName: string;
+      createdAt: number;
+      leftAt: number | null;
+    }
   >();
   // Connect 連携状態（authUserId をキー）。Stripe Account ID と identity_status を持つ
   const connectByAuth = new Map<
@@ -56,14 +64,45 @@ export function createInMemoryStaffRepository(): StaffRepository {
     },
 
     async listMembershipsByAuthUserId(authUserId) {
+      // 在籍中（leftAt === null）のみ返す（脱退店は QR・所属一覧から消える）
       const list = [...memberships.entries()]
-        .filter(([, m]) => m.authUserId === authUserId)
+        .filter(([, m]) => m.authUserId === authUserId && m.leftAt === null)
         .sort((a, b) => a[1].createdAt - b[1].createdAt);
       return list.map<StaffMembershipRow>(([id, m]) => ({
         membershipId: id,
         storeId: m.storeId,
         storeName: m.storeName,
+        // メモリ実装ではロゴは持たない
+        logoUrl: null,
       }));
+    },
+
+    // 受取履歴の店フィルタ用の店一覧（在籍中＋脱退済み）。
+    // インメモリは tip を保持しないが、membership（脱退済み含む）から店を distinct で返す
+    // （実 DB は tip.store_id を基点にするが、メモリでは membership を擬似的な素材にする）。
+    async listReceiptStoresByAuthUserId(authUserId) {
+      const seen = new Set<string>();
+      const result: StaffReceiptStoreRow[] = [];
+      for (const m of memberships.values()) {
+        if (m.authUserId !== authUserId) continue;
+        if (seen.has(m.storeId)) continue;
+        seen.add(m.storeId);
+        result.push({ storeId: m.storeId, storeName: m.storeName });
+      }
+      // 店名昇順（実 DB と並びを揃える）
+      result.sort((a, b) => a.storeName.localeCompare(b.storeName));
+      return result;
+    },
+
+    // 店員さんが自分でその店を脱退する（論理削除）。本人かつ在籍中の membership のみ leftAt を立てる。
+    async leaveMembership(authUserId, membershipId) {
+      const m = memberships.get(membershipId);
+      // 他人の所属・既に脱退済み・存在しないは 0 件（スコープ検証）
+      if (!m || m.authUserId !== authUserId || m.leftAt !== null) {
+        return 0;
+      }
+      memberships.set(membershipId, { ...m, leftAt: Date.now() });
+      return 1;
     },
 
     async createStaffProfile(params) {
@@ -91,11 +130,12 @@ export function createInMemoryStaffRepository(): StaffRepository {
       if (!profile) {
         throw new Error("staff_not_found");
       }
-      // 既に同じ店に所属していないか（多重参加不可）
+      // 同じ (staff,store) の既存 membership（在籍/脱退を問わず）を引く（UNIQUE 制約のため最大1件）
       const existing = [...memberships.entries()].find(
         ([, m]) => m.authUserId === authUserId && m.storeId === invite.storeId,
       );
-      if (existing) {
+      // 在籍中（leftAt === null）→ already_member（招待は消費せず・多重参加不可）
+      if (existing && existing[1].leftAt === null) {
         return {
           outcome: "already_member" as const,
           membershipId: existing[0],
@@ -103,13 +143,25 @@ export function createInMemoryStaffRepository(): StaffRepository {
           storeName: invite.storeName,
         };
       }
-      // 新規所属を作成し、招待を消費する
+      // 脱退済み（leftAt に値あり）→ 再有効化（leftAt を null に戻す・同じ membershipId が復活）
+      if (existing && existing[1].leftAt !== null) {
+        memberships.set(existing[0], { ...existing[1], leftAt: null });
+        invites.set(code, { ...invite, inviteStatus: "accepted" });
+        return {
+          outcome: "rejoined" as const,
+          membershipId: existing[0],
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      }
+      // 存在しなければ新規所属を作成し、招待を消費する
       const membershipId = randomUUID();
       memberships.set(membershipId, {
         authUserId,
         storeId: invite.storeId,
         storeName: invite.storeName,
         createdAt: Date.now(),
+        leftAt: null,
       });
       invites.set(code, { ...invite, inviteStatus: "accepted" });
       return {
@@ -131,6 +183,13 @@ export function createInMemoryStaffRepository(): StaffRepository {
       };
       profileByAuth.set(authUserId, updated);
       return updated;
+    },
+
+    // 本人のアバター画像URL（公開URL）を更新する（画像アップロード後）
+    async setAvatarUrl(authUserId, avatarUrl) {
+      const existing = profileByAuth.get(authUserId);
+      if (!existing) return;
+      profileByAuth.set(authUserId, { ...existing, avatarUrl });
     },
 
     // 本人の Connect 連携状態を返す（オンボーディングの起点）

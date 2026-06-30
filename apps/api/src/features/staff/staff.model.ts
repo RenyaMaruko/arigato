@@ -295,3 +295,12 @@ export function normalizeHeadline(headline: string | undefined): string | null {
   const trimmed = headline.trim();
   return trimmed === "" ? null : trimmed;
 }
+
+/**
+ * 店員アバターの Storage 保存パスを組み立てる純粋関数。
+ * 形式は avatars/<staffId>/<uuid>.<ext>。staffId 配下に分けることで本人の画像をまとめて管理できる。
+ * uuid・ext は呼び出し側（Service）が用意して渡す（uuid 生成は副作用のため Model では行わない）。
+ */
+export function buildAvatarStoragePath(staffId: string, uuid: string, ext: string): string {
+  return `avatars/${staffId}/${uuid}.${ext}`;
+}

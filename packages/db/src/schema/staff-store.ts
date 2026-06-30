@@ -25,6 +25,10 @@ export const staffStore = pgTable(
       .notNull()
       .references(() => store.id),
     createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
+    // 脱退・在籍解除の時刻（論理削除）。null＝在籍中（active）、値あり＝脱退済み。
+    // 物理削除はしない（tip が membership_id を参照するため履歴を保持する）。
+    // 再参加（join）時は left_at を null に戻して再有効化する（同じ membershipId＝同じ QR が復活する）。
+    leftAt: timestamp("left_at", { withTimezone: true }),
   },
   (t) => ({
     // 同じ (staff_id, store_id) は1件＝二重所属不可（多重参加を DB レベルで防ぐ）

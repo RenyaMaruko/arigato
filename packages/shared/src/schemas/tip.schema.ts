@@ -68,6 +68,11 @@ export const StaffDisplayInfoSchema = z.object({
   avatarUrl: z.string().nullable(),
   // membership の店名（この所属で表示する店）
   storeName: z.string(),
+  // この QR（membership）が今お客さまからの投げ銭を受け付けているか。
+  // 在籍中（left_at IS NULL）は true、脱退・在籍解除済み（left_at に値あり）は false。
+  // false のとき投げ銭画面は「現在この QR は受け付けていません」と案内し、送るボタンを出さない
+  // （店員さんが再参加すると同じ QR で再開する）。
+  accepting: z.boolean(),
 });
 export type StaffDisplayInfo = z.infer<typeof StaffDisplayInfoSchema>;
 

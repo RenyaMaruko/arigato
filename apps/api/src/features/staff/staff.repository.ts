@@ -41,6 +41,14 @@ export type StaffMembershipRow = {
   membershipId: string;
   storeId: string;
   storeName: string;
+  // 店のロゴ画像URL（未設定は null）
+  logoUrl: string | null;
+};
+
+// 受取履歴の店舗フィルタ用の店1件分（在籍中＋脱退済みの両方を含む・distinct）
+export type StaffReceiptStoreRow = {
+  storeId: string;
+  storeName: string;
 };
 
 // プロフィール作成時に Repository が受け取る値（所属は含めない。人ごと1つ）
@@ -52,8 +60,8 @@ export type InsertStaffParams = {
 };
 
 // 招待消費（所属追加）の結果区分
-// joined: 新たに所属が追加された / already_member: 既に同店所属（多重参加不可）
-export type JoinOutcome = "joined" | "already_member";
+// joined: 新たに所属が追加された / rejoined: 脱退済みの所属を再有効化した / already_member: 既に在籍中（多重参加不可）
+export type JoinOutcome = "joined" | "rejoined" | "already_member";
 
 // 招待で所属を追加した結果（membership と店情報を返す）
 export type JoinResultRow = {
@@ -182,8 +190,16 @@ export type StaffRepository = {
   findInviteByCode: (code: string) => Promise<InviteRow | null>;
   // auth ユーザーIDから自分の staff プロフィール（人ごと1つ）を取得（GET /staff/me / 重複作成防止）
   findStaffByAuthUserId: (authUserId: string) => Promise<StaffProfileRow | null>;
-  // 本人の所属（membership）一覧を在籍が古い順で取得する（店ごとQR用・GET /staff/me）
+  // 本人の所属（membership）一覧を在籍が古い順で取得する（店ごとQR用・GET /staff/me）。
+  // 在籍中（left_at IS NULL）のみ返す（脱退した店は QR・所属一覧から消える）。
   listMembershipsByAuthUserId: (authUserId: string) => Promise<StaffMembershipRow[]>;
+  // 本人の tip がある店（在籍中＋脱退済み）の distinct {storeId, storeName} を取得する
+  // （受取履歴の店舗フィルタの選択肢用。脱退した店の過去収益も確認できるようにする）。
+  listReceiptStoresByAuthUserId: (authUserId: string) => Promise<StaffReceiptStoreRow[]>;
+  // 店員さんが自分でその店を脱退する（論理削除）。本人の membership に left_at=now() を立てる。
+  // 本人（authUserId）の in-place な membership のみを対象にし、他人の所属は触らない（スコープ検証）。
+  // 既に脱退済み・他人の membership・存在しないなら 0 件。脱退できた件数を返す。
+  leaveMembership: (authUserId: string, membershipId: string) => Promise<number>;
   // プロフィール（人ごと1つ）を作成する。所属は含めない。作成したプロフィール行を返す。
   createStaffProfile: (params: InsertStaffParams) => Promise<StaffProfileRow>;
   // 招待コードで所属（staff_store）を追加する（参加の確定点）。
@@ -195,6 +211,8 @@ export type StaffRepository = {
     authUserId: string,
     params: { displayName: string; headline: string | null; avatarUrl: string | null },
   ) => Promise<StaffProfileRow | null>;
+  // 本人のアバター画像URL（公開URL）を更新する（画像アップロード後・本人スコープ）。
+  setAvatarUrl: (authUserId: string, avatarUrl: string) => Promise<void>;
   // 本人の Connect 連携状態（Connected Account・identity_status）を取得（オンボーディングの起点）
   findStaffConnect: (authUserId: string) => Promise<StaffConnectRow | null>;
   // 新規作成した Connected Account を本人の staff に保存する（オンボーディング開始時に1度だけ）
@@ -396,21 +414,60 @@ export function createStaffRepository(): StaffRepository {
       return rows[0] ?? null;
     },
 
-    // 本人の所属（membership）一覧を在籍が古い順で取得する（店ごとQR用・中立な並び）
+    // 本人の所属（membership）一覧を在籍が古い順で取得する（店ごとQR用・中立な並び）。
+    // 在籍中（left_at IS NULL）のみ返す（脱退した店は QR・所属一覧・ホームの店カードから消える）。
     async listMembershipsByAuthUserId(authUserId) {
       const db = getDb();
       const rows = await db.execute<StaffMembershipRow>(sql`
         SELECT
           ss.id      AS "membershipId",
           ss.store_id AS "storeId",
-          st.name    AS "storeName"
+          st.name    AS "storeName",
+          st.logo_url AS "logoUrl"
         FROM staff_store ss
         JOIN staff s ON s.id = ss.staff_id
         JOIN store st ON st.id = ss.store_id
         WHERE s.auth_user_id = ${authUserId}
+          AND ss.left_at IS NULL
         ORDER BY ss.created_at ASC
       `);
       return rows;
+    },
+
+    // 本人の tip がある店（在籍中＋脱退済み）の distinct {storeId, storeName} を取得する。
+    // 受取履歴の店舗フィルタの選択肢用。tip.store_id を基点にするため、脱退した店も自然に含まれる
+    // （脱退で membership は外れても、過去に受け取った tip はその店に紐づいて残るため）。
+    async listReceiptStoresByAuthUserId(authUserId) {
+      const db = getDb();
+      const rows = await db.execute<StaffReceiptStoreRow>(sql`
+        SELECT DISTINCT
+          st.id   AS "storeId",
+          st.name AS "storeName"
+        FROM tip t
+        JOIN staff s ON s.id = t.staff_id
+        JOIN store st ON st.id = t.store_id
+        WHERE s.auth_user_id = ${authUserId}
+        ORDER BY st.name ASC
+      `);
+      return rows;
+    },
+
+    // 店員さんが自分でその店を脱退する（論理削除）。本人の membership に left_at=now() を立てる。
+    // 本人（authUserId）かつ在籍中（left_at IS NULL）の membership のみを対象にする
+    // （他人の所属・既に脱退済みは更新されない＝スコープ検証）。脱退できた件数を返す。
+    async leaveMembership(authUserId, membershipId) {
+      const db = getDb();
+      const rows = await db.execute<{ id: string }>(sql`
+        UPDATE staff_store ss
+        SET left_at = now()
+        FROM staff s
+        WHERE ss.id = ${membershipId}::uuid
+          AND ss.staff_id = s.id
+          AND s.auth_user_id = ${authUserId}
+          AND ss.left_at IS NULL
+        RETURNING ss.id AS "id"
+      `);
+      return rows.length;
     },
 
     // プロフィール（人ごと1つ）を作成する。所属は別途 join で追加する。
@@ -433,8 +490,9 @@ export function createStaffRepository(): StaffRepository {
     // 1トランザクションで:
     //  1. auth ユーザーの staff（人）を引く（無ければ呼び出し側で先にプロフィール作成済みのはず）
     //  2. 招待が pending かつ店が導入承認済みであることを確認
-    //  3. 既に同店所属なら already_member（招待は消費しない・多重参加不可）
-    //  4. 新規なら membership を1件作り、招待を accepted 化する
+    //  3. 既存 (staff,store) が在籍中なら already_member（招待は消費しない・多重参加不可）
+    //  3'. 既存 (staff,store) が脱退済みなら left_at を null に戻して再有効化（rejoined・新規行は作らない）
+    //  4. 存在しなければ membership を1件作り（joined）、招待を accepted 化する
     async joinStoreByInvite(authUserId, code) {
       const db = getDb();
       return await db.transaction(async (tx) => {
@@ -471,24 +529,57 @@ export function createStaffRepository(): StaffRepository {
           throw new Error("staff_not_found");
         }
 
-        // 既に同じ店に所属していないか（多重参加不可）
-        const existing = await tx.execute<{ id: string }>(sql`
-          SELECT id AS "id"
+        // 同じ (staff,store) の既存 membership を在籍状態（left_at）込みで引く（UNIQUE 制約のため最大1件）。
+        // 行ロックして再有効化と判定の競合を避ける。
+        const existingRows = await tx.execute<{ id: string; leftAt: string | null }>(sql`
+          SELECT id AS "id", left_at AS "leftAt"
           FROM staff_store
           WHERE staff_id = ${staffRow.id} AND store_id = ${invite.storeId}
           LIMIT 1
+          FOR UPDATE
         `);
-        if (existing[0]) {
-          // 既に所属している → 招待は消費せず already_member を返す
+        const existing = existingRows[0];
+
+        // 在籍中（left_at IS NULL）→ already_member（招待は消費せず・多重参加不可）
+        if (existing && existing.leftAt === null) {
           return {
             outcome: "already_member" as const,
-            membershipId: existing[0].id,
+            membershipId: existing.id,
             storeId: invite.storeId,
             storeName: invite.storeName,
           };
         }
 
-        // 新規所属（membership）を作成する
+        // 脱退済み（left_at に値あり）→ left_at を null に戻して再有効化する（rejoined・新規行は作らない）。
+        // 同じ membershipId＝同じ QR が再び有効になり、受取履歴・記録はその店で連続する。
+        if (existing && existing.leftAt !== null) {
+          await tx.execute(sql`
+            UPDATE staff_store
+            SET left_at = NULL
+            WHERE id = ${existing.id}
+          `);
+          // 招待を消費する（pending のときのみ。二重消費はここで弾く）
+          const accepted = await tx.execute<{ id: string }>(sql`
+            UPDATE staff_invite
+            SET status = 'accepted',
+                accepted_staff_id = ${staffRow.id},
+                accepted_at = now()
+            WHERE code = ${code}
+              AND status = 'pending'
+            RETURNING id AS "id"
+          `);
+          if (accepted.length === 0) {
+            throw new Error("invite_not_usable");
+          }
+          return {
+            outcome: "rejoined" as const,
+            membershipId: existing.id,
+            storeId: invite.storeId,
+            storeName: invite.storeName,
+          };
+        }
+
+        // 存在しなければ新規所属（membership）を作成する
         const inserted = await tx.execute<{ id: string }>(sql`
           INSERT INTO staff_store (staff_id, store_id)
           VALUES (${staffRow.id}, ${invite.storeId})
@@ -527,7 +618,9 @@ export function createStaffRepository(): StaffRepository {
         UPDATE staff
         SET display_name = ${params.displayName},
             headline = ${params.headline},
-            avatar_url = ${params.avatarUrl}
+            -- アバターは別経路（POST /staff/me/avatar）で更新するため、テキスト編集では消さない。
+            -- 値が来た時だけ差し替え、未指定（null）なら既存アバターを保つ（COALESCE）。
+            avatar_url = COALESCE(${params.avatarUrl}, avatar_url)
         WHERE auth_user_id = ${authUserId}
         RETURNING
           id              AS "id",
@@ -537,6 +630,16 @@ export function createStaffRepository(): StaffRepository {
           identity_status AS "identityStatus"
       `);
       return rows[0] ?? null;
+    },
+
+    // 本人のアバター画像URL（公開URL）を更新する（画像アップロード後・本人スコープで限定）
+    async setAvatarUrl(authUserId, avatarUrl) {
+      const db = getDb();
+      await db.execute(sql`
+        UPDATE staff
+        SET avatar_url = ${avatarUrl}
+        WHERE auth_user_id = ${authUserId}
+      `);
     },
 
     // 本人の Connect 連携状態（Connected Account・identity_status）を取得（オンボーディングの起点）

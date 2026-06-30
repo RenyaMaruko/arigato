@@ -26,6 +26,7 @@ import { StorePage } from "../features/store/pages/StorePage.js";
 import { StoreLoginPage } from "../features/store/pages/StoreLoginPage.js";
 import { StoreApprovalPage } from "../features/store/pages/StoreApprovalPage.js";
 import { StoreStaffPage } from "../features/store/pages/StoreStaffPage.js";
+import { StoreStaffDetailPage } from "../features/store/pages/StoreStaffDetailPage.js";
 import { StoreInviteCreatePage } from "../features/store/pages/StoreInviteCreatePage.js";
 import { StoreInviteResendPage } from "../features/store/pages/StoreInviteResendPage.js";
 import { StoreGratitudePage } from "../features/store/pages/StoreGratitudePage.js";
@@ -254,6 +255,13 @@ const storeStaffRoute = createRoute({
   }),
 });
 
+// "/store/staff/$staffId" スタッフ詳細（基本情報・在籍解除）。スタッフ一覧の行タップで来る
+const storeStaffDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/staff/$staffId",
+  component: StoreStaffDetailPage,
+});
+
 // "/store/invites/new" スタッフ招待（リンク発行）
 const storeInviteCreateRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -314,6 +322,7 @@ const routeTree = rootRoute.addChildren([
   storeLoginRoute,
   storeApprovalRoute,
   storeStaffRoute,
+  storeStaffDetailRoute,
   storeInviteCreateRoute,
   storeInviteResendRoute,
   storeGratitudeRoute,

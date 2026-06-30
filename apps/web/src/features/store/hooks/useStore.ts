@@ -4,10 +4,13 @@ import {
   fetchMyStore,
   createStore,
   updateStore,
+  uploadStoreLogo,
   createStoreInvite,
   revokeStoreInvite,
   fetchStoreInvites,
   fetchStoreStaff,
+  fetchStoreStaffDetail,
+  removeStoreStaff,
   fetchStoreGratitude,
 } from "../api/store.api.js";
 
@@ -57,6 +60,21 @@ export function useUpdateStore() {
       updateStore(args.storeId, args.input),
     onSuccess: (store) => {
       qc.setQueryData(STORE_ME_KEY, store);
+      qc.invalidateQueries({ queryKey: STORE_ME_KEY });
+    },
+  });
+}
+
+/**
+ * 店ロゴ画像のアップロード（POST /store/:storeId/logo）。
+ * 成功時は store/me を取り直してロゴ（logoUrl）を反映する。
+ */
+export function useUploadStoreLogo() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (args: { storeId: string; file: File }) => uploadStoreLogo(args.storeId, args.file),
+    onSuccess: () => {
+      // logo_url が変わるため自店を取り直す
       qc.invalidateQueries({ queryKey: STORE_ME_KEY });
     },
   });
@@ -117,13 +135,60 @@ export function useStoreStaff(storeId: string | undefined) {
 }
 
 /**
- * 感謝の可視化（GET /store/:storeId/gratitude）を取得する。件数・お客さまの声・スタッフ別件数。
+ * 在籍中スタッフ1人の詳細（GET /store/:storeId/staff/:staffId）を取得する。
+ * storeId と staffId が確定しているときだけ走らせる。
  */
-export function useStoreGratitude(storeId: string | undefined) {
+export function useStoreStaffDetail(storeId: string | undefined, staffId: string | undefined) {
   return useQuery({
-    queryKey: ["store", "gratitude", storeId],
-    queryFn: () => fetchStoreGratitude(storeId!),
-    enabled: Boolean(storeId),
+    queryKey: ["store", "staff", storeId, staffId],
+    queryFn: () => fetchStoreStaffDetail(storeId!, staffId!),
+    enabled: Boolean(storeId) && Boolean(staffId),
+    retry: false,
+  });
+}
+
+/**
+ * 自店のスタッフを在籍解除する（POST /store/:storeId/staff/:staffId/remove・論理削除）。
+ * 成功時はスタッフ一覧・記録（スタッフ別件数）を取り直す（在籍解除した人が消える）。お金は移動しない。
+ */
+export function useRemoveStoreStaff(storeId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (staffId: string) => removeStoreStaff(storeId!, staffId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["store", "staff", storeId] });
+      // 記録（スタッフ別件数・選択肢）も active のみになるため取り直す
+      qc.invalidateQueries({ queryKey: ["store", "gratitude", storeId] });
+    },
+  });
+}
+
+/**
+ * 感謝の可視化（GET /store/:storeId/gratitude）を取得する。件数・お客さまの声・スタッフ別件数。
+ *
+ * period（from/to・ISO）で期間を絞れる（記録画面の期間セレクタ用）。未指定は全期間（店ホーム互換）。
+ * period.staffId（uuid）で voices を特定スタッフに絞れる（スタッフ別タブの「特定スタッフ」用。
+ * 集計値 totalCount/weekCount/perStaff は staffId に関わらず不変）。
+ * period（from/to/staffId）を queryKey に含めるので、変わると自動で再取得し連動する。
+ *
+ * options.enabled で取得の有効/無効を切り替えられる（特定スタッフ選択時だけ追加取得する等）。
+ * 省略時は storeId が確定していれば取得する（従来どおり）。
+ */
+export function useStoreGratitude(
+  storeId: string | undefined,
+  period?: { from?: string; to?: string; staffId?: string },
+  options?: { enabled?: boolean },
+) {
+  // period の各値を queryKey に含める（null は全期間・全スタッフを表す安定キー）
+  const from = period?.from ?? null;
+  const to = period?.to ?? null;
+  const staffId = period?.staffId ?? null;
+  // 呼び出し側の enabled 指定があればそれと storeId の有無を AND（省略時は storeId の有無のみ）
+  const enabled = Boolean(storeId) && (options?.enabled ?? true);
+  return useQuery({
+    queryKey: ["store", "gratitude", storeId, from, to, staffId],
+    queryFn: () => fetchStoreGratitude(storeId!, period),
+    enabled,
     retry: false,
   });
 }

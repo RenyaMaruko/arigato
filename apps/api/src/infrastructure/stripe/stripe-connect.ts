@@ -6,6 +6,7 @@ import type {
   PaymentIntentStatusSnapshot,
   CreateOnboardingLinkParams,
   CreateOnboardingLinkResult,
+  CreateAccountSessionResult,
   CreatePayoutParams,
   CreatePayoutResult,
   CreateConnectedAccountResult,
@@ -140,6 +141,50 @@ export async function createConnectOnboardingLink(
   });
 
   return { onboardingUrl: link.url, connectedAccountId };
+}
+
+/**
+ * 埋め込み型オンボーディング（Connect Embedded Components）用の Account Session を発行する（infrastructure 層）。
+ *
+ * 全画面リダイレクト（Account Links）に代わり、アプリ内に Stripe の本人確認 UI を埋め込むための仕組み。
+ * account_onboarding コンポーネントを有効にした Account Session を Connected Account 単位で発行し、
+ * その client_secret をフロントの loadConnectAndInitialize({ fetchClientSecret }) に渡す。
+ *
+ * 設計上の肝:
+ *  - Account Session は Connected Account（connectedAccountId）に対して発行する。
+ *    controller 構成（requirement_collection: application / dashboard: none）の口座でも
+ *    account_onboarding コンポーネントは利用できる（本人確認・口座登録を埋め込みで収集する）。
+ *  - client_secret は短命（数分）。キャッシュせず、フロントが必要なたびに発行し直す。
+ *  - 完了の判定はこの session の戻りではなく account.updated Webhook（payouts_enabled=true）を正とする
+ *    （埋め込み UI の onExit は「画面を抜けた」だけ。確定は従来どおり Webhook）。
+ */
+export async function createAccountSession(
+  connectedAccountId: string,
+): Promise<CreateAccountSessionResult> {
+  const stripe = getStripe();
+
+  // account_onboarding コンポーネントを有効にした Account Session を発行する。
+  // この session は対象の Connected Account に紐づき、フロントは client_secret で埋め込み UI を初期化する。
+  //
+  // disable_stripe_user_authentication: true で「Stripe のユーザー認証（電話番号認証の別ウィンドウ）」を無効化し、
+  // 全画面ポップアップ無しで完全にアプリ内に埋め込む。これはプラットフォームが要件収集に責任を持つ構成
+  // （controller.requirement_collection=application＝Custom相当）でのみ許可される設定。本人確認・審査は引き続き Stripe が担う。
+  const session = await stripe.accountSessions.create({
+    account: connectedAccountId,
+    components: {
+      account_onboarding: {
+        enabled: true,
+        features: { disable_stripe_user_authentication: true },
+      },
+    },
+  });
+
+  // client_secret が無い場合はフロントで埋め込み UI を初期化できないためエラーにする
+  if (!session.client_secret) {
+    throw new Error("Account Session の client_secret が取得できませんでした。");
+  }
+
+  return { clientSecret: session.client_secret };
 }
 
 /**

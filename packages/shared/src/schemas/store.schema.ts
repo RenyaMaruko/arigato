@@ -137,6 +137,7 @@ export type StoreStaffItem = z.infer<typeof StoreStaffItemSchema>;
 /**
  * GET /store/:storeId/staff の応答（所属スタッフ一覧）。
  * 名簿順（在籍が古い順）の中立な並びで返す。金額・件数での並べ替えはしない。
+ * 在籍中（left_at IS NULL）のスタッフだけを返す（脱退者は外れる）。
  */
 export const StoreStaffResponseSchema = z.object({
   items: z.array(StoreStaffItemSchema),
@@ -146,13 +147,28 @@ export const StoreStaffResponseSchema = z.object({
 export type StoreStaffResponse = z.infer<typeof StoreStaffResponseSchema>;
 
 /**
+ * GET /store/:storeId/staff/:staffId の応答（スタッフ詳細・店スコープ）。
+ * 在籍中スタッフの基本情報（表示名・一言・顔写真・参加日）のみ。金額は一切含めない（店はお金に触れない）。
+ * 参加日は staff_store.created_at（その店に在籍し始めた日）。
+ */
+export const StoreStaffDetailSchema = z.object({
+  id: z.string().uuid(),
+  displayName: z.string(),
+  headline: z.string().nullable(),
+  avatarUrl: z.string().nullable(),
+  // その店に参加した日（staff_store.created_at。ISO 文字列）
+  joinedAt: z.string(),
+});
+export type StoreStaffDetail = z.infer<typeof StoreStaffDetailSchema>;
+
+/**
  * GET /store/:storeId/gratitude のお客さまの声1件分。
  * メッセージ・いつ届いたか・誰宛か（店員名）のみ。金額は一切含めない。
  */
 export const GratitudeVoiceSchema = z.object({
   id: z.string().uuid(),
-  // お客さまの一言メッセージ
-  message: z.string(),
+  // お客さまの一言メッセージ（無い投げ銭もあるため null 可）
+  message: z.string().nullable(),
   // 届いた日時（ISO 文字列）
   receivedAt: z.string(),
   // 誰宛か（受け取った店員さんの表示名）
@@ -167,30 +183,52 @@ export type GratitudeVoice = z.infer<typeof GratitudeVoiceSchema>;
 export const GratitudePerStaffSchema = z.object({
   staffId: z.string().uuid(),
   staffName: z.string(),
+  // スタッフのアバター画像URL（公開URL）。未設定は null（フロントは「員」プレースホルダにフォールバック）
+  avatarUrl: z.string().nullable(),
   // この店員さんに届いた「ありがとう」の件数（金額ではない）
   count: z.number().int(),
 });
 export type GratitudePerStaff = z.infer<typeof GratitudePerStaffSchema>;
 
 /**
+ * GET /store/:storeId/gratitude の任意クエリ（期間フィルタ）。
+ * from（含む・>=）/ to（排他・<）を ISO 文字列で受ける。記録画面の期間セレクタ
+ * （すべて／今月／先月／今年）から渡す。未指定は全期間（店ホーム互換）。
+ *
+ * 不正値は安全側に倒し、フィルタ無し（undefined）として扱う（.catch(undefined)）。
+ * これにより壊れた値が来てもエラーにせず、全期間として返す。
+ */
+export const StoreGratitudeQuerySchema = z.object({
+  // 期間の下限（含む・ISO 文字列）。不正・未指定はフィルタ無し
+  from: z.string().datetime().optional().catch(undefined),
+  // 期間の上限（排他・ISO 文字列）。不正・未指定はフィルタ無し
+  to: z.string().datetime().optional().catch(undefined),
+  // 特定スタッフの絞り込み（任意・uuid）。指定時は voices をそのスタッフに絞る。
+  // totalCount・weekCount・perStaff は staffId に関わらず常に全スタッフ集計のまま（変えない）。
+  // 不正値は安全側に倒し、フィルタ無し（undefined）として扱う（.catch(undefined)）。
+  staffId: z.string().uuid().optional().catch(undefined),
+});
+export type StoreGratitudeQuery = z.infer<typeof StoreGratitudeQuerySchema>;
+
+/**
  * GET /store/:storeId/gratitude の応答（感謝の可視化）。
- * 店全体の件数（合計・今日・今週・今月）と、お客さまの声フィード、スタッフ別件数を返す。
+ * 期間で絞った店全体の件数（totalCount）とお客さまの声フィード・スタッフ別件数、
+ * および「今週」の件数（weekCount・店ホームの今週バッジ用に常に今週）を返す。
+ *
+ * from/to を指定すると totalCount・voices・perStaff がその期間に絞られる。未指定は全期間。
+ * weekCount は期間指定に関わらず常に「今週（直近7日）」を表す（店ホーム互換のため）。
  *
  * 金額（amount / customer_total / platform_fee）・残高・着金は一切含めない（横断ルール: 店はお金に触れない）。
  * スタッフ別件数は件数で並べ替え・順位付けせず、名簿順（中立）で返す。
  */
 export const StoreGratitudeSchema = z.object({
-  // 店全体に届いた「ありがとう」の累計件数
+  // 店全体に届いた「ありがとう」の件数（期間指定時はその期間に絞った件数）
   totalCount: z.number().int(),
-  // 今日の件数（JST）
-  todayCount: z.number().int(),
-  // 今週の件数（JST・直近7日）
+  // 今週の件数（JST・直近7日）。期間指定に関わらず常に今週（店ホームの今週バッジ用）
   weekCount: z.number().int(),
-  // 今月の件数（JST・暦月）
-  monthCount: z.number().int(),
-  // お客さまの声フィード（メッセージのある投げ銭を新しい順に。金額なし）
+  // お客さまの声フィード（メッセージのある投げ銭を新しい順に。期間で絞る。金額なし）
   voices: z.array(GratitudeVoiceSchema),
-  // スタッフ別件数（名簿順・中立な並び。件数で順位付けしない）
+  // スタッフ別件数（名簿順・中立な並び。期間で絞る。件数で順位付けしない）
   perStaff: z.array(GratitudePerStaffSchema),
 });
 export type StoreGratitude = z.infer<typeof StoreGratitudeSchema>;

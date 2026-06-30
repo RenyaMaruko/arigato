@@ -110,7 +110,7 @@ export function TipPage() {
           <>
             {/* 顔写真枠（アバター） */}
             <div className="mt-1.5 flex justify-center">
-              <div className="flex h-[120px] w-[120px] items-center justify-center rounded-full bg-stamp-bg text-token-sm text-muted">
+              <div className="flex h-[120px] w-[120px] items-center justify-center rounded-full bg-stamp-bg text-muted">
                 {staff.avatarUrl ? (
                   <img
                     src={staff.avatarUrl}
@@ -118,7 +118,21 @@ export function TipPage() {
                     className="h-[120px] w-[120px] rounded-full object-cover"
                   />
                 ) : (
-                  "顔写真"
+                  // 未設定は中立な人物アイコン（「顔写真」必須に見えないように）
+                  <svg
+                    width="56"
+                    height="56"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.6"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <circle cx="12" cy="8" r="4" />
+                    <path d="M4.5 20c0-4 3.5-6 7.5-6s7.5 2 7.5 6" />
+                  </svg>
                 )}
               </div>
             </div>
@@ -134,35 +148,48 @@ export function TipPage() {
               <div className="mt-1 text-center text-token-md text-muted">{staff.headline}</div>
             )}
 
-            {/* 金額を選ぶ */}
-            <div className="mt-[30px] text-token-base font-bold text-ink-label">
-              {t("tip.selectAmount")}
-            </div>
-            <AmountSelector selected={amount} onSelect={setAmount} />
+            {/* 受付停止（脱退・在籍解除済みの QR）のときは、金額選択・送るを出さず案内だけを表示する。
+                店員さんが再参加すると、同じ QR で受付を再開する。 */}
+            {!staff.accepting ? (
+              <div className="mt-8 rounded-2xl border-[1.5px] border-line bg-surface-subtle px-6 py-7 text-center">
+                <div className="text-token-lg font-bold text-ink">{t("tip.notAcceptingTitle")}</div>
+                <p className="mt-2 text-token-sm leading-relaxed text-ink-sub">
+                  {t("tip.notAcceptingNote")}
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* 金額を選ぶ */}
+                <div className="mt-[30px] text-token-base font-bold text-ink-label">
+                  {t("tip.selectAmount")}
+                </div>
+                <AmountSelector selected={amount} onSelect={setAmount} />
 
-            {/* メッセージを添える（任意） */}
-            <div className="mt-[26px] text-token-base font-bold text-ink-label">
-              {t("tip.addMessage")}{" "}
-              <span className="font-normal text-muted">{t("tip.optional")}</span>
-            </div>
-            <MessageInput
-              value={message}
-              onChange={setMessage}
-              placeholder={t("tip.messagePlaceholder")}
-            />
+                {/* メッセージを添える（任意） */}
+                <div className="mt-[26px] text-token-base font-bold text-ink-label">
+                  {t("tip.addMessage")}{" "}
+                  <span className="font-normal text-muted">{t("tip.optional")}</span>
+                </div>
+                <MessageInput
+                  value={message}
+                  onChange={setMessage}
+                  placeholder={t("tip.messagePlaceholder")}
+                />
 
-            {/* 送るボタン（押下で支払いシートを開き PaymentIntent を作成。
-                ウォレット/カードはシート内のアプリ内決済 UI で選んで確定する） */}
-            <div className="mt-7 flex flex-col gap-[11px]">
-              <button
-                type="button"
-                onClick={handleStartPay}
-                disabled={amount == null}
-                className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page disabled:opacity-40"
-              >
-                {t("tip.send")}
-              </button>
-            </div>
+                {/* 送るボタン（押下で支払いシートを開き PaymentIntent を作成。
+                    ウォレット/カードはシート内のアプリ内決済 UI で選んで確定する） */}
+                <div className="mt-7 flex flex-col gap-[11px]">
+                  <button
+                    type="button"
+                    onClick={handleStartPay}
+                    disabled={amount == null}
+                    className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page disabled:opacity-40"
+                  >
+                    {t("tip.send")}
+                  </button>
+                </div>
+              </>
+            )}
           </>
         )}
       </div>

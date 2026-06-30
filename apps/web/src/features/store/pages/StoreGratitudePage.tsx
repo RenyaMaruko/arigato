@@ -1,17 +1,18 @@
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
-import type { StoreProfile, StoreGratitude } from "@arigato/shared";
+import type { StoreProfile, StoreGratitude, GratitudeVoice } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { computePeriodRange, PERIODS, type Period } from "../../../lib/period.js";
 import { StoreBottomNav } from "../components/StoreBottomNav.js";
 import { StoreGuard } from "../components/StoreGuard.js";
 import { useStoreGratitude } from "../hooks/useStore.js";
 import { formatRelativeTime } from "../utils/format.js";
 
 /**
- * 感謝の可視化画面（/store/gratitude）。モック06に対応。
+ * 感謝の記録画面（/store/gratitude）。モック06に対応。
  *
- * 店全体の「ありがとう」件数（累計・今日・今週・今月）と、お客さまの声（メッセージ・いつ・誰宛か）、
- * スタッフ別の件数を表示する。
+ * 期間（すべて／今月／先月／今年）で絞り込める。総投げ銭（totalCount）・お客さまの声・スタッフ別件数が
+ * 選んだ期間に連動する。期間セレクタは店員側の受取履歴と同じピル型のトーン（rose 系・絞り込み中が分かる）。
  *
  * 最重要原則: 金額（amount / customer_total / platform_fee）・残高・着金は画面のどこにも表示しない。
  * スタッフ別件数は名簿順（中立）で並べ、件数で順位付け・並べ替えしない。
@@ -22,11 +23,30 @@ export function StoreGratitudePage() {
 
 function StoreGratitudeContent({ store }: { store: StoreProfile }) {
   const { t } = useTranslation();
-  const gratitudeQuery = useStoreGratitude(store.id);
-  const gratitude = gratitudeQuery.data;
+
+  // 期間プリセット（すべて／今月／先月／今年）。選択を from/to（ISO）に変換して取得に渡す
+  const [period, setPeriod] = useState<Period>("all");
+  // period から from/to を計算する（純粋関数）。期間が変わると useStoreGratitude が自動再取得する
+  const range = useMemo(() => computePeriodRange(period), [period]);
 
   // タブ（お店全体 / スタッフ別）
   const [tab, setTab] = useState<"store" | "staff">("store");
+
+  // スタッフ別タブのスタッフ選択（""＝すべて。特定スタッフは staffId）
+  const [selectedStaffId, setSelectedStaffId] = useState<string>("");
+
+  // 基本クエリ（staffId 無し）。お店全体タブの totalCount＋全 voices と、スタッフ別の perStaff（選択肢）を供給する。
+  // これは staffId で絞らない（お店全体タブの voices を巻き込まないため）。
+  const gratitudeQuery = useStoreGratitude(store.id, range);
+  const gratitude = gratitudeQuery.data;
+
+  // 特定スタッフ用の追加クエリ。voices をそのスタッフに絞る。
+  // スタッフ別タブで特定スタッフを選んでいるときだけ走らせる（お店全体タブの表示に影響させない）。
+  const staffGratitudeQuery = useStoreGratitude(
+    store.id,
+    { ...range, staffId: selectedStaffId },
+    { enabled: tab === "staff" && selectedStaffId !== "" },
+  );
 
   return (
     <PhoneFrame>
@@ -65,11 +85,49 @@ function StoreGratitudeContent({ store }: { store: StoreProfile }) {
         </button>
       </div>
 
-      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-6 pt-5">
+      {/* フィルタ（期間・スタッフ）。各ピルの左に小さなラベルを置き横並びにして、
+          何の絞り込みかを一目で分かるようにする。期間は両タブに効く。
+          スタッフはスタッフ別タブのときだけ横に追加する。 */}
+      <div className="flex flex-none flex-wrap items-start gap-x-4 gap-y-2 px-5 pb-1 pt-3.5">
+        <div className="flex flex-col gap-1">
+          <span className="pl-1 text-token-xs font-semibold text-muted">
+            {t("store.gratitudePeriodLabel")}
+          </span>
+          <PeriodSelect
+            ariaLabel={t("store.gratitudePeriodLabel")}
+            value={period}
+            onChange={(v) => setPeriod(v)}
+          />
+        </div>
+        {tab === "staff" && (
+          <div className="flex flex-col gap-1">
+            <span className="pl-1 text-token-xs font-semibold text-muted">
+              {t("store.gratitudeStaffLabel")}
+            </span>
+            <StaffSelect
+              ariaLabel={t("store.gratitudeStaffLabel")}
+              value={selectedStaffId}
+              options={(gratitude?.perStaff ?? []).map((p) => ({
+                id: p.staffId,
+                name: p.staffName,
+              }))}
+              allLabel={t("store.gratitudeStaffAll")}
+              onChange={setSelectedStaffId}
+            />
+          </div>
+        )}
+      </div>
+
+      <div className="flex-1 min-h-0 overflow-y-auto px-5 pb-6 pt-4">
         {tab === "store" ? (
           <StoreWideTab gratitude={gratitude} />
         ) : (
-          <PerStaffTab gratitude={gratitude} />
+          <PerStaffTab
+            gratitude={gratitude}
+            selectedStaffId={selectedStaffId}
+            staffVoices={staffGratitudeQuery.data?.voices}
+            staffVoicesLoading={staffGratitudeQuery.isLoading}
+          />
         )}
       </div>
 
@@ -79,7 +137,8 @@ function StoreGratitudeContent({ store }: { store: StoreProfile }) {
 }
 
 /**
- * お店全体タブ: 件数（累計・今日・今週・今月）とお客さまの声フィード。金額は出さない。
+ * お店全体タブ: 選んだ期間の総投げ銭（件数）とお客さまの声フィード。金額は出さない。
+ * 期間別の3カード（今日/今週/今月）と今週バッジは期間セレクタと重複するため置かない。
  */
 function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) {
   const { t } = useTranslation();
@@ -87,7 +146,7 @@ function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) 
 
   return (
     <>
-      {/* 累計件数 */}
+      {/* 総投げ銭（選んだ期間の件数。金額ではない） */}
       <div className="whitespace-pre-line text-token-md leading-snug text-ink-label">
         {t("store.gratitudeHeroTitle")}
       </div>
@@ -98,29 +157,11 @@ function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) 
         <span className="text-token-xl font-semibold text-ink">
           {t("store.gratitudeCountSuffix")}
         </span>
-        <span className="ml-0.5 text-[24px]" aria-hidden="true">
-          ❤️
-        </span>
-      </div>
-      <div className="mt-1.5">
-        <span className="inline-block rounded-pill bg-rose-soft px-2.5 py-[3px] text-token-sm font-bold text-rose">
-          {t("store.gratitudeWeekBadge", { count: gratitude?.weekCount ?? 0 })}
-        </span>
       </div>
 
-      {/* 期間別件数（今日 / 今週 / 今月）。金額ではなく件数 */}
-      <div className="mt-5 grid grid-cols-3 gap-3">
-        <PeriodCard label={t("store.gratitudeToday")} count={gratitude?.todayCount ?? 0} />
-        <PeriodCard label={t("store.gratitudeWeek")} count={gratitude?.weekCount ?? 0} />
-        <PeriodCard label={t("store.gratitudeMonth")} count={gratitude?.monthCount ?? 0} />
-      </div>
-
-      {/* お客さまの声 */}
+      {/* メッセージ（投げ銭の一言。無い投げ銭は「メッセージなし」と表示） */}
       <div className="mt-7 text-token-md font-bold text-ink">
-        {t("store.gratitudeVoicesTitle")}{" "}
-        <span className="text-token-sm font-normal text-muted">
-          {t("store.gratitudeVoicesNote")}
-        </span>
+        {t("store.gratitudeVoicesTitle")}
       </div>
       <div className="mt-3.5 flex flex-col gap-3">
         {voices.length === 0 ? (
@@ -133,11 +174,16 @@ function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) 
               key={v.id}
               className="flex items-center gap-3 rounded-xl border border-line-soft px-4 py-3.5"
             >
-              <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-token-lg">
-                🙂
+              <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-rose">
+                <MessageAvatarIcon />
               </span>
               <div className="flex-1">
-                <div className="text-token-base text-ink">{v.message}</div>
+                {/* メッセージ。無い投げ銭は淡色で「メッセージなし」 */}
+                {v.message ? (
+                  <div className="text-token-base text-ink">{v.message}</div>
+                ) : (
+                  <div className="text-token-base text-muted">{t("store.gratitudeNoMessage")}</div>
+                )}
                 <div className="mt-1 text-token-xs text-muted">
                   {formatRelativeTime(v.receivedAt)} ・ {v.staffName}
                   {t("store.san")}
@@ -152,54 +198,269 @@ function StoreWideTab({ gratitude }: { gratitude: StoreGratitude | undefined }) 
 }
 
 /**
- * スタッフ別タブ: スタッフごとの「ありがとう件数」。名簿順（中立）で、件数で順位付けしない。金額は出さない。
+ * スタッフ別タブ: 上部にスタッフ選択ドロップダウン（すべて＋各スタッフ・名簿順）。
+ * - すべて: スタッフごとの「ありがとう件数」一覧（内訳）。名簿順（中立）で、件数で順位付けしない。
+ * - 特定スタッフ: 「{name} ◯件」の見出し（件数は perStaff から）＋そのスタッフのメッセージ一覧（staffId 絞りの voices）。
+ * 金額は一切出さない。期間セレクタと連動する。
  */
-function PerStaffTab({ gratitude }: { gratitude: StoreGratitude | undefined }) {
+function PerStaffTab({
+  gratitude,
+  selectedStaffId,
+  staffVoices,
+  staffVoicesLoading,
+}: {
+  gratitude: StoreGratitude | undefined;
+  // 選択中のスタッフ（""＝すべて）。セレクタは親（フィルタ行）に置く
+  selectedStaffId: string;
+  // 特定スタッフ選択時のメッセージ一覧（staffId 絞りの追加クエリ由来）
+  staffVoices: GratitudeVoice[] | undefined;
+  staffVoicesLoading: boolean;
+}) {
   const { t } = useTranslation();
+  // ドロップダウンの選択肢・各スタッフの件数は常に perStaff（全スタッフ集計・名簿順）から取る
   const perStaff = gratitude?.perStaff ?? [];
+  // 選択中スタッフの perStaff 行（見出しの件数の出どころ）
+  const selected = perStaff.find((p) => p.staffId === selectedStaffId);
 
   return (
     <>
-      <div className="text-token-md font-bold text-ink">
-        {t("store.gratitudePerStaffTitle")}
-      </div>
-      <div className="mt-1 text-token-sm text-muted">{t("store.gratitudePerStaffNote")}</div>
-
-      <div className="mt-4 flex flex-col gap-3">
-        {perStaff.length === 0 ? (
-          <div className="rounded-xl border border-line-soft px-4 py-5 text-center text-token-sm text-muted">
-            {t("store.gratitudeNoStaff")}
-          </div>
-        ) : (
-          perStaff.map((p) => (
-            <div
-              key={p.staffId}
-              className="flex items-center gap-3.5 rounded-xl border border-line-soft px-4 py-3.5"
-            >
-              <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-token-sm text-muted">
-                員
-              </span>
-              <div className="flex-1 text-token-md font-semibold text-ink">{p.staffName}</div>
-              {/* 件数（金額ではない） */}
-              <span className="text-token-md font-bold text-rose">
-                {t("store.gratitudePerStaffCount", { count: p.count })}
-              </span>
+      {selectedStaffId === "" ? (
+        // すべて: スタッフ別件数の内訳（名簿順・中立。件数で順位付けしない）
+        <div className="flex flex-col gap-3">
+          {perStaff.length === 0 ? (
+            <div className="rounded-xl border border-line-soft px-4 py-5 text-center text-token-sm text-muted">
+              {t("store.gratitudeNoStaff")}
             </div>
-          ))
-        )}
-      </div>
+          ) : (
+            perStaff.map((p) => (
+              <div
+                key={p.staffId}
+                className="flex items-center gap-3.5 rounded-xl border border-line-soft px-4 py-3.5"
+              >
+                {/* アバターがあれば丸アイコンに画像、無ければ「員」プレースホルダ */}
+                {p.avatarUrl ? (
+                  <img
+                    src={p.avatarUrl}
+                    alt={p.staffName}
+                    className="h-9 w-9 flex-none rounded-full object-cover"
+                  />
+                ) : (
+                  <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-token-sm text-muted">
+                    員
+                  </span>
+                )}
+                <div className="flex-1 text-token-md font-semibold text-ink">{p.staffName}</div>
+                {/* 件数（金額ではない） */}
+                <span className="text-token-md font-bold text-rose">
+                  {t("store.gratitudePerStaffCount", { count: p.count })}
+                </span>
+              </div>
+            ))
+          )}
+        </div>
+      ) : (
+        // 特定スタッフ: 見出し「{name} ◯件」＋ そのスタッフのメッセージ一覧（金額なし）
+        <>
+          <div className="flex items-center justify-between">
+            <span className="text-token-md font-bold text-ink">{selected?.staffName ?? ""}</span>
+            {/* 件数は perStaff（全スタッフ集計）から。staffId 絞りでは変えない */}
+            <span className="text-token-md font-bold text-rose">
+              {t("store.gratitudePerStaffCount", { count: selected?.count ?? 0 })}
+            </span>
+          </div>
+
+          <div className="mt-3.5 flex flex-col gap-3">
+            {staffVoicesLoading ? (
+              // 追加取得中（特定スタッフ選択直後）
+              <div className="rounded-xl border border-line-soft px-4 py-5 text-center text-token-sm text-muted">
+                …
+              </div>
+            ) : (staffVoices ?? []).length === 0 ? (
+              <div className="rounded-xl border border-line-soft px-4 py-5 text-center text-token-sm text-muted">
+                {t("store.gratitudeStaffNoVoices")}
+              </div>
+            ) : (
+              (staffVoices ?? []).map((v) => (
+                <div
+                  key={v.id}
+                  className="flex items-center gap-3 rounded-xl border border-line-soft px-4 py-3.5"
+                >
+                  <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-rose">
+                    <MessageAvatarIcon />
+                  </span>
+                  <div className="flex-1">
+                    {/* メッセージ。無い投げ銭は淡色で「メッセージなし」 */}
+                    {v.message ? (
+                      <div className="text-token-base text-ink">{v.message}</div>
+                    ) : (
+                      <div className="text-token-base text-muted">
+                        {t("store.gratitudeNoMessage")}
+                      </div>
+                    )}
+                    <div className="mt-1 text-token-xs text-muted">
+                      {formatRelativeTime(v.receivedAt)} ・ {v.staffName}
+                      {t("store.san")}
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        </>
+      )}
     </>
   );
 }
 
 /**
- * 期間別件数カード（今日 / 今週 / 今月）。件数のみ。
+ * スタッフ選択セレクタ（すべて＋各スタッフ・名簿順）。
+ * 期間セレクタ（PeriodSelect）と同じピル型のトーンに揃える。特定スタッフを選ぶと絞り込み中としてローズ塗りにする。
+ * インラインスタイルは使わず Tailwind ユーティリティで書く。
  */
-function PeriodCard({ label, count }: { label: string; count: number }) {
+function StaffSelect({
+  ariaLabel,
+  value,
+  options,
+  allLabel,
+  onChange,
+}: {
+  ariaLabel: string;
+  // 選択中のスタッフ（""＝すべて）
+  value: string;
+  // 選択肢（perStaff 由来・名簿順）
+  options: { id: string; name: string }[];
+  allLabel: string;
+  onChange: (value: string) => void;
+}) {
+  // 「すべて」以外を選んでいたら絞り込み中として強調する
+  const isActive = value !== "";
+  // 選択状態に応じてピルの色を切り替える（既定=白枠、絞り込み中=ローズ塗り）
+  const pillClass = isActive ? "border-rose bg-rose text-page" : "border-line bg-page text-ink-label";
+
   return (
-    <div className="rounded-xl border border-line-soft px-3 py-3 text-center">
-      <div className="text-token-2xl font-bold text-ink">{count}</div>
-      <div className="mt-0.5 text-token-xs text-muted">{label}</div>
+    <div className="relative inline-flex">
+      <select
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+        className={`h-9 appearance-none rounded-pill border-[1.5px] pl-3.5 pr-8 text-token-sm font-semibold focus:outline-none focus:ring-2 focus:ring-rose-spark/60 ${pillClass}`}
+      >
+        {/* すべて（全スタッフ・内訳表示） */}
+        <option value="">{allLabel}</option>
+        {options.map((o) => (
+          <option key={o.id} value={o.id}>
+            {o.name}
+          </option>
+        ))}
+      </select>
+      {/* 右端の▾（クリックは下の select に通す）。色はピルの状態に合わせる */}
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-y-0 right-2.5 flex items-center ${
+          isActive ? "text-page" : "text-ink-sub"
+        }`}
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </span>
     </div>
+  );
+}
+
+/**
+ * 期間セレクタ（すべて／今月／先月／今年）。
+ * ネイティブ select を「軽やかで押しやすい」ピル型に整える（店員側の受取履歴と同じトーン）。
+ * 既定（すべて）以外を選ぶと、絞り込み中と分かるようにローズ塗りにする。
+ * インラインスタイルは使わず Tailwind ユーティリティで書く。
+ */
+function PeriodSelect({
+  ariaLabel,
+  value,
+  onChange,
+}: {
+  ariaLabel: string;
+  value: Period;
+  onChange: (value: Period) => void;
+}) {
+  const { t } = useTranslation();
+  // 各プリセットの表示ラベル（i18n）
+  const labels: Record<Period, string> = {
+    all: t("store.gratitudePeriodAll"),
+    thisMonth: t("store.gratitudePeriodThisMonth"),
+    lastMonth: t("store.gratitudePeriodLastMonth"),
+    thisYear: t("store.gratitudePeriodThisYear"),
+  };
+  // 「すべて」以外を選んでいたら「絞り込み中」として強調する
+  const isActive = value !== "all";
+  // 選択状態に応じてピルの色を切り替える（既定=白枠、絞り込み中=ローズ塗り）
+  const pillClass = isActive ? "border-rose bg-rose text-page" : "border-line bg-page text-ink-label";
+
+  return (
+    <div className="relative inline-flex">
+      <select
+        aria-label={ariaLabel}
+        value={value}
+        onChange={(e) => onChange(e.target.value as Period)}
+        className={`h-9 appearance-none rounded-pill border-[1.5px] pl-3.5 pr-8 text-token-sm font-semibold focus:outline-none focus:ring-2 focus:ring-rose-spark/60 ${pillClass}`}
+      >
+        {PERIODS.map((p) => (
+          <option key={p} value={p}>
+            {labels[p]}
+          </option>
+        ))}
+      </select>
+      {/* 右端の▾（クリックは下の select に通す）。色はピルの状態に合わせる */}
+      <span
+        aria-hidden="true"
+        className={`pointer-events-none absolute inset-y-0 right-2.5 flex items-center ${
+          isActive ? "text-page" : "text-ink-sub"
+        }`}
+      >
+        <svg
+          width="12"
+          height="12"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </span>
+    </div>
+  );
+}
+
+/**
+ * メッセージ行の左に置く中立アイコン（お客さまは匿名のため、顔写真の代わりの吹き出し）。
+ * 以前の 🙂 絵文字（スタンプのように見える）を、メッセージらしい吹き出しアイコンに置き換えたもの。
+ */
+function MessageAvatarIcon() {
+  return (
+    <svg
+      width="18"
+      height="18"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.8"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 9 9 0 0 1-3.8-.8L3 21l1.8-5.7a8.5 8.5 0 0 1-.8-3.8A8.38 8.38 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z" />
+    </svg>
   );
 }

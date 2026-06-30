@@ -1,16 +1,22 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate, useRouter } from "@tanstack/react-router";
+import {
+  ConnectComponentsProvider,
+  ConnectAccountOnboarding,
+} from "@stripe/react-connect-js";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
-import { useStaffMe, useStartConnectOnboard } from "../hooks/useStaff.js";
+import { useStaffMe, useConnectOnboarding } from "../hooks/useStaff.js";
 
 /**
  * 本人確認・口座登録の流れ画面（/staff/identity・モック06）。
  * 4ステップ（基本情報→本人確認書類→口座情報→審査）を案内し、
- * 「手続きをはじめる」で Stripe Connect オンボーディングリンクを発行して遷移する。
- * 完了の判定はこのリンクの戻りではなく account.updated Webhook を正とする。
+ * 「手続きをはじめる」で Stripe の本人確認 UI（Connect Embedded Components）をアプリ内に埋め込んで表示する
+ * （Stripe ドメインへの全画面遷移はしない）。アップロード・審査の UI は Stripe コンポーネントが描画する。
+ * 完了の判定はこの画面の戻りではなく account.updated Webhook を正とする
+ * （onExit は「埋め込み UI を抜けた」だけ。確定は Webhook 経由で反映される）。
  */
 export function StaffIdentityFlowPage() {
   const { t } = useTranslation();
@@ -29,7 +35,11 @@ export function StaffIdentityFlowPage() {
     }
   };
   const meQuery = useStaffMe(isAuthenticated);
-  const onboard = useStartConnectOnboard();
+  // 「手続きをはじめる」を押したら埋め込み UI を表示する（最初は案内ステップを見せる）
+  const [started, setStarted] = useState(false);
+  // ログイン・プロフィールが確定してから Connect インスタンスを初期化する
+  const ready = isAuthenticated && !!meQuery.data;
+  const { instance: connectInstance, error: connectError } = useConnectOnboarding(ready);
 
   // 未ログイン・未作成なら入口へ戻す
   const shouldRedirect =
@@ -44,14 +54,15 @@ export function StaffIdentityFlowPage() {
     return <IdentityLoading label={t("staff.loading")} />;
   }
 
-  // オンボーディングリンクを発行して Stripe のホスト画面へ遷移する
+  // 「手続きをはじめる」で埋め込み UI を表示する（リダイレクトはしない）
   const handleStart = () => {
-    onboard.mutate(undefined, {
-      onSuccess: (res) => {
-        // Stripe のオンボーディングへ遷移（本人確認・口座登録は Stripe が収集する）
-        window.location.href = res.onboardingUrl;
-      },
-    });
+    setStarted(true);
+  };
+
+  // 埋め込み UI を抜けた（完了 or 中断）。完了の確定は account.updated Webhook を正とするため、
+  // ここでは完了画面へ誘導するだけ（Webhook 反映までは「確認中」表示になる）。
+  const handleExit = () => {
+    navigate({ to: "/staff/identity/complete" });
   };
 
   // 4ステップの定義（モック06に対応）
@@ -82,43 +93,61 @@ export function StaffIdentityFlowPage() {
       </div>
 
       <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-[26px] pb-6 pt-3.5">
-        {/* ステップのタイムライン */}
-        <ol className="flex flex-col">
-          {steps.map((step, index) => (
-            <li key={step.title} className="flex gap-4">
-              <div className="flex flex-col items-center">
-                <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-rose-soft text-rose">
-                  {step.icon}
-                </span>
-                {/* 最後以外はステップ間をつなぐ縦線 */}
-                {index < steps.length - 1 && (
-                  <span className="my-1.5 w-0.5 flex-1 bg-rose-spark/40" />
-                )}
-              </div>
-              <div className={index < steps.length - 1 ? "pb-6" : ""}>
-                <div className="text-token-lg font-bold text-ink">{step.title}</div>
-                <div className="mt-1 text-token-base text-ink-sub">{step.sub}</div>
-              </div>
-            </li>
-          ))}
-        </ol>
+        {/* 手続き前は案内ステップ、開始後はアプリ内に Stripe の本人確認 UI を埋め込んで表示する */}
+        {!started ? (
+          <>
+            {/* ステップのタイムライン */}
+            <ol className="flex flex-col">
+              {steps.map((step, index) => (
+                <li key={step.title} className="flex gap-4">
+                  <div className="flex flex-col items-center">
+                    <span className="flex h-11 w-11 items-center justify-center rounded-xl bg-rose-soft text-rose">
+                      {step.icon}
+                    </span>
+                    {/* 最後以外はステップ間をつなぐ縦線 */}
+                    {index < steps.length - 1 && (
+                      <span className="my-1.5 w-0.5 flex-1 bg-rose-spark/40" />
+                    )}
+                  </div>
+                  <div className={index < steps.length - 1 ? "pb-6" : ""}>
+                    <div className="text-token-lg font-bold text-ink">{step.title}</div>
+                    <div className="mt-1 text-token-base text-ink-sub">{step.sub}</div>
+                  </div>
+                </li>
+              ))}
+            </ol>
 
-        {/* エラー表示 */}
-        {onboard.isError && (
+            {/* 初期化エラー（公開可能キー未設定など）の表示 */}
+            {connectError && (
+              <div className="mt-6 rounded-xl border border-rose-spark/60 bg-rose-soft px-4 py-3 text-center text-token-sm text-rose">
+                {t("staff.identityError")}
+              </div>
+            )}
+
+            {/* 手続き開始ボタン（押すとアプリ内に埋め込み UI を表示する。リダイレクトしない） */}
+            <button
+              type="button"
+              onClick={handleStart}
+              disabled={!connectInstance}
+              className="mt-8 rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page disabled:opacity-60"
+            >
+              {connectInstance ? t("staff.identityStart") : t("staff.identityStarting")}
+            </button>
+          </>
+        ) : connectError || !connectInstance ? (
+          // 初期化に失敗した場合のエラー表示（埋め込み UI を出せない）
           <div className="mt-6 rounded-xl border border-rose-spark/60 bg-rose-soft px-4 py-3 text-center text-token-sm text-rose">
             {t("staff.identityError")}
           </div>
+        ) : (
+          // アプリ内に Stripe の本人確認 UI（ConnectAccountOnboarding）を埋め込む。
+          // 入力フォーム・書類アップロード・審査の表示はすべて Stripe コンポーネントが描画する。
+          <div className="mt-1">
+            <ConnectComponentsProvider connectInstance={connectInstance}>
+              <ConnectAccountOnboarding onExit={handleExit} />
+            </ConnectComponentsProvider>
+          </div>
         )}
-
-        {/* 手続き開始ボタン（オンボーディングリンク発行→遷移） */}
-        <button
-          type="button"
-          onClick={handleStart}
-          disabled={onboard.isPending}
-          className="mt-8 rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page disabled:opacity-60"
-        >
-          {onboard.isPending ? t("staff.identityStarting") : t("staff.identityStart")}
-        </button>
       </div>
 
       {/* 下部ボトムナビ（本人確認フローはタブに該当しないため active 未指定） */}

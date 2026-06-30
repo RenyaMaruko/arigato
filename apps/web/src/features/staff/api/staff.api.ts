@@ -4,14 +4,18 @@ import {
   StaffTipsResponseSchema,
   StaffBalanceSchema,
   ConnectOnboardResponseSchema,
+  ConnectAccountSessionResponseSchema,
   JoinStoreResultSchema,
   CreatePayoutResultSchema,
   PayoutListSchema,
+  AvatarUploadResultSchema,
   type StaffMe,
+  type AvatarUploadResult,
   type InviteInfo,
   type StaffTipsResponse,
   type StaffBalance,
   type ConnectOnboardResponse,
+  type ConnectAccountSessionResponse,
   type JoinStoreResult,
   type CreatePayoutResult,
   type PayoutList,
@@ -90,6 +94,28 @@ export async function joinStore(inviteCode: string): Promise<JoinStoreResult> {
 }
 
 /**
+ * POST /staff/me/memberships/:membershipId/leave — 自分でその店を脱退する（論理削除・本人スコープ）。
+ * 脱退後は active な所属一覧（memberships）からその店が消えるが、受け取った収益は受取履歴で確認できる
+ * （receiptStores に脱退店が残る）。脱退後の最新 StaffMe を返す。対象なし・未作成は error を投げる。
+ */
+export async function leaveMembership(membershipId: string): Promise<StaffMe> {
+  const res = await apiClient.staff.me.memberships[":membershipId"].leave.$post({
+    param: { membershipId },
+  });
+  if (!res.ok) {
+    let code = `status_${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) code = body.error;
+    } catch {
+      // JSON でなければステータスのみ
+    }
+    throw new Error(code);
+  }
+  return StaffMeSchema.parse(await res.json());
+}
+
+/**
  * PATCH /staff/me — 自分のプロフィールを編集する。
  */
 export async function updateStaffProfile(
@@ -100,6 +126,42 @@ export async function updateStaffProfile(
     throw new Error(`staff profile update failed: ${res.status}`);
   }
   return StaffMeSchema.parse(await res.json());
+}
+
+/**
+ * POST /staff/me/avatar — アバター画像をアップロードして avatar_url を更新する（本人のみ）。
+ * multipart/form-data（field 名 "file"）で送る。hc は FormData 送信に向かないため、CSV ダウンロードと
+ * 同様に fetch を直接使い、認証トークンを手で付与する。検証違反（非画像・過大）は 400 でエラーを投げる。
+ */
+export async function uploadStaffAvatar(file: File): Promise<AvatarUploadResult> {
+  const apiUrl = import.meta.env.VITE_API_URL ?? "http://localhost:8787";
+  // トークンはメモリ保持のセッションから同期取得する
+  const token = getAccessToken();
+  const headers = new Headers();
+  if (token) {
+    headers.set("Authorization", `Bearer ${token}`);
+  }
+  // FormData に画像を載せる（Content-Type は fetch が boundary 付きで自動設定するため手で付けない）
+  const form = new FormData();
+  form.append("file", file);
+
+  const res = await fetch(`${apiUrl}/staff/me/avatar`, {
+    method: "POST",
+    headers,
+    body: form,
+  });
+  if (!res.ok) {
+    // 検証違反などはエラーコードを添えて投げる（呼び出し側で文言に変換）
+    let code = `status_${res.status}`;
+    try {
+      const body = (await res.json()) as { error?: string };
+      if (body?.error) code = body.error;
+    } catch {
+      // JSON でなければステータスのみ
+    }
+    throw new Error(code);
+  }
+  return AvatarUploadResultSchema.parse(await res.json());
 }
 
 /**
@@ -178,6 +240,19 @@ export async function startConnectOnboard(): Promise<ConnectOnboardResponse> {
     throw new Error(`connect onboard failed: ${res.status}`);
   }
   return ConnectOnboardResponseSchema.parse(await res.json());
+}
+
+/**
+ * POST /staff/me/connect/account-session — 埋め込み型オンボーディング用の Account Session を発行する。
+ * 返る client_secret を埋め込み UI の初期化（loadConnectAndInitialize の fetchClientSecret）に渡す。
+ * client_secret は短命のためキャッシュせず、必要なたびにこの関数で取り直す。
+ */
+export async function createConnectAccountSession(): Promise<ConnectAccountSessionResponse> {
+  const res = await apiClient.staff.me.connect["account-session"].$post();
+  if (!res.ok) {
+    throw new Error(`connect account-session failed: ${res.status}`);
+  }
+  return ConnectAccountSessionResponseSchema.parse(await res.json());
 }
 
 /**

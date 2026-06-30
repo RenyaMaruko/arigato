@@ -59,10 +59,21 @@ export type StoreStaffRow = {
   avatarUrl: string | null;
 };
 
+// 在籍中スタッフ1人の詳細行（店スコープ・金額なし）。参加日は staff_store.created_at。
+export type StoreStaffDetailRow = {
+  id: string;
+  displayName: string;
+  headline: string | null;
+  avatarUrl: string | null;
+  // その店に参加した日時（staff_store.created_at。ISO 文字列）
+  joinedAt: string;
+};
+
 // 感謝の「お客さまの声」1件分（金額なし）
 export type GratitudeVoiceRow = {
   id: string;
-  message: string;
+  // メッセージは無い投げ銭もあるため null 可（フロントで「メッセージなし」と表示）
+  message: string | null;
   // 受け取った日時（ISO 文字列・UTC）
   receivedAt: string;
   // 誰宛か（受け取った店員さんの表示名）
@@ -79,6 +90,8 @@ export type GratitudeTimeRow = {
 export type GratitudePerStaffRow = {
   staffId: string;
   staffName: string;
+  // スタッフのアバター画像URL（公開URL）。未設定は null
+  avatarUrl: string | null;
   // この店員さんに届いた件数（COUNT）。金額ではない
   count: number;
 };
@@ -95,6 +108,13 @@ export type UpdateStoreParams = {
  * Service が依存する Repository の契約（注入点）。
  * 実装は下の createStoreRepository（実 DB）。テストではこの型を満たすモックを渡す。
  */
+// 感謝の可視化の期間フィルタ（from は含む・>=、to は排他・<。ISO 文字列。未指定はその端をフィルタしない）。
+// COALESCE(succeeded_at, created_at) を受取日時として WHERE に AND する。
+export type GratitudePeriodFilter = {
+  from?: string;
+  to?: string;
+};
+
 export type StoreRepository = {
   // 店プロフィールを取得する（店スコープのアクセス制御に owner も併せて返す）
   findStoreById: (storeId: string) => Promise<StoreRow | null>;
@@ -104,6 +124,8 @@ export type StoreRepository = {
   createStore: (params: CreateStoreParams) => Promise<StoreRow>;
   // 店プロフィールを更新する。更新後の行を返す
   updateStore: (storeId: string, params: UpdateStoreParams) => Promise<StoreRow | null>;
+  // 自店のロゴ画像URL（公開URL）を更新する（画像アップロード後・店スコープ）
+  setLogoUrl: (storeId: string, logoUrl: string) => Promise<void>;
   // 招待を発行する（pending で新規作成）。label は誰宛かの任意メモ（未入力は null）。発行した招待行を返す
   createInvite: (storeId: string, code: string, label: string | null) => Promise<StoreInviteRow>;
   // 自店の招待中（pending）だけを新しい順に取得する（招待中一覧。accepted/revoked は返さない）
@@ -112,15 +134,53 @@ export type StoreRepository = {
   findInviteByCode: (storeId: string, code: string) => Promise<StoreInviteRow | null>;
   // 自店の招待中（pending）を失効（revoked）にする。更新できた件数を返す（0 なら対象なし）
   revokeInvite: (storeId: string, code: string) => Promise<number>;
-  // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（在籍管理。中立な並び）
+  // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（在籍管理。中立な並び）。
+  // 在籍中（left_at IS NULL）のみ返す（脱退・在籍解除済みは外れる）。
   listStaff: (storeId: string) => Promise<StoreStaffRow[]>;
-  // 自店宛の「お客さまの声」（メッセージのある成立済み投げ銭）を新しい順に取得する（金額なし）
-  listGratitudeVoices: (storeId: string, limit: number) => Promise<GratitudeVoiceRow[]>;
-  // 自店宛の成立済み投げ銭の受取日時だけを取得する（件数集計用・金額なし）
+  // 自店の在籍中スタッフ1人の詳細（表示名・一言・顔写真・参加日）を取得する（店スコープ・金額なし）。
+  // 在籍中（left_at IS NULL）のみ対象。見つからない（他店・脱退済み・存在しない）なら null。
+  findStaffDetail: (storeId: string, staffId: string) => Promise<StoreStaffDetailRow | null>;
+  // 自店のスタッフを在籍解除する（論理削除）。その (staff,store) の membership に left_at=now() を立てる。
+  // 在籍中（left_at IS NULL）のみ対象。物理削除しない（tip の履歴を保持）。解除できた件数を返す。
+  removeStaff: (storeId: string, staffId: string) => Promise<number>;
+  // 自店宛の「お客さまの声」（成立済み投げ銭）を新しい順に取得する（金額なし）。
+  // period（from/to）を渡すとその期間に絞る（未指定は全期間）。
+  // staffId を渡すと、その店員さん宛の声だけに絞る（未指定は全スタッフ・スタッフ別タブの「特定スタッフ」用）。
+  listGratitudeVoices: (
+    storeId: string,
+    limit: number,
+    period?: GratitudePeriodFilter,
+    staffId?: string,
+  ) => Promise<GratitudeVoiceRow[]>;
+  // 自店宛の成立済み投げ銭の受取日時だけを取得する（件数集計用・金額なし）。
+  // 期間で絞らず全期間を返す（totalCount の期間絞り込みと weekCount の常時今週は Model 側で算出する）。
   listGratitudeTimes: (storeId: string) => Promise<GratitudeTimeRow[]>;
-  // 自店のスタッフ別「ありがとう件数」を名簿順（中立）で取得する（金額なし・件数で並べ替えない）
-  listGratitudePerStaff: (storeId: string) => Promise<GratitudePerStaffRow[]>;
+  // 自店のスタッフ別「ありがとう件数」を名簿順（中立）で取得する（金額なし・件数で並べ替えない）。
+  // period（from/to）を渡すとその期間に絞る（未指定は全期間）。
+  listGratitudePerStaff: (
+    storeId: string,
+    period?: GratitudePeriodFilter,
+  ) => Promise<GratitudePerStaffRow[]>;
 };
+
+/**
+ * 感謝の可視化の期間フィルタ（from/to）を SQL の AND 条件に変換するヘルパ。
+ * 受取日時 = COALESCE(succeeded_at, created_at)。from は含む（>=）・to は排他（<）。
+ * 未指定の端は条件を足さない（全期間）。生 SQL は Repository 内に閉じる。
+ */
+function gratitudePeriodClause(period?: GratitudePeriodFilter) {
+  const parts = [];
+  // from: その時刻を含む（>=）
+  if (period?.from) {
+    parts.push(sql`AND COALESCE(t.succeeded_at, t.created_at) >= ${period.from}`);
+  }
+  // to: その時刻を含まない（<・排他）
+  if (period?.to) {
+    parts.push(sql`AND COALESCE(t.succeeded_at, t.created_at) < ${period.to}`);
+  }
+  // 条件が無ければ空フラグメント（全期間）
+  return parts.length > 0 ? sql.join(parts, sql` `) : sql``;
+}
 
 // 共通の SELECT 句（店プロフィール行。金額・残高カラムは一切含めない）
 const STORE_SELECT = sql`
@@ -190,11 +250,23 @@ export function createStoreRepository(): StoreRepository {
         SET name = ${params.name},
             description = ${params.description},
             industry = ${params.industry},
-            logo_url = ${params.logoUrl}
+            -- ロゴは別経路（POST /store/:storeId/logo）で更新するため、テキスト編集では消さない。
+            -- 値が来た時だけ差し替え、未指定（null）なら既存ロゴを保つ（COALESCE）。
+            logo_url = COALESCE(${params.logoUrl}, logo_url)
         WHERE id = ${storeId}
         RETURNING ${STORE_SELECT}
       `);
       return rows[0] ?? null;
+    },
+
+    // 自店のロゴ画像URL（公開URL）を更新する（画像アップロード後・店スコープ）
+    async setLogoUrl(storeId, logoUrl) {
+      const db = getDb();
+      await db.execute(sql`
+        UPDATE store
+        SET logo_url = ${logoUrl}
+        WHERE id = ${storeId}
+      `);
     },
 
     // 招待を発行する（pending で新規作成）。code は Service/Model で生成済みの一意トークン。
@@ -271,6 +343,7 @@ export function createStoreRepository(): StoreRepository {
 
     // 自店の所属スタッフを名簿順（在籍が古い順）で取得する（中立な並び・金額や件数では並べない）。
     // 多対多モデル: 所属は staff_store（membership）で表すため、staff_store 経由でこの店のメンバーを引く。
+    // 在籍中（left_at IS NULL）のみ返す（脱退・在籍解除済みは外れる）。
     // 並びは在籍（staff_store.created_at）が古い順にして、件数・金額では並べ替えない（中立）。
     async listStaff(storeId) {
       const db = getDb();
@@ -283,14 +356,55 @@ export function createStoreRepository(): StoreRepository {
         FROM staff_store ss
         JOIN staff s ON s.id = ss.staff_id
         WHERE ss.store_id = ${storeId}
+          AND ss.left_at IS NULL
         ORDER BY ss.created_at ASC
       `);
       return rows;
     },
 
-    // 自店宛の「お客さまの声」を新しい順に取得する（メッセージのある成立済みのみ・金額は SELECT しない）
-    async listGratitudeVoices(storeId, limit) {
+    // 自店の在籍中スタッフ1人の詳細を取得する（店スコープ・金額なし）。
+    // 在籍中（left_at IS NULL）のみ対象。他店・脱退済み・存在しないなら null。
+    async findStaffDetail(storeId, staffId) {
       const db = getDb();
+      const rows = await db.execute<StoreStaffDetailRow>(sql`
+        SELECT
+          s.id            AS "id",
+          s.display_name  AS "displayName",
+          s.headline      AS "headline",
+          s.avatar_url    AS "avatarUrl",
+          to_char(ss.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "joinedAt"
+        FROM staff_store ss
+        JOIN staff s ON s.id = ss.staff_id
+        WHERE ss.store_id = ${storeId}
+          AND ss.staff_id = ${staffId}
+          AND ss.left_at IS NULL
+        LIMIT 1
+      `);
+      return rows[0] ?? null;
+    },
+
+    // 自店のスタッフを在籍解除する（論理削除）。その (staff,store) の在籍中 membership に left_at=now()。
+    // 物理削除しない（tip の履歴を保持）。在籍中（left_at IS NULL）のみ対象。解除できた件数を返す。
+    async removeStaff(storeId, staffId) {
+      const db = getDb();
+      const rows = await db.execute<{ id: string }>(sql`
+        UPDATE staff_store
+        SET left_at = now()
+        WHERE store_id = ${storeId}
+          AND staff_id = ${staffId}
+          AND left_at IS NULL
+        RETURNING id AS "id"
+      `);
+      return rows.length;
+    },
+
+    // 自店宛の「お客さまの声」を新しい順に取得する（成立済みのみ・金額は SELECT しない）。
+    // period（from/to）を渡すとその期間に絞る（COALESCE(succeeded_at, created_at) を受取日時として AND）。
+    // staffId を渡すと、その店員さん宛の声だけに絞る（AND t.staff_id = ...・期間と併用）。
+    async listGratitudeVoices(storeId, limit, period, staffId) {
+      const db = getDb();
+      // 特定スタッフ指定時のみ staff_id の絞り込み条件を足す（未指定は全スタッフ）
+      const staffClause = staffId ? sql`AND t.staff_id = ${staffId}` : sql``;
       const rows = await db.execute<GratitudeVoiceRow>(sql`
         SELECT
           t.id          AS "id",
@@ -302,8 +416,8 @@ export function createStoreRepository(): StoreRepository {
         JOIN staff s ON s.id = t.staff_id
         WHERE t.store_id = ${storeId}
           AND t.status = 'succeeded'
-          AND t.message IS NOT NULL
-          AND btrim(t.message) <> ''
+          ${gratitudePeriodClause(period)}
+          ${staffClause}
         ORDER BY COALESCE(t.succeeded_at, t.created_at) DESC
         LIMIT ${limit}
       `);
@@ -328,12 +442,18 @@ export function createStoreRepository(): StoreRepository {
     // COUNT のみで金額は扱わず、ORDER BY も在籍（名簿順）にして件数では並べ替えない（中立）。
     // 多対多モデル: この店のメンバー（staff_store）を引き、その店での成立済み tip だけを数える
     // （t.store_id でこの店分に限定するため、掛け持ちの他店分は混ざらない）。
-    async listGratitudePerStaff(storeId) {
+    // 在籍中（ss.left_at IS NULL）のスタッフのみ対象（脱退者はスタッフ別一覧・選択肢から外れる）。
+    //  ※ totalCount/voices（店全体）は脱退者の在籍当時分も含むが、ここ（perStaff）は active のみ。
+    //    その結果 sum(perStaff) < totalCount になり得るが、仕様どおり（在籍管理は active・総数は履歴保持）。
+    // period（from/to）を渡すと、件数を数える tip をその期間に絞る（LEFT JOIN の ON 条件に AND）。
+    // ON 側に置くことで、期間内に件数 0 のスタッフも名簿順で 0 件として残る（中立な並びを保つ）。
+    async listGratitudePerStaff(storeId, period) {
       const db = getDb();
       const rows = await db.execute<GratitudePerStaffRow>(sql`
         SELECT
           s.id            AS "staffId",
           s.display_name  AS "staffName",
+          s.avatar_url    AS "avatarUrl",
           COUNT(t.id)::int AS "count"
         FROM staff_store ss
         JOIN staff s ON s.id = ss.staff_id
@@ -341,8 +461,10 @@ export function createStoreRepository(): StoreRepository {
           ON t.staff_id = s.id
           AND t.store_id = ${storeId}
           AND t.status = 'succeeded'
+          ${gratitudePeriodClause(period)}
         WHERE ss.store_id = ${storeId}
-        GROUP BY s.id, s.display_name, ss.created_at
+          AND ss.left_at IS NULL
+        GROUP BY s.id, s.display_name, s.avatar_url, ss.created_at
         ORDER BY ss.created_at ASC
       `);
       return rows;

@@ -56,6 +56,10 @@ export function createTipRoute(deps: TipDeps) {
         }
         return c.json(result, 201);
       } catch (err) {
+        // 脱退・在籍解除済みの QR は新規投げ銭を受け付けない（再参加で再開）
+        if (err instanceof Error && err.message === "membership_not_accepting") {
+          return c.json({ error: "membership_not_accepting" }, 409);
+        }
         // 店員さんが Connected Account 未連携で Direct charge を作れない（着金口が未準備）
         if (err instanceof Error && err.message === "staff_not_chargeable") {
           return c.json({ error: "staff_not_chargeable" }, 409);

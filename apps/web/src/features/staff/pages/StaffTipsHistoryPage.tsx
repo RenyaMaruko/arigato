@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
-import type { StaffTipItem, SettlementStatus } from "@arigato/shared";
+import type { StaffTipItem } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
@@ -29,20 +29,22 @@ export function StaffTipsHistoryPage() {
   const [storeId, setStoreId] = useState<string>("");
   const [period, setPeriod] = useState<TipsPeriod>("all");
 
-  // 所属店一覧（店舗セレクタの選択肢）
-  const memberships = meQuery.data?.memberships ?? [];
-  // 重複店（掛け持ちで同店が複数 membership になる可能性）を除いた店舗一覧
+  // 店舗セレクタの選択肢は receiptStores（在籍中＋脱退済み）を使う。
+  // QR・所属一覧は active な memberships を使うが、受取履歴のフィルタは脱退店も含めることで、
+  // 脱退した店の過去の収益も引き続き確認できるようにする（仕様）。
+  // receiptStores は API 側で distinct 済みだが、念のためフロントでも重複店を除く。
+  const receiptStores = meQuery.data?.receiptStores ?? [];
   const stores = useMemo(() => {
     const seen = new Set<string>();
     const list: { storeId: string; storeName: string }[] = [];
-    for (const m of memberships) {
-      if (!seen.has(m.storeId)) {
-        seen.add(m.storeId);
-        list.push({ storeId: m.storeId, storeName: m.storeName });
+    for (const s of receiptStores) {
+      if (!seen.has(s.storeId)) {
+        seen.add(s.storeId);
+        list.push({ storeId: s.storeId, storeName: s.storeName });
       }
     }
     return list;
-  }, [memberships]);
+  }, [receiptStores]);
 
   // 期間プリセット → from/to（ISO）を計算し、店舗とまとめてフィルタにする。
   // フィルタ未指定（すべて）は undefined にして API クエリに載せない。
@@ -249,8 +251,8 @@ export function StaffTipsHistoryPage() {
 }
 
 /**
- * 受取履歴の1行（日時・メッセージ・金額・着金状態）。
- * 金額は本人のみ閲覧可（この画面でのみ表示する）。
+ * 受取履歴の1行（日時・メッセージ・金額）。
+ * 金額は本人のみ閲覧可（この画面でのみ表示する）。着金状態は行に出さない（合計で見せる）。
  */
 function TipHistoryRow({ item }: { item: StaffTipItem }) {
   const { t } = useTranslation();
@@ -286,50 +288,11 @@ function TipHistoryRow({ item }: { item: StaffTipItem }) {
           <div className="mt-1 text-token-sm text-muted">{t("staff.tipsNoMessage")}</div>
         )}
       </div>
-      {/* 金額（本人のみ）と着金状態 */}
-      <div className="flex flex-none flex-col items-end">
+      {/* 金額（本人のみ）。着金状態は合計（ホーム残高・送金画面）で見せるため行には出さない */}
+      <div className="flex flex-none items-start">
         <div className="text-token-lg font-bold text-ink">¥{item.amount.toLocaleString()}</div>
-        <SettlementBadge status={item.settlementStatus} />
       </div>
     </div>
-  );
-}
-
-/**
- * 着金状態（保留 / 着金可能 / 着金済）のバッジ。
- */
-function SettlementBadge({ status }: { status: SettlementStatus }) {
-  const { t } = useTranslation();
-  const map: Record<SettlementStatus, { label: string; className: string }> = {
-    held: {
-      label: t("staff.tipsSettlementHeld"),
-      className: "bg-rose-soft text-rose",
-    },
-    payable: {
-      label: t("staff.tipsSettlementPayable"),
-      className: "bg-rose-soft text-rose",
-    },
-    paid: {
-      label: t("staff.tipsSettlementPaid"),
-      className: "bg-surface-subtle text-ink-sub",
-    },
-    // (f) 返金・異議は終端状態。残高・送金候補から除外済みであることをバッジで示す
-    refunded: {
-      label: t("staff.tipsSettlementRefunded"),
-      className: "bg-surface-subtle text-muted",
-    },
-    disputed: {
-      label: t("staff.tipsSettlementDisputed"),
-      className: "bg-surface-subtle text-muted",
-    },
-  };
-  const { label, className } = map[status];
-  return (
-    <span
-      className={`mt-2 inline-block rounded-pill px-2.5 py-0.5 text-token-xs font-semibold ${className}`}
-    >
-      {label}
-    </span>
   );
 }
 

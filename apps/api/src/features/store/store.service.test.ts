@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   getMyStore,
   createStore,
@@ -8,10 +8,15 @@ import {
   listStoreInvites,
   revokeStoreInvite,
   listStoreStaff,
+  getStoreStaffDetail,
+  removeStoreStaff,
   getStoreGratitude,
+  uploadStoreLogo,
   StoreForbiddenError,
   StoreAlreadyExistsError,
   StoreInviteNotFoundError,
+  StoreStaffNotFoundError,
+  InvalidImageError,
 } from "./store.service.js";
 import { buildInviteUrl } from "./store.model.js";
 import type {
@@ -35,14 +40,32 @@ import type {
 
 const buildUrl = (code: string) => buildInviteUrl("http://localhost:5173", code);
 
+// 受取日時が期間（from 含む・to 排他）に入るか判定するテスト用ヘルパ（実 DB の SQL と同じ規則）
+function inPeriod(receivedAt: string, period?: { from?: string; to?: string }): boolean {
+  if (!period) return true;
+  const t = new Date(receivedAt).getTime();
+  if (period.from && t < new Date(period.from).getTime()) return false;
+  if (period.to && t >= new Date(period.to).getTime()) return false;
+  return true;
+}
+
 // テスト用のモック Repository（実 DB を使わず Service のロジックを検証する）
 function createMockRepo() {
   const stores = new Map<string, StoreRow>();
   const invitesByStore = new Map<string, StoreInviteRow[]>();
   const staffByStore = new Map<string, StoreStaffRow[]>();
-  const voicesByStore = new Map<string, GratitudeVoiceRow[]>();
+  // 在籍解除（論理削除）済みの (storeId, staffId) 集合（left_at 相当）。在籍中＝この集合に無い
+  const removedStaff = new Set<string>();
+  const removedKey = (storeId: string, staffId: string) => `${storeId}::${staffId}`;
+  // 声に staffId を持たせて、staffId 絞りの検証ができるようにする（実 DB の t.staff_id = ... と同じ振る舞い）
+  const voicesByStore = new Map<string, (GratitudeVoiceRow & { staffId?: string })[]>();
   const timesByStore = new Map<string, GratitudeTimeRow[]>();
   const perStaffByStore = new Map<string, GratitudePerStaffRow[]>();
+  // スタッフ別の受取日時明細（期間でスタッフ別件数を数え直す検証に使う）
+  const perStaffTimesByStore = new Map<
+    string,
+    { staffId: string; staffName: string; times: string[] }[]
+  >();
 
   const repo: StoreRepository = {
     async findStoreById(storeId) {
@@ -75,6 +98,11 @@ function createMockRepo() {
       stores.set(storeId, updated);
       return updated;
     },
+    async setLogoUrl(storeId, logoUrl) {
+      const s = stores.get(storeId);
+      if (!s) return;
+      stores.set(storeId, { ...s, logoUrl });
+    },
     async createInvite(storeId, code, label) {
       const invite: StoreInviteRow = {
         code,
@@ -105,20 +133,73 @@ function createMockRepo() {
       return 1;
     },
     async listStaff(storeId) {
-      return [...(staffByStore.get(storeId) ?? [])];
+      // 在籍中（在籍解除集合に無い）のみ返す
+      return (staffByStore.get(storeId) ?? []).filter(
+        (s) => !removedStaff.has(removedKey(storeId, s.id)),
+      );
     },
-    async listGratitudeVoices(storeId, limit) {
-      return (voicesByStore.get(storeId) ?? []).slice(0, limit);
+    // 在籍中スタッフ1人の詳細（参加日付き・金額なし）。脱退済み・他店・存在しないは null
+    async findStaffDetail(storeId, staffId) {
+      const s = (staffByStore.get(storeId) ?? []).find((x) => x.id === staffId);
+      if (!s || removedStaff.has(removedKey(storeId, staffId))) return null;
+      return {
+        id: s.id,
+        displayName: s.displayName,
+        headline: s.headline,
+        avatarUrl: s.avatarUrl,
+        joinedAt: "2026-06-23T00:00:00Z",
+      };
+    },
+    // 自店のスタッフを在籍解除する（論理削除）。在籍中のみ対象。解除できた件数を返す
+    async removeStaff(storeId, staffId) {
+      const s = (staffByStore.get(storeId) ?? []).find((x) => x.id === staffId);
+      if (!s || removedStaff.has(removedKey(storeId, staffId))) return 0;
+      removedStaff.add(removedKey(storeId, staffId));
+      return 1;
+    },
+    async listGratitudeVoices(storeId, limit, period, staffId) {
+      // 期間（from 含む・to 排他）が来たら受取日時で絞る。実 DB の SQL と同じ振る舞いをモックでも再現する
+      const all = voicesByStore.get(storeId) ?? [];
+      const filtered = all.filter((v) => {
+        if (!inPeriod(v.receivedAt, period)) return false;
+        // staffId 指定時はそのスタッフ宛の声だけに絞る（実 DB の AND t.staff_id = ... と同じ）
+        if (staffId && v.staffId !== staffId) return false;
+        return true;
+      });
+      // staffId などを応答に漏らさないよう、契約どおりの GratitudeVoiceRow に整形して返す
+      return filtered
+        .slice(0, limit)
+        .map(({ id, message, receivedAt, staffName }) => ({ id, message, receivedAt, staffName }));
     },
     async listGratitudeTimes(storeId) {
+      // 件数集計用は全期間を返す（期間絞りと今週判定は Model 側で行う）
       return [...(timesByStore.get(storeId) ?? [])];
     },
-    async listGratitudePerStaff(storeId) {
+    async listGratitudePerStaff(storeId, period) {
+      // 期間が来たら、件数を期間で数え直す（perStaffTimesByStore に明細があればそれを使う）
+      const detail = perStaffTimesByStore.get(storeId);
+      if (detail && period && (period.from || period.to)) {
+        return detail.map((d) => ({
+          staffId: d.staffId,
+          staffName: d.staffName,
+          avatarUrl: null,
+          count: d.times.filter((tm) => inPeriod(tm, period)).length,
+        }));
+      }
       return [...(perStaffByStore.get(storeId) ?? [])];
     },
   };
 
-  return { repo, stores, invitesByStore, staffByStore, voicesByStore, timesByStore, perStaffByStore };
+  return {
+    repo,
+    stores,
+    invitesByStore,
+    staffByStore,
+    voicesByStore,
+    timesByStore,
+    perStaffByStore,
+    perStaffTimesByStore,
+  };
 }
 
 // 所有者付きの店を1件用意するヘルパ（既に作成済みの店をシードする）
@@ -319,7 +400,75 @@ describe("store.service", () => {
     expect(json).not.toMatch(/amount|customer_total|platform_fee|balance|payout/i);
   });
 
-  it("getStoreGratitude: 件数・お客さまの声・スタッフ別件数を返す", async () => {
+  it("getStoreStaffDetail: 在籍中スタッフの基本情報（参加日付き・金額なし）を返す", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: "ホール", avatarUrl: null },
+    ]);
+    const detail = await getStoreStaffDetail(m.repo, "owner-1", "store-1", "s1");
+    expect(detail.id).toBe("s1");
+    expect(detail.displayName).toBe("山田 さくら");
+    expect(detail.joinedAt).toBeTruthy();
+    // 金額に関わるキーが含まれない（店はお金に触れない）
+    expect(JSON.stringify(detail)).not.toMatch(/amount|customer_total|platform_fee|balance|payout/i);
+  });
+
+  it("getStoreStaffDetail: 他店のオーナーは取得できない（店スコープ・404 相当）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: null, avatarUrl: null },
+    ]);
+    await expect(
+      getStoreStaffDetail(m.repo, "intruder", "store-1", "s1"),
+    ).rejects.toBeInstanceOf(StoreForbiddenError);
+  });
+
+  it("removeStoreStaff: 在籍解除すると在籍中一覧・スタッフ詳細から消える（論理削除・お金は移動しない）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: "ホール", avatarUrl: null },
+      { id: "s2", displayName: "田中 健一", headline: "バリスタ", avatarUrl: null },
+    ]);
+    // 在籍解除前は2人
+    expect((await listStoreStaff(m.repo, "owner-1", "store-1")).count).toBe(2);
+
+    // s1 を在籍解除する
+    await removeStoreStaff(m.repo, "owner-1", "store-1", "s1");
+
+    // 在籍中一覧から消える（1人になる）
+    const after = await listStoreStaff(m.repo, "owner-1", "store-1");
+    expect(after.count).toBe(1);
+    expect(after.items[0]!.id).toBe("s2");
+    // 在籍解除済みは詳細も 404 相当
+    await expect(
+      getStoreStaffDetail(m.repo, "owner-1", "store-1", "s1"),
+    ).rejects.toBeInstanceOf(StoreStaffNotFoundError);
+  });
+
+  it("removeStoreStaff: 他店のオーナーは在籍解除できない（店スコープ）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: null, avatarUrl: null },
+    ]);
+    await expect(
+      removeStoreStaff(m.repo, "intruder", "store-1", "s1"),
+    ).rejects.toBeInstanceOf(StoreForbiddenError);
+    // 在籍は健在
+    expect((await listStoreStaff(m.repo, "owner-1", "store-1")).count).toBe(1);
+  });
+
+  it("removeStoreStaff: 既に在籍解除済みのスタッフは 404（二重解除不可）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: null, avatarUrl: null },
+    ]);
+    await removeStoreStaff(m.repo, "owner-1", "store-1", "s1");
+    await expect(
+      removeStoreStaff(m.repo, "owner-1", "store-1", "s1"),
+    ).rejects.toBeInstanceOf(StoreStaffNotFoundError);
+  });
+
+  it("getStoreGratitude: 期間未指定なら全期間の件数・お客さまの声・スタッフ別件数を返す（店ホーム互換）", async () => {
     seedOwnedStore(m, "store-1", "owner-1");
     // 受取日時（件数集計用・金額なし）
     m.timesByStore.set("store-1", [
@@ -331,18 +480,137 @@ describe("store.service", () => {
       { id: "v1", message: "笑顔が素敵で癒されました！", receivedAt: "2026-06-23T01:00:00Z", staffName: "山田 さくら" },
     ]);
     m.perStaffByStore.set("store-1", [
-      { staffId: "s1", staffName: "山田 さくら", count: 2 },
-      { staffId: "s2", staffName: "田中 健一", count: 1 },
+      { staffId: "s1", staffName: "山田 さくら", avatarUrl: "https://example.test/avatar-s1.png", count: 2 },
+      { staffId: "s2", staffName: "田中 健一", avatarUrl: null, count: 1 },
     ]);
 
     const g = await getStoreGratitude(m.repo, "owner-1", "store-1", new Date("2026-06-23T03:00:00Z"));
+    // 期間未指定 → 全期間の3件、今週は直近7日の2件
     expect(g.totalCount).toBe(3);
-    expect(g.todayCount).toBe(1);
     expect(g.weekCount).toBe(2);
-    expect(g.monthCount).toBe(2);
     expect(g.voices[0]!.message).toBe("笑顔が素敵で癒されました！");
     expect(g.voices[0]!.staffName).toBe("山田 さくら");
     expect(g.perStaff.length).toBe(2);
+    // スタッフ別にアバターURL（公開URL）が乗る（金額は出さない）。無い場合は null。
+    expect(g.perStaff.find((p) => p.staffId === "s1")!.avatarUrl).toBe("https://example.test/avatar-s1.png");
+    expect(g.perStaff.find((p) => p.staffId === "s2")!.avatarUrl).toBeNull();
+    // today/month は廃止済み（応答に含まれない）
+    expect((g as Record<string, unknown>).todayCount).toBeUndefined();
+    expect((g as Record<string, unknown>).monthCount).toBeUndefined();
+  });
+
+  it("getStoreGratitude: 期間（from/to）指定で totalCount・voices・perStaff がその期間に絞られる。weekCount は常に今週", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    // 受取日時（全期間。Model が totalCount を期間で絞り、weekCount は常に今週）
+    m.timesByStore.set("store-1", [
+      { receivedAt: "2026-06-23T01:00:00Z" }, // 今週・今月
+      { receivedAt: "2026-06-10T03:00:00Z" }, // 今月（今週ではない）
+      { receivedAt: "2026-05-15T03:00:00Z" }, // 先月
+    ]);
+    // お客さまの声（期間で絞られることを確認する）
+    m.voicesByStore.set("store-1", [
+      { id: "v-jun-1", message: "6月の声A", receivedAt: "2026-06-23T01:00:00Z", staffName: "山田" },
+      { id: "v-jun-2", message: "6月の声B", receivedAt: "2026-06-10T03:00:00Z", staffName: "山田" },
+      { id: "v-may-1", message: "5月の声", receivedAt: "2026-05-15T03:00:00Z", staffName: "田中" },
+    ]);
+    // スタッフ別の受取日時明細（期間で件数を数え直す）
+    m.perStaffTimesByStore.set("store-1", [
+      { staffId: "s1", staffName: "山田", times: ["2026-06-23T01:00:00Z", "2026-06-10T03:00:00Z"] },
+      { staffId: "s2", staffName: "田中", times: ["2026-05-15T03:00:00Z"] },
+    ]);
+
+    const now = new Date("2026-06-23T03:00:00Z");
+
+    // 今月（6/1 〜 7/1 排他）
+    const jun = await getStoreGratitude(m.repo, "owner-1", "store-1", now, {
+      from: "2026-06-01T00:00:00Z",
+      to: "2026-07-01T00:00:00Z",
+    });
+    expect(jun.totalCount).toBe(2); // 6/23, 6/10
+    expect(jun.weekCount).toBe(1); // 常に今週（6/23 のみ）
+    expect(jun.voices.map((v) => v.id)).toEqual(["v-jun-1", "v-jun-2"]); // 5月の声は除外
+    expect(jun.perStaff.find((p) => p.staffId === "s1")!.count).toBe(2);
+    expect(jun.perStaff.find((p) => p.staffId === "s2")!.count).toBe(0);
+
+    // 先月（5/1 〜 6/1 排他）
+    const may = await getStoreGratitude(m.repo, "owner-1", "store-1", now, {
+      from: "2026-05-01T00:00:00Z",
+      to: "2026-06-01T00:00:00Z",
+    });
+    expect(may.totalCount).toBe(1); // 5/15
+    expect(may.weekCount).toBe(1); // 先月を選んでも今週は今週のまま
+    expect(may.voices.map((v) => v.id)).toEqual(["v-may-1"]);
+    expect(may.perStaff.find((p) => p.staffId === "s1")!.count).toBe(0);
+    expect(may.perStaff.find((p) => p.staffId === "s2")!.count).toBe(1);
+  });
+
+  it("getStoreGratitude: staffId 指定で voices がそのスタッフに絞られる。perStaff・totalCount・weekCount は不変", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    // 受取日時（件数集計用・全期間）
+    m.timesByStore.set("store-1", [
+      { receivedAt: "2026-06-23T01:00:00Z" },
+      { receivedAt: "2026-06-22T03:00:00Z" },
+      { receivedAt: "2026-06-21T03:00:00Z" },
+    ]);
+    // 声に staffId を持たせる（s1 が2件・s2 が1件）
+    m.voicesByStore.set("store-1", [
+      { id: "v-s1-a", message: "山田さんへA", receivedAt: "2026-06-23T01:00:00Z", staffName: "山田", staffId: "s1" },
+      { id: "v-s1-b", message: null, receivedAt: "2026-06-22T03:00:00Z", staffName: "山田", staffId: "s1" },
+      { id: "v-s2-a", message: "田中さんへ", receivedAt: "2026-06-21T03:00:00Z", staffName: "田中", staffId: "s2" },
+    ]);
+    // perStaff（全スタッフ集計・名簿順）。staffId 絞りでこれは変わってはいけない
+    m.perStaffByStore.set("store-1", [
+      { staffId: "s1", staffName: "山田", avatarUrl: null, count: 2 },
+      { staffId: "s2", staffName: "田中", avatarUrl: null, count: 1 },
+    ]);
+
+    const now = new Date("2026-06-23T03:00:00Z");
+
+    // staffId 指定なし（全スタッフ）→ voices は全件
+    const all = await getStoreGratitude(m.repo, "owner-1", "store-1", now);
+    expect(all.voices.map((v) => v.id)).toEqual(["v-s1-a", "v-s1-b", "v-s2-a"]);
+
+    // staffId = s1 → voices は s1 の2件だけ（メッセージなしも含む）
+    const onlyS1 = await getStoreGratitude(m.repo, "owner-1", "store-1", now, { staffId: "s1" });
+    expect(onlyS1.voices.map((v) => v.id)).toEqual(["v-s1-a", "v-s1-b"]);
+    // メッセージなしの声もそのまま残る（フロントで「メッセージなし」表示）
+    expect(onlyS1.voices.find((v) => v.id === "v-s1-b")!.message).toBeNull();
+    // perStaff・totalCount・weekCount は staffId に関わらず不変（全スタッフ集計のまま）
+    expect(onlyS1.perStaff).toEqual(all.perStaff);
+    expect(onlyS1.totalCount).toBe(all.totalCount);
+    expect(onlyS1.weekCount).toBe(all.weekCount);
+
+    // staffId = s2 → voices は s2 の1件だけ
+    const onlyS2 = await getStoreGratitude(m.repo, "owner-1", "store-1", now, { staffId: "s2" });
+    expect(onlyS2.voices.map((v) => v.id)).toEqual(["v-s2-a"]);
+    expect(onlyS2.perStaff).toEqual(all.perStaff);
+  });
+
+  it("getStoreGratitude: staffId と期間（from/to）を併用すると voices がスタッフ×期間で絞られる", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.timesByStore.set("store-1", [
+      { receivedAt: "2026-06-23T01:00:00Z" },
+      { receivedAt: "2026-05-15T03:00:00Z" },
+    ]);
+    m.voicesByStore.set("store-1", [
+      { id: "v-s1-jun", message: "6月の山田さんへ", receivedAt: "2026-06-23T01:00:00Z", staffName: "山田", staffId: "s1" },
+      { id: "v-s1-may", message: "5月の山田さんへ", receivedAt: "2026-05-15T03:00:00Z", staffName: "山田", staffId: "s1" },
+      { id: "v-s2-jun", message: "6月の田中さんへ", receivedAt: "2026-06-23T01:00:00Z", staffName: "田中", staffId: "s2" },
+    ]);
+    m.perStaffByStore.set("store-1", [
+      { staffId: "s1", staffName: "山田", avatarUrl: null, count: 2 },
+      { staffId: "s2", staffName: "田中", avatarUrl: null, count: 1 },
+    ]);
+
+    const now = new Date("2026-06-23T03:00:00Z");
+
+    // s1 ×今月（6/1〜7/1）→ 6月の s1 だけ（5月分・他スタッフは除外）
+    const s1Jun = await getStoreGratitude(m.repo, "owner-1", "store-1", now, {
+      from: "2026-06-01T00:00:00Z",
+      to: "2026-07-01T00:00:00Z",
+      staffId: "s1",
+    });
+    expect(s1Jun.voices.map((v) => v.id)).toEqual(["v-s1-jun"]);
   });
 
   it("金額非表示: 感謝の可視化の応答に金額・残高・着金キーが一切含まれない", async () => {
@@ -351,7 +619,7 @@ describe("store.service", () => {
     m.voicesByStore.set("store-1", [
       { id: "v1", message: "ありがとう", receivedAt: "2026-06-23T01:00:00Z", staffName: "山田" },
     ]);
-    m.perStaffByStore.set("store-1", [{ staffId: "s1", staffName: "山田", count: 1 }]);
+    m.perStaffByStore.set("store-1", [{ staffId: "s1", staffName: "山田", avatarUrl: null, count: 1 }]);
 
     const g = await getStoreGratitude(m.repo, "owner-1", "store-1", new Date("2026-06-23T03:00:00Z"));
     const json = JSON.stringify(g);
@@ -376,5 +644,65 @@ describe("store.service", () => {
     expect(updated.name).toBe("新しい店名");
     expect(updated.description).toBeNull();
     expect(updated.industry).toBe("カフェ・喫茶");
+  });
+});
+
+// 店ロゴ画像アップロード（POST /store/:storeId/logo）のユースケース検証。
+// オーナースコープ・検証（MIME・サイズ）・Storage 保存・logo_url 更新・公開URL返却を確認する。
+describe("store.service uploadStoreLogo", () => {
+  let m: ReturnType<typeof createMockRepo>;
+  const fakeUpload = vi.fn(async (params: { path: string; body: ArrayBuffer | Uint8Array; contentType: string }) => ({
+    path: params.path,
+    publicUrl: `https://example.test/storage/v1/object/public/media/${params.path}`,
+  }));
+
+  beforeEach(() => {
+    m = createMockRepo();
+    fakeUpload.mockClear();
+    seedOwnedStore(m, "store-1", "owner-1");
+  });
+
+  it("画像を保存し、公開URLで logo_url を更新して返す（logos/<storeId>/ 配下）", async () => {
+    const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47]).buffer;
+    const result = await uploadStoreLogo(m.repo, fakeUpload, "owner-1", "store-1", {
+      body: png,
+      contentType: "image/png",
+    });
+    expect(result.logoUrl).toMatch(/^https:\/\/example\.test\//);
+    const callPath = fakeUpload.mock.calls[0]![0].path;
+    expect(callPath).toMatch(/^logos\/store-1\/[0-9a-f-]+\.png$/);
+    // store の logo_url が公開URLに更新されている
+    const store = await getStore(m.repo, "owner-1", "store-1");
+    expect(store.logoUrl).toBe(result.logoUrl);
+  });
+
+  it("他店（別オーナー）のロゴは変えられない（StoreForbiddenError）。Storage は呼ばない", async () => {
+    await expect(
+      uploadStoreLogo(m.repo, fakeUpload, "intruder", "store-1", {
+        body: new Uint8Array([0x89]).buffer,
+        contentType: "image/png",
+      }),
+    ).rejects.toBeInstanceOf(StoreForbiddenError);
+    expect(fakeUpload).not.toHaveBeenCalled();
+  });
+
+  it("非画像 MIME は 400 相当（InvalidImageError）。Storage は呼ばない", async () => {
+    await expect(
+      uploadStoreLogo(m.repo, fakeUpload, "owner-1", "store-1", {
+        body: new Uint8Array([1, 2, 3]).buffer,
+        contentType: "text/plain",
+      }),
+    ).rejects.toBeInstanceOf(InvalidImageError);
+    expect(fakeUpload).not.toHaveBeenCalled();
+  });
+
+  it("サイズ上限（5MB）超過は 400 相当（InvalidImageError）", async () => {
+    await expect(
+      uploadStoreLogo(m.repo, fakeUpload, "owner-1", "store-1", {
+        body: new Uint8Array(5 * 1024 * 1024 + 1).buffer,
+        contentType: "image/png",
+      }),
+    ).rejects.toBeInstanceOf(InvalidImageError);
+    expect(fakeUpload).not.toHaveBeenCalled();
   });
 });

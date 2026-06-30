@@ -4,14 +4,17 @@ import {
   UpdateStoreProfileInputSchema,
   CreateStoreInputSchema,
   CreateStoreInviteInputSchema,
+  StoreGratitudeQuerySchema,
   type StoreProfile,
   type StoreInviteCreated,
   type StoreInvitesResponse,
   type StoreStaffResponse,
+  type StoreStaffDetail,
   type StoreGratitude,
   type UpdateStoreProfileInput,
   type CreateStoreInput,
   type CreateStoreInviteInput,
+  type LogoUploadResult,
 } from "@arigato/shared";
 import type { MiddlewareHandler } from "hono";
 import type { AuthVariables } from "../../middleware/auth.js";
@@ -20,6 +23,8 @@ import {
   StoreForbiddenError,
   StoreAlreadyExistsError,
   StoreInviteNotFoundError,
+  StoreStaffNotFoundError,
+  InvalidImageError,
 } from "./store.service.js";
 
 /**
@@ -47,6 +52,13 @@ type StoreDeps = {
     storeId: string,
     input: UpdateStoreProfileInput,
   ) => Promise<StoreProfile>;
+  // 店ロゴ画像をアップロードして logo_url を更新する（オーナーのみ）。
+  // 画像本体（ArrayBuffer）と MIME を受け取り、公開URLを返す。検証違反は例外（400）。
+  uploadStoreLogo: (
+    authUserId: string,
+    storeId: string,
+    file: { body: ArrayBuffer; contentType: string },
+  ) => Promise<LogoUploadResult>;
   // スタッフ招待の発行（方式A・店スコープ）。input.label は誰宛かの任意メモ
   createStoreInvite: (
     authUserId: string,
@@ -59,8 +71,22 @@ type StoreDeps = {
   revokeStoreInvite: (authUserId: string, storeId: string, code: string) => Promise<void>;
   // 所属スタッフ一覧（在籍管理・店スコープ）
   listStoreStaff: (authUserId: string, storeId: string) => Promise<StoreStaffResponse>;
-  // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）
-  getStoreGratitude: (authUserId: string, storeId: string) => Promise<StoreGratitude>;
+  // 在籍中スタッフ1人の詳細（基本情報・金額なし・店スコープ）
+  getStoreStaffDetail: (
+    authUserId: string,
+    storeId: string,
+    staffId: string,
+  ) => Promise<StoreStaffDetail>;
+  // 自店のスタッフを在籍解除する（論理削除・店スコープ）
+  removeStoreStaff: (authUserId: string, storeId: string, staffId: string) => Promise<void>;
+  // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）。
+  // period（from/to・任意）でその期間に絞る（未指定は全期間＝店ホーム互換）。
+  // staffId（任意）指定時は voices をその店員さんに絞る（集計値 totalCount/weekCount/perStaff は不変）。
+  getStoreGratitude: (
+    authUserId: string,
+    storeId: string,
+    period: { from?: string; to?: string; staffId?: string },
+  ) => Promise<StoreGratitude>;
 };
 
 // 店スコープのアクセス制御エラーを HTTP ステータスに変換する共通ハンドラ。
@@ -130,6 +156,35 @@ export function createStoreRoute(deps: StoreDeps) {
         throw err;
       }
     })
+    // 店ロゴ画像のアップロード（multipart/form-data・画像1枚。オーナーのみ）。
+    // field 名 "file" の画像を受け取り、検証 → Storage 保存 → logo_url 更新 → { logoUrl } を返す。
+    // 検証違反（非画像・過大）・ファイル欠落は 400、他店アクセス・店なしは 404。
+    .post("/:storeId/logo", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      // multipart を取得する（file フィールドに画像本体が載る）
+      const body = await c.req.parseBody();
+      const file = body["file"];
+      if (!(file instanceof File)) {
+        return c.json({ error: "invalid_image" }, 400);
+      }
+      try {
+        const result = await deps.uploadStoreLogo(authUser.id, storeId, {
+          body: await file.arrayBuffer(),
+          contentType: file.type,
+        });
+        return c.json(result);
+      } catch (err) {
+        // 検証違反は 400
+        if (err instanceof InvalidImageError) {
+          return c.json({ error: "invalid_image" }, 400);
+        }
+        // 他店アクセス・店なしは 404（情報秘匿）
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
     // スタッフ招待の発行（方式A・店スコープ）。body の任意 label（誰宛かのメモ）を受ける
     .post("/:storeId/invites", zValidator("json", CreateStoreInviteInputSchema), async (c) => {
       const authUser = c.get("authUser");
@@ -188,12 +243,51 @@ export function createStoreRoute(deps: StoreDeps) {
         throw err;
       }
     })
-    // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）
-    .get("/:storeId/gratitude", async (c) => {
+    // 在籍中スタッフ1人の詳細（基本情報・金額なし・店スコープ）。他店・脱退済み・存在しないは 404
+    .get("/:storeId/staff/:staffId", async (c) => {
       const authUser = c.get("authUser");
       const storeId = c.req.param("storeId");
+      const staffId = c.req.param("staffId");
       try {
-        const gratitude = await deps.getStoreGratitude(authUser.id, storeId);
+        const detail = await deps.getStoreStaffDetail(authUser.id, storeId, staffId);
+        return c.json(detail);
+      } catch (err) {
+        // 在籍中のスタッフが見つからない（他店・脱退済み・存在しない）は 404
+        if (err instanceof StoreStaffNotFoundError) {
+          return c.json({ error: "store_staff_not_found" }, 404);
+        }
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // 自店のスタッフを在籍解除する（論理削除・店スコープ）。在籍中のみ操作可。お金は移動しない。
+    .post("/:storeId/staff/:staffId/remove", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      const staffId = c.req.param("staffId");
+      try {
+        await deps.removeStoreStaff(authUser.id, storeId, staffId);
+        return c.json({ ok: true });
+      } catch (err) {
+        // 対象スタッフが見つからない（他店・既に脱退済み・存在しない）は 404
+        if (err instanceof StoreStaffNotFoundError) {
+          return c.json({ error: "store_staff_not_found" }, 404);
+        }
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // 感謝の可視化（件数・お客さまの声・スタッフ別件数。金額なし・店スコープ）。
+    // 任意クエリ from/to（ISO）で期間を絞り、任意 staffId（uuid）で voices を絞る。
+    // 不正値は安全側（フィルタ無し）に倒す（.catch(undefined)）。
+    .get("/:storeId/gratitude", zValidator("query", StoreGratitudeQuerySchema), async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      const { from, to, staffId } = c.req.valid("query");
+      try {
+        const gratitude = await deps.getStoreGratitude(authUser.id, storeId, { from, to, staffId });
         return c.json(gratitude);
       } catch (err) {
         const mapped = handleStoreScopeError(err);

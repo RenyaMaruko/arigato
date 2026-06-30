@@ -26,6 +26,9 @@ export type StaffDisplayRow = {
   storeName: string;
   // Direct charge の課金先（人の Connected Account）。未連携は null
   stripeAccountId: string | null;
+  // この所属が脱退済み（在籍解除済み）か。true なら新規投げ銭を受け付けない（再参加で再開）。
+  // left_at IS NULL → false（在籍中・受付中）、値あり → true（脱退中・受付停止）。
+  left: boolean;
 };
 
 // tip を保存する際に Repository が受け取る値（全カラムを明示）
@@ -148,7 +151,8 @@ export function createTipRepository(): TipRepository {
           s.avatar_url        AS "avatarUrl",
           s.stripe_account_id AS "stripeAccountId",
           st.id               AS "storeId",
-          st.name             AS "storeName"
+          st.name             AS "storeName",
+          (ss.left_at IS NOT NULL) AS "left"
         FROM staff_store ss
         JOIN staff s ON s.id = ss.staff_id
         JOIN store st ON st.id = ss.store_id

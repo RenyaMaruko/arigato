@@ -41,8 +41,10 @@ export const JoinStoreInputSchema = z.object({
 export type JoinStoreInput = z.infer<typeof JoinStoreInputSchema>;
 
 // 参加（join）の結果区分。
-// joined: 新たに所属が追加された（参加完了画面へ）/ already_member: 既に同店所属（案内へ）
-export const JoinResultStatusSchema = z.enum(["joined", "already_member"]);
+// joined: 新たに所属が追加された（参加完了画面へ）
+// rejoined: 脱退済みの所属を再有効化した（同じ membershipId＝同じ QR が復活・参加完了画面へ）
+// already_member: 既に在籍中（案内へ）
+export const JoinResultStatusSchema = z.enum(["joined", "rejoined", "already_member"]);
 export type JoinResultStatus = z.infer<typeof JoinResultStatusSchema>;
 
 /**
@@ -81,16 +83,33 @@ export const StaffMembershipSchema = z.object({
   membershipId: z.string().uuid(),
   storeId: z.string().uuid(),
   storeName: z.string(),
+  // 店のロゴ画像URL（未設定は null。所属店舗一覧・ホームの店カードで表示し、無ければプレースホルダ）
+  logoUrl: z.string().nullable(),
   // この所属（人×店）の QR が指す固定 URL（/tip/:membershipId）。一度発行したら不変
   tipUrl: z.string(),
 });
 export type StaffMembership = z.infer<typeof StaffMembershipSchema>;
 
 /**
+ * 受取履歴の店舗フィルタ用の店1件分（在籍中＋脱退済みの両方を含む）。
+ * その店員さんの tip がある店の distinct {storeId, storeName}。
+ * QR・所属一覧は active な memberships を使うが、受取履歴のフィルタはこちら（脱退店も含む）を使う
+ * （脱退した店の過去の収益も引き続き確認できるようにするため）。
+ */
+export const StaffReceiptStoreSchema = z.object({
+  storeId: z.string().uuid(),
+  storeName: z.string(),
+});
+export type StaffReceiptStore = z.infer<typeof StaffReceiptStoreSchema>;
+
+/**
  * GET /staff/me の応答。
  * 自分のプロフィール（人ごと1つ）・identity_status・所属店一覧（各 membership と店ごとQR用URL）を返す。
  * 掛け持ち（複数店所属）に対応するため、所属は配列で返す。
  * 金額・残高は含めない（本人スコープの集計は別経路）。
+ *
+ * memberships は active（在籍中＝left_at IS NULL）のみ（QR・所属一覧・ホームの店カード用）。
+ * receiptStores はその店員さんの tip がある店（在籍中＋脱退済み）で、受取履歴の店舗フィルタ用。
  */
 export const StaffMeSchema = z.object({
   id: z.string().uuid(),
@@ -98,8 +117,10 @@ export const StaffMeSchema = z.object({
   headline: z.string().nullable(),
   avatarUrl: z.string().nullable(),
   identityStatus: IdentityStatusSchema,
-  // 所属店一覧（複数可）。各所属に店ごとの QR用URL を含む。在籍が古い順（中立）
+  // 所属店一覧（active のみ・複数可）。各所属に店ごとの QR用URL を含む。在籍が古い順（中立）
   memberships: z.array(StaffMembershipSchema),
+  // 受取履歴の店舗フィルタの選択肢（在籍中＋脱退済み）。脱退店の過去収益も見られるようにする
+  receiptStores: z.array(StaffReceiptStoreSchema),
 });
 export type StaffMe = z.infer<typeof StaffMeSchema>;
 
@@ -248,3 +269,16 @@ export const ConnectOnboardResponseSchema = z.object({
   onboardingUrl: z.string().url(),
 });
 export type ConnectOnboardResponse = z.infer<typeof ConnectOnboardResponseSchema>;
+
+/**
+ * POST /staff/me/connect/account-session の応答。
+ * 埋め込み型オンボーディング（Connect Embedded Components）の初期化に使う client_secret を返す。
+ * フロントは loadConnectAndInitialize({ fetchClientSecret }) でこの値を使い、アプリ内に
+ * Stripe の本人確認 UI（ConnectAccountOnboarding）を埋め込む（Stripe ドメインへ全画面遷移しない）。
+ * 完了の判定はこの session の戻りではなく account.updated Webhook を正とする。
+ */
+export const ConnectAccountSessionResponseSchema = z.object({
+  // Account Session の client_secret（短命・秘匿。埋め込み UI 初期化にのみ使う）
+  clientSecret: z.string().min(1),
+});
+export type ConnectAccountSessionResponse = z.infer<typeof ConnectAccountSessionResponseSchema>;

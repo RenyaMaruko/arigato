@@ -29,11 +29,14 @@ import {
   getStaffMe,
   createStaffProfile,
   joinStore,
+  leaveStoreMembership,
   updateStaffProfile,
+  uploadStaffAvatar,
   getStaffTips,
   getStaffBalance,
   getStaffTaxReport,
   startConnectOnboarding,
+  createConnectAccountSession,
   applyConnectAccountUpdate,
   createStaffPayout,
   getStaffPayouts,
@@ -53,7 +56,10 @@ import {
   listStoreInvites,
   revokeStoreInvite,
   listStoreStaff,
+  getStoreStaffDetail,
+  removeStoreStaff,
   getStoreGratitude,
+  uploadStoreLogo,
 } from "./features/store/store.service.js";
 import { createStoreRepository } from "./features/store/store.repository.js";
 import { createInMemoryStoreRepository } from "./features/store/store.repository.memory.js";
@@ -67,6 +73,7 @@ import { createAuthMiddleware } from "./middleware/auth.js";
 import {
   createDirectChargePaymentIntent,
   createConnectOnboardingLink,
+  createAccountSession,
   createPayout,
   createConnectedAccount,
   retrieveConnectBalance,
@@ -76,6 +83,8 @@ import {
 import { verifyWebhookEvent } from "./infrastructure/stripe/stripe-webhook.js";
 // Supabase JWT の検証（JWKS / 非対称鍵）は infrastructure/auth に隔離する
 import { verifySupabaseJwt } from "./infrastructure/auth/supabase-jwt.js";
+// Supabase Storage（公開バケットへの画像アップロード）も infrastructure に隔離する
+import { uploadPublicImage } from "./infrastructure/supabase/supabase-storage.js";
 
 /**
  * コンポジションルート。
@@ -146,11 +155,18 @@ export function createApp() {
     // feature は Stripe SDK を直接知らない。infrastructure の createConnectedAccount を注入する。
     createStaffProfile: (authUserId, input) =>
       createStaffProfile(staffRepo, buildStaffTipUrl, createConnectedAccount, authUserId, input),
-    // 招待コードで所属（staff_store）を追加する（参加の確定点。新規/既存問わず）
+    // 招待コードで所属（staff_store）を追加する（参加の確定点。新規/既存/再参加を問わず）
     joinStore: (authUserId, inviteCode) =>
       joinStore(staffRepo, buildStaffTipUrl, authUserId, inviteCode),
+    // 自分でその店を脱退する（論理削除・本人スコープ）。脱退後の最新 StaffMe を返す
+    leaveStoreMembership: (authUserId, membershipId) =>
+      leaveStoreMembership(staffRepo, buildStaffTipUrl, authUserId, membershipId),
     updateStaffProfile: (authUserId, input) =>
       updateStaffProfile(staffRepo, buildStaffTipUrl, authUserId, input),
+    // アバター画像のアップロード。Supabase Storage（infrastructure）へ保存し avatar_url を更新する。
+    // feature は Supabase を直接知らず、infrastructure の uploadPublicImage を注入する。
+    uploadStaffAvatar: (authUserId, file) =>
+      uploadStaffAvatar(staffRepo, uploadPublicImage, authUserId, file),
     // 受取履歴・保留残高・申告 CSV は本人スコープのユースケースを注入する
     // 受取履歴は20件ずつのキーセットページング。cursor/limit を Service へ渡す（合計は全件の別集計）
     getStaffTips: (authUserId, query) => getStaffTips(staffRepo, authUserId, query),
@@ -165,6 +181,17 @@ export function createApp() {
         staffRepo,
         createConnectOnboardingLink,
         buildOnboardingUrls,
+        authUserId,
+      ),
+    // 埋め込み型オンボーディング（Connect Embedded Components）用の Account Session 発行。
+    // Connected Account を保証（無ければ自動作成）→ infrastructure の createAccountSession で
+    // account_onboarding を有効にした session を発行し client_secret を返す。
+    // feature は Stripe SDK を直接知らない（infrastructure の関数を注入する）。
+    createConnectAccountSession: (authUserId) =>
+      createConnectAccountSession(
+        staffRepo,
+        createConnectedAccount,
+        createAccountSession,
         authUserId,
       ),
     // 送金（振込申請）。Stripe payout（infrastructure）を注入。送金可能額・送金額は Stripe の実 available を正とし、
@@ -189,6 +216,9 @@ export function createApp() {
     getStore: (authUserId, storeId) => getStore(storeRepo, authUserId, storeId),
     updateStore: (authUserId, storeId, input) =>
       updateStore(storeRepo, authUserId, storeId, input),
+    // 店ロゴ画像のアップロード。Supabase Storage（infrastructure）へ保存し logo_url を更新する。
+    uploadStoreLogo: (authUserId, storeId, file) =>
+      uploadStoreLogo(storeRepo, uploadPublicImage, authUserId, storeId, file),
     createStoreInvite: (authUserId, storeId, input) =>
       createStoreInvite(storeRepo, buildStoreInviteUrl, authUserId, storeId, input),
     listStoreInvites: (authUserId, storeId) =>
@@ -196,9 +226,15 @@ export function createApp() {
     revokeStoreInvite: (authUserId, storeId, code) =>
       revokeStoreInvite(storeRepo, authUserId, storeId, code),
     listStoreStaff: (authUserId, storeId) => listStoreStaff(storeRepo, authUserId, storeId),
-    // 感謝の件数集計の基準時刻はサーバーの現在時刻（now）を渡す（Model で JST 判定）
-    getStoreGratitude: (authUserId, storeId) =>
-      getStoreGratitude(storeRepo, authUserId, storeId, new Date()),
+    // 在籍中スタッフ1人の詳細（基本情報・金額なし・店スコープ）
+    getStoreStaffDetail: (authUserId, storeId, staffId) =>
+      getStoreStaffDetail(storeRepo, authUserId, storeId, staffId),
+    // 自店のスタッフを在籍解除する（論理削除・店スコープ）。お金は移動しない
+    removeStoreStaff: (authUserId, storeId, staffId) =>
+      removeStoreStaff(storeRepo, authUserId, storeId, staffId),
+    // 感謝の集計の基準時刻はサーバーの現在時刻（now）を渡す。period（from/to）は記録画面の期間セレクタ由来
+    getStoreGratitude: (authUserId, storeId, period) =>
+      getStoreGratitude(storeRepo, authUserId, storeId, new Date(), period),
   });
 
   // Webhook ルートを配線（署名検証＝infrastructure、処理＝webhook Service + tip 更新）。

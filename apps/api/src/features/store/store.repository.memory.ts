@@ -19,8 +19,8 @@ export function createInMemoryStoreRepository(): StoreRepository {
   const stores = new Map<string, StoreRow>();
   // 招待の簡易ストア（store_id ごとに保持）
   const invitesByStore = new Map<string, StoreInviteRow[]>();
-  // スタッフの簡易ストア（store_id ごとに保持）
-  const staffByStore = new Map<string, StoreStaffRow[]>();
+  // スタッフの簡易ストア（store_id ごとに保持）。leftAt は論理削除（在籍解除）の時刻（null＝在籍中）。
+  const staffByStore = new Map<string, (StoreStaffRow & { joinedAt: string; leftAt: number | null })[]>();
 
   // 開発用シード店（任意）。owner 未紐付け・導入承認未同意の移行相当の店を1件用意する
   const seedStoreId = process.env.SEED_STORE_ID;
@@ -72,10 +72,18 @@ export function createInMemoryStoreRepository(): StoreRepository {
         name: params.name,
         description: params.description,
         industry: params.industry,
-        logoUrl: params.logoUrl,
+        // ロゴは別経路で更新するためテキスト編集では消さない（値が来た時だけ差し替え・実 DB の COALESCE と整合）
+        logoUrl: params.logoUrl ?? store.logoUrl,
       };
       stores.set(storeId, updated);
       return updated;
+    },
+
+    // 自店のロゴ画像URL（公開URL）を更新する（画像アップロード後）
+    async setLogoUrl(storeId, logoUrl) {
+      const store = stores.get(storeId);
+      if (!store) return;
+      stores.set(storeId, { ...store, logoUrl });
     },
 
     async createInvite(storeId, code, label) {
@@ -116,8 +124,40 @@ export function createInMemoryStoreRepository(): StoreRepository {
     },
 
     async listStaff(storeId) {
-      // 名簿順（追加順）で保持している
-      return [...(staffByStore.get(storeId) ?? [])];
+      // 名簿順（追加順）で在籍中（leftAt === null）のみ返す
+      return (staffByStore.get(storeId) ?? [])
+        .filter((s) => s.leftAt === null)
+        .map((s) => ({
+          id: s.id,
+          displayName: s.displayName,
+          headline: s.headline,
+          avatarUrl: s.avatarUrl,
+        }));
+    },
+
+    // 在籍中スタッフ1人の詳細を返す（脱退済み・他店・存在しないは null）
+    async findStaffDetail(storeId, staffId) {
+      const s = (staffByStore.get(storeId) ?? []).find(
+        (x) => x.id === staffId && x.leftAt === null,
+      );
+      if (!s) return null;
+      return {
+        id: s.id,
+        displayName: s.displayName,
+        headline: s.headline,
+        avatarUrl: s.avatarUrl,
+        joinedAt: s.joinedAt,
+      };
+    },
+
+    // 自店のスタッフを在籍解除する（論理削除）。在籍中のみ対象。解除できた件数を返す
+    async removeStaff(storeId, staffId) {
+      const s = (staffByStore.get(storeId) ?? []).find(
+        (x) => x.id === staffId && x.leftAt === null,
+      );
+      if (!s) return 0;
+      s.leftAt = Date.now();
+      return 1;
     },
 
     // インメモリでは投げ銭データを持たないため、感謝は空集合（実運用は実 DB を使う）
@@ -128,12 +168,15 @@ export function createInMemoryStoreRepository(): StoreRepository {
       return [];
     },
     async listGratitudePerStaff(storeId) {
-      // スタッフはいるが投げ銭は無いので件数 0 を名簿順で返す
-      return (staffByStore.get(storeId) ?? []).map((s) => ({
-        staffId: s.id,
-        staffName: s.displayName,
-        count: 0,
-      }));
+      // 在籍中スタッフはいるが投げ銭は無いので件数 0 を名簿順で返す（脱退者は外す）
+      return (staffByStore.get(storeId) ?? [])
+        .filter((s) => s.leftAt === null)
+        .map((s) => ({
+          staffId: s.id,
+          staffName: s.displayName,
+          avatarUrl: s.avatarUrl,
+          count: 0,
+        }));
     },
   };
 }

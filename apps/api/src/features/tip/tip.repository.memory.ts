@@ -27,6 +27,8 @@ const sampleStaff: StaffDisplayRow = {
   storeName: "カフェ Arigato",
   // DB 無し環境では Connected Account を持たない（Direct charge は DB 接続時に検証する）
   stripeAccountId: null,
+  // サンプルは在籍中（受付中）。脱退中の受付停止は実 DB 接続時に検証する
+  left: false,
 };
 
 /**

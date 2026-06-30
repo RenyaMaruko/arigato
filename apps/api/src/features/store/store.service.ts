@@ -1,14 +1,22 @@
+import { randomUUID } from "node:crypto";
 import type {
   StoreProfile,
   StoreInviteCreated,
   StoreInvitesResponse,
   StoreStaffResponse,
+  StoreStaffDetail,
   StoreGratitude,
   UpdateStoreProfileInput,
   CreateStoreInput,
   CreateStoreInviteInput,
+  LogoUploadResult,
 } from "@arigato/shared";
-import { generateInviteCode, summarizeGratitudeCounts } from "./store.model.js";
+import { ImageUploadMetaSchema, IMAGE_MIME_TO_EXT } from "@arigato/shared";
+import {
+  generateInviteCode,
+  summarizeGratitudeCounts,
+  buildLogoStoragePath,
+} from "./store.model.js";
 import type { StoreRepository, StoreRow } from "./store.repository.js";
 
 /**
@@ -176,6 +184,67 @@ export async function updateStore(
   return toStoreProfile(updated);
 }
 
+// 画像を公開バケットへアップロードする infrastructure 関数の型（コンポジションルートで注入）。
+// path（保存先）・本体・MIME を受け取り、公開URLを返す。feature は Supabase を直接知らない。
+export type UploadPublicImage = (params: {
+  path: string;
+  body: ArrayBuffer | Uint8Array;
+  contentType: string;
+}) => Promise<{ path: string; publicUrl: string }>;
+
+// 画像アップロードの検証違反（MIME が画像でない／サイズ上限超過）。Route で 400 に変換する。
+export class InvalidImageError extends Error {
+  constructor() {
+    super("invalid_image");
+    this.name = "InvalidImageError";
+  }
+}
+
+/**
+ * 店ロゴ画像をアップロードして自店の logo_url を更新する（POST /store/:storeId/logo・店スコープ）。
+ *
+ * 流れ:
+ *  1. 自店のオーナーであることを確認する（他店のロゴは変えられない）。
+ *  2. サーバ側で検証する（MIME が許可画像か・サイズ上限内か）。違反は InvalidImageError（400）。
+ *  3. Storage（公開バケット）へ logos/<storeId>/<uuid>.<ext> で保存し、公開URLを得る（infrastructure 経由）。
+ *  4. 自店の store.logo_url を公開URLへ更新する（生 SQL は Repository）。
+ *  5. { logoUrl } を返す。
+ */
+export async function uploadStoreLogo(
+  repo: StoreRepository,
+  uploadImage: UploadPublicImage,
+  authUserId: string,
+  storeId: string,
+  file: { body: ArrayBuffer; contentType: string },
+): Promise<LogoUploadResult> {
+  // 【1】自店のオーナー確認（他店は触れない）。違反は StoreForbiddenError → Route で 404。
+  await requireOwnedStore(repo, authUserId, storeId);
+
+  // 【2】サーバ側検証（MIME・サイズ）。違反は 400（InvalidImageError）。
+  const meta = ImageUploadMetaSchema.safeParse({
+    contentType: file.contentType,
+    sizeBytes: file.body.byteLength,
+  });
+  if (!meta.success) {
+    throw new InvalidImageError();
+  }
+
+  // 【3】公開バケットへ保存する（logos/<storeId>/<uuid>.<ext>）
+  const ext = IMAGE_MIME_TO_EXT[meta.data.contentType] ?? "bin";
+  const path = buildLogoStoragePath(storeId, randomUUID(), ext);
+  const { publicUrl } = await uploadImage({
+    path,
+    body: file.body,
+    contentType: meta.data.contentType,
+  });
+
+  // 【4】自店の logo_url を公開URLへ更新する
+  await repo.setLogoUrl(storeId, publicUrl);
+
+  // 【5】公開URLを返す
+  return { logoUrl: publicUrl };
+}
+
 // 招待リンク URL を組み立てる関数の型（フロントのベース URL から作る・コンポジションルートで注入）
 export type BuildInviteUrl = (code: string) => string;
 
@@ -288,11 +357,84 @@ export async function listStoreStaff(
   };
 }
 
+// スタッフ詳細・在籍解除で対象スタッフが見つからない（他店・脱退済み・存在しない）ときのエラー。
+// Route で 404 に変換する（在籍中のスタッフのみ詳細表示・在籍解除できる）。
+export class StoreStaffNotFoundError extends Error {
+  constructor() {
+    super("store_staff_not_found");
+    this.name = "StoreStaffNotFoundError";
+  }
+}
+
+/**
+ * 在籍中スタッフ1人の詳細を取得する（GET /store/:storeId/staff/:staffId）。店スコープ。
+ * 自店のオーナーであることを確認し、在籍中（left_at IS NULL）のスタッフの基本情報だけを返す。
+ * 金額・受取件数は一切返さない（店はお金に触れない）。他店・脱退済み・存在しないは StoreStaffNotFoundError。
+ */
+export async function getStoreStaffDetail(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+  staffId: string,
+): Promise<StoreStaffDetail> {
+  await requireOwnedStore(repo, authUserId, storeId);
+  const detail = await repo.findStaffDetail(storeId, staffId);
+  if (!detail) {
+    throw new StoreStaffNotFoundError();
+  }
+  return {
+    id: detail.id,
+    displayName: detail.displayName,
+    headline: detail.headline,
+    avatarUrl: detail.avatarUrl,
+    joinedAt: detail.joinedAt,
+  };
+}
+
+/**
+ * 自店のスタッフを在籍解除する（POST /store/:storeId/staff/:staffId/remove）。店スコープ。
+ * 論理削除（staff_store.left_at = now()）。物理削除しない（tip の履歴を保持＝お金は移動しない）。
+ *
+ * - 自店のオーナーであることを確認する（他店のスタッフは触れない＝スコープ検証）。
+ * - 在籍中（left_at IS NULL）の (staff,store) のみ対象。他店・脱退済み・存在しないは StoreStaffNotFoundError。
+ * - 解除後はその店員さんが在籍中一覧・記録のスタッフ別・選択肢から消えるが、その店員さん本人の
+ *   受取履歴・収益はそのまま残る（お金は移動しない＝受け取り済みは本人のもの）。
+ * - その店員さんが再参加（招待からの join）すると left_at が null に戻り、同じ QR で復活する。
+ */
+export async function removeStoreStaff(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+  staffId: string,
+): Promise<void> {
+  // 自店のオーナーであることを先に確認する（他店のスタッフは触れない）
+  await requireOwnedStore(repo, authUserId, storeId);
+  const removed = await repo.removeStaff(storeId, staffId);
+  if (removed === 0) {
+    throw new StoreStaffNotFoundError();
+  }
+}
+
+// 感謝の可視化の絞り込み（記録画面の期間セレクタから渡る from/to と、スタッフ別タブの staffId）。
+// from は含む（>=）・to は排他（<）。ISO 文字列。未指定は全期間＝店ホーム互換。
+// staffId（任意）は voices だけに効く。totalCount・weekCount・perStaff は staffId に関わらず全スタッフ集計のまま。
+export type GratitudePeriod = {
+  from?: string;
+  to?: string;
+  // 特定スタッフの絞り込み（任意・uuid）。voices をそのスタッフに絞る（集計値は変えない）
+  staffId?: string;
+};
+
 /**
  * 感謝の可視化を取得する（GET /store/:storeId/gratitude）。店スコープ。
  *
- * 店全体の「ありがとう」件数（累計・今日・今週・今月）と、お客さまの声フィード（メッセージ・いつ・誰宛か）、
- * スタッフ別の件数を返す。
+ * 期間（period.from/to）で絞った店全体の件数（totalCount）・お客さまの声フィード・スタッフ別件数と、
+ * 期間に関わらず常に「今週」の件数（weekCount・店ホームの今週バッジ用）を返す。
+ * period 未指定なら全期間を返す（店ホーム互換）。
+ *
+ * period.staffId（任意）を指定すると voices だけをその店員さんに絞る（スタッフ別タブの「特定スタッフ」用）。
+ * totalCount・weekCount・perStaff は staffId に関わらず常に全スタッフ集計のまま——
+ * ドロップダウンの選択肢（perStaff）と各スタッフの件数は staffId 絞りの影響を受けてはならない。
  *
  * 金額（amount / customer_total / platform_fee）・残高・着金は一切返さない（店はお金に触れない）。
  * 件数集計は Model の純粋関数に委ね、スタッフ別件数は名簿順（中立）のまま——件数で並べ替え・順位付けしない。
@@ -302,24 +444,36 @@ export async function getStoreGratitude(
   authUserId: string,
   storeId: string,
   now: Date,
+  period: GratitudePeriod = {},
 ): Promise<StoreGratitude> {
   await requireOwnedStore(repo, authUserId, storeId);
 
-  // 件数集計（受取日時だけを取得し、Model で累計/今日/今週/今月を算出する。金額は扱わない）
+  // 件数集計（受取日時の全件を取得し、Model で totalCount を期間に絞り weekCount は常に今週を算出。金額は扱わない）
   const times = await repo.listGratitudeTimes(storeId);
-  const counts = summarizeGratitudeCounts(times, now);
+  const counts = summarizeGratitudeCounts(times, now, { from: period.from, to: period.to });
 
-  // お客さまの声（メッセージのある成立済みを新しい順に。金額なし）
-  const voices = await repo.listGratitudeVoices(storeId, GRATITUDE_VOICES_LIMIT);
+  // お客さまの声（成立済みを新しい順に。期間で絞る。金額なし）。
+  // staffId 指定時はその店員さんの声だけに絞る（特定スタッフの「メッセージ一覧」用）。
+  const voices = await repo.listGratitudeVoices(
+    storeId,
+    GRATITUDE_VOICES_LIMIT,
+    {
+      from: period.from,
+      to: period.to,
+    },
+    period.staffId,
+  );
 
-  // スタッフ別件数（名簿順・中立。件数で並べ替えない）
-  const perStaff = await repo.listGratitudePerStaff(storeId);
+  // スタッフ別件数（名簿順・中立。期間で絞る。件数で並べ替えない）。
+  // staffId に関わらず常に全スタッフ集計（ドロップダウンの選択肢・各スタッフの件数の出どころ）。
+  const perStaff = await repo.listGratitudePerStaff(storeId, {
+    from: period.from,
+    to: period.to,
+  });
 
   return {
     totalCount: counts.totalCount,
-    todayCount: counts.todayCount,
     weekCount: counts.weekCount,
-    monthCount: counts.monthCount,
     voices: voices.map((v) => ({
       id: v.id,
       message: v.message,
@@ -329,6 +483,8 @@ export async function getStoreGratitude(
     perStaff: perStaff.map((p) => ({
       staffId: p.staffId,
       staffName: p.staffName,
+      // スタッフのアバター（公開URL・無ければ null）。金額ではない（表示用の画像）
+      avatarUrl: p.avatarUrl,
       count: p.count,
     })),
   };

@@ -64,9 +64,6 @@ export function StoreHomePage({ store }: { store: StoreProfile }) {
               {gratitude?.totalCount ?? 0}
             </span>
             <span className="text-token-xl font-semibold text-ink">{t("store.homeCountSuffix")}</span>
-            <span className="ml-0.5 text-[24px]" aria-hidden="true">
-              ❤️
-            </span>
           </div>
           <div className="mt-1.5">
             <span className="inline-block rounded-pill bg-rose-soft px-2.5 py-[3px] text-token-sm font-bold text-rose">
@@ -88,11 +85,31 @@ export function StoreHomePage({ store }: { store: StoreProfile }) {
                 key={v.id}
                 className="flex items-center gap-3 rounded-xl border border-line-soft px-4 py-3.5"
               >
-                <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-token-xl">
-                  🙂
+                {/* お客さまは匿名のため、顔写真の代わりにメッセージらしい吹き出しアイコン（中立） */}
+                <span className="flex h-9 w-9 flex-none items-center justify-center rounded-full bg-rose-soft text-rose">
+                  <svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    strokeWidth="1.8"
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M21 11.5a8.38 8.38 0 0 1-8.5 8.5 9 9 0 0 1-3.8-.8L3 21l1.8-5.7a8.5 8.5 0 0 1-.8-3.8A8.38 8.38 0 0 1 12.5 3 8.38 8.38 0 0 1 21 11.5z" />
+                  </svg>
                 </span>
                 <div className="flex-1">
-                  <div className="text-token-base text-ink">{v.message}</div>
+                  {/* メッセージ。無い投げ銭は淡色で「メッセージなし」 */}
+                  {v.message ? (
+                    <div className="text-token-base text-ink">{v.message}</div>
+                  ) : (
+                    <div className="text-token-base text-muted">
+                      {t("store.gratitudeNoMessage")}
+                    </div>
+                  )}
                   <div className="mt-1 text-token-xs text-muted">
                     {formatRelativeTime(v.receivedAt)} ・ {v.staffName}
                     {t("store.san")}
