@@ -165,10 +165,17 @@ export async function createAccountSession(
 
   // account_onboarding コンポーネントを有効にした Account Session を発行する。
   // この session は対象の Connected Account に紐づき、フロントは client_secret で埋め込み UI を初期化する。
+  //
+  // disable_stripe_user_authentication: true で「Stripe のユーザー認証（電話番号認証の別ウィンドウ）」を無効化し、
+  // 全画面ポップアップ無しで完全にアプリ内に埋め込む。これはプラットフォームが要件収集に責任を持つ構成
+  // （controller.requirement_collection=application＝Custom相当）でのみ許可される設定。本人確認・審査は引き続き Stripe が担う。
   const session = await stripe.accountSessions.create({
     account: connectedAccountId,
     components: {
-      account_onboarding: { enabled: true },
+      account_onboarding: {
+        enabled: true,
+        features: { disable_stripe_user_authentication: true },
+      },
     },
   });
 
