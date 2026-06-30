@@ -1361,11 +1361,14 @@ describe("staff.service", () => {
     available = 1_000_000,
     pending = 0,
     nextAvailableOn: string | null = null,
+    pendingBuckets: { availableOn: string; amount: number }[] = [],
   ) {
     return vi.fn(async (_connectedAccountId: string) => ({
       availableAmount: available,
       pendingAmount: pending,
       nextAvailableOn,
+      // 準備中の日付ごとの内訳（既定は空。指定時は service がそのまま StaffBalance に載せることを検証する）
+      pendingBuckets,
     }));
   }
 
@@ -1459,6 +1462,22 @@ describe("staff.service", () => {
     expect(balance!.payableAmount).toBe(680);
   });
 
+  it("getStaffBalance: 準備中の日付ごとの内訳（pendingBuckets）を Stripe 残高からそのまま載せる", async () => {
+    await setupVerifiedWithPayable();
+    // 2日分の内訳（合計 300＝pendingStripeAmount）を返す状況
+    const buckets = [
+      { availableOn: "2026-07-01T00:00:00Z", amount: 200 },
+      { availableOn: "2026-07-03T00:00:00Z", amount: 100 },
+    ];
+    const getBalance = makeGetConnectBalance(600, 300, "2026-07-01T00:00:00Z", buckets);
+    const balance = await getStaffBalance(mock.repo, getBalance, "auth-A");
+    expect(balance).not.toBeNull();
+    // 日付ごとの内訳がそのまま返り、合計は pendingStripeAmount と一致する
+    expect(balance!.pendingBuckets).toEqual(buckets);
+    const bucketTotal = balance!.pendingBuckets.reduce((s, b) => s + b.amount, 0);
+    expect(bucketTotal).toBe(balance!.pendingStripeAmount);
+  });
+
   it("getStaffBalance: 未確認（verified でない）なら Stripe 残高は取得せず sendable/pending は 0（held は見える）", async () => {
     await seedTwoStaffWithTips();
     const getBalance = makeGetConnectBalance(600, 200);
@@ -1467,6 +1486,8 @@ describe("staff.service", () => {
     expect(getBalance).not.toHaveBeenCalled();
     expect(balance!.sendableAmount).toBe(0);
     expect(balance!.pendingStripeAmount).toBe(0);
+    // 準備中の内訳も空（Stripe 残高を引かないため）
+    expect(balance!.pendingBuckets).toEqual([]);
     // 本人確認待ち（held）は受取総額として見える（隠さない）
     expect(balance!.heldAmount).toBe(255 + 425);
     expect(balance!.canPayout).toBe(false);

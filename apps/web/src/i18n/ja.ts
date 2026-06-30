@@ -237,6 +237,8 @@ export const ja = {
       payoutPendingSub: "（受け取り後、数日で送金できるようになります）",
       // {{date}} に available になる日付（例: 7月1日）。available_on が取れたときだけ出す
       payoutPendingDate: "{{date}}から送金できます",
+      // 準備中の日付ごとの行ラベル（{{date}} に「M月D日」。例: 7月1日から）。日付ごとの内訳行に使う
+      payoutPendingBucketDate: "{{date}}から",
       payoutHeldLabel: "本人確認待ち",
       payoutHeldSub: "（本人確認を済ませると送金できるようになります）",
       // 準備中で「送金できる額」が0のときの理由

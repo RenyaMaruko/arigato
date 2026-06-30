@@ -11,6 +11,7 @@ import type {
   CreatePayoutResult,
   CreateConnectedAccountResult,
   ConnectBalance,
+  PendingBucket,
   ChargeSettlementSnapshot,
   PayoutLedgerEntry,
 } from "./stripe.types.js";
@@ -232,8 +233,11 @@ export async function createPayout(params: CreatePayoutParams): Promise<CreatePa
  *    DB の権利（payable）と実際に払い出せる残高（Stripe settlement）は別物。available を超える送金はしない。
  *  - balance.retrieve を Connected Account のコンテキスト（stripeAccount）で呼び、その口座の残高を読む。
  *  - JPY（通貨は1つ）の available / pending を整数（円）で取り出す。
- *  - 準備中（pending）がある場合は、balance_transactions から available_on（pending が available になる日時）の
- *    最も早いものを拾い、「◯月◯日から送金できます」の期日表示に使う（取れなければ null）。
+ *  - 準備中（pending）がある場合は、balance_transactions を「1回だけ」リスト取得し、
+ *    available_on を暦日（Asia/Tokyo 基準）ごとにバケット集計する（pendingBuckets・日付昇順）。
+ *    日付ごとにAPIを叩かないことでレート負荷を抑える（レート対策）。
+ *    最も早い日付を nextAvailableOn（「◯月◯日から送金できます」）に使い、
+ *    バケット合計は pendingAmount と必ず一致させる（差が出る場合は最早バケットへ寄せる）。
  *
  * 送金可能額の表示にも、送金実行時の上限再取得（TOCTOU 回避）にも使う。
  */
@@ -249,14 +253,117 @@ export async function retrieveConnectBalance(
   const availableAmount = sumBalanceForCurrency(balance.available, CURRENCY);
   const pendingAmount = sumBalanceForCurrency(balance.pending, CURRENCY);
 
-  // 準備中（pending）があるときだけ、available になる最も早い日時を balance_transactions から拾う。
-  // pending が無ければ期日表示は不要（null）。
+  // 準備中（pending）があるときだけ balance_transactions を1回だけ取得し、暦日ごとに集計する。
+  // pending が無ければ内訳・期日表示は不要（空配列／null）。
+  let pendingBuckets: PendingBucket[] = [];
   let nextAvailableOn: string | null = null;
   if (pendingAmount > 0) {
-    nextAvailableOn = await findEarliestPendingAvailableOn(stripe, connectedAccountId);
+    // balance_transactions を1リストで取得（日付ごとにAPIを叩かない＝レート安全）。
+    const txns = await stripe.balanceTransactions.list(
+      { limit: 100 },
+      { stripeAccount: connectedAccountId },
+    );
+    // pending かつ available_on が未来のものを暦日（Asia/Tokyo）ごとに集計（純粋関数）。
+    const buckets = groupPendingByAvailableDate(txns.data, Math.floor(Date.now() / 1000));
+    // バケット合計が pendingAmount と必ず一致するよう、残差を最早バケットに寄せて整合させる。
+    pendingBuckets = reconcilePendingBuckets(buckets, pendingAmount);
+    // 最初（最早）のバケットの日付を nextAvailableOn とする（無ければ null）。
+    nextAvailableOn = pendingBuckets[0]?.availableOn ?? null;
   }
 
-  return { availableAmount, pendingAmount, nextAvailableOn };
+  return { availableAmount, pendingAmount, nextAvailableOn, pendingBuckets };
+}
+
+// バケット集計が受け取る balance_transaction の最小形（純粋関数のテストを容易にするための型）。
+export type PendingTransactionLike = {
+  // balance_transaction の状態（pending: 確定待ち / available 等）
+  status: string;
+  // 通貨コード（jpy 以外は除外する）
+  currency: string;
+  // 金額（円）。準備中の入金系は正の値
+  amount: number;
+  // available になる予定の epoch 秒
+  available_on: number;
+};
+
+/**
+ * 準備中（pending）の balance_transactions を「available_on の暦日ごと（Asia/Tokyo 基準）」に
+ * 合算して、日付昇順の内訳（pendingBuckets）を作る純粋関数。
+ *
+ * 仕様:
+ *  - status=pending かつ available_on が未来（nowSeconds より後）かつ JPY のものだけを対象にする。
+ *  - 暦日は Asia/Tokyo（UTC+9）基準でまとめる（UI が「M月D日」で表示するため）。
+ *  - 同じ暦日のものは合算し、availableOn はその日の 0:00（JST）を ISO 文字列で表す。
+ *  - 日付昇順で返す。対象が無ければ空配列。
+ *
+ * DBアクセスしない純粋関数（Vitest の単体テスト対象）。
+ */
+export function groupPendingByAvailableDate(
+  transactions: PendingTransactionLike[],
+  nowSeconds: number,
+): PendingBucket[] {
+  // 暦日（JST）の 0:00 を表す epoch 秒 → その日の合計額（円）
+  const byDay = new Map<number, number>();
+
+  for (const txn of transactions) {
+    // pending かつ JPY かつ available_on が未来のものだけを対象にする
+    if (txn.status !== "pending") continue;
+    if (txn.currency !== CURRENCY) continue;
+    if (txn.available_on <= nowSeconds) continue;
+
+    // available_on（epoch 秒）を JST の暦日の 0:00（epoch 秒）に丸める
+    const dayStartSeconds = toJstDayStartSeconds(txn.available_on);
+    byDay.set(dayStartSeconds, (byDay.get(dayStartSeconds) ?? 0) + txn.amount);
+  }
+
+  // 日付昇順に並べ、各日の 0:00（JST）を ISO 文字列にして返す
+  return Array.from(byDay.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map(([dayStartSeconds, amount]) => ({
+      availableOn: new Date(dayStartSeconds * 1000).toISOString(),
+      amount,
+    }));
+}
+
+/**
+ * epoch 秒（UTC）を Asia/Tokyo（UTC+9・DST 無し）の「その暦日の 0:00」に丸めて epoch 秒で返す。
+ * 日本はサマータイムが無いため固定オフセット +9h で安全に暦日を判定できる。
+ */
+function toJstDayStartSeconds(epochSeconds: number): number {
+  const JST_OFFSET_SECONDS = 9 * 60 * 60;
+  const DAY_SECONDS = 24 * 60 * 60;
+  // JST のローカル秒に直してから日単位で切り捨て、再び UTC epoch へ戻す
+  const jstLocal = epochSeconds + JST_OFFSET_SECONDS;
+  const jstDayStartLocal = Math.floor(jstLocal / DAY_SECONDS) * DAY_SECONDS;
+  return jstDayStartLocal - JST_OFFSET_SECONDS;
+}
+
+/**
+ * バケット合計を pendingAmount（Stripe の pending 合計）に必ず一致させる純粋関数。
+ *
+ * balance_transactions のページング（最大100件）で取りこぼしが出ると、バケット合計が
+ * pendingAmount を下回り得る。その場合は残差（pendingAmount − バケット合計）を
+ * 最も早いバケットに寄せて、合計を pendingAmount に揃える（整合性の担保）。
+ *  - バケットが空なのに pendingAmount>0 のときは、日付不明の合算1件として扱えるよう空配列を返し、
+ *    呼び出し側（service / UI）が pendingStripeAmount の保険表示にフォールバックできるようにする。
+ */
+export function reconcilePendingBuckets(
+  buckets: PendingBucket[],
+  pendingAmount: number,
+): PendingBucket[] {
+  // バケットが無ければ寄せ先が無い（UI 側の保険表示に任せる）
+  if (buckets.length === 0) return buckets;
+
+  const bucketTotal = buckets.reduce((sum, b) => sum + b.amount, 0);
+  const diff = pendingAmount - bucketTotal;
+  // 差が無ければそのまま（既に一致）
+  if (diff === 0) return buckets;
+
+  // 残差を最早バケット（先頭）に寄せて合計を pendingAmount に揃える。
+  // 寄せた結果が負にならないよう 0 で下限を取る（返金等で pendingAmount が小さいケースの保険）。
+  return buckets.map((b, i) =>
+    i === 0 ? { ...b, amount: Math.max(0, b.amount + diff) } : { ...b },
+  );
 }
 
 /**
@@ -388,39 +495,6 @@ function sumBalanceForCurrency(
   return funds
     .filter((f) => f.currency === currency)
     .reduce((sum, f) => sum + f.amount, 0);
-}
-
-/**
- * pending な資金が available になる「最も早い available_on」を ISO 文字列で返す（取れなければ null）。
- *
- * balance_transactions を新しい順に取得し、まだ available になっていない（available_on が未来）の
- * 入金系トランザクションのうち最小の available_on を採用する（= 直近で送金可能になる日）。
- * 期日表示「◯月◯日から送金できます」のためだけに使う（送金可否の判定には available 残高そのものを使う）。
- */
-async function findEarliestPendingAvailableOn(
-  stripe: Stripe,
-  connectedAccountId: string,
-): Promise<string | null> {
-  // 直近のトランザクションを取得（pending→available の available_on を拾うには十分な件数に限定）
-  const txns = await stripe.balanceTransactions.list(
-    { limit: 100 },
-    { stripeAccount: connectedAccountId },
-  );
-
-  const nowSeconds = Math.floor(Date.now() / 1000);
-  // まだ available になっていない（available_on が未来）ものの中で最小の available_on を探す
-  let earliest: number | null = null;
-  for (const txn of txns.data) {
-    // status=pending かつ available_on が未来のものだけを対象にする（既に available のものは除外）
-    if (txn.status !== "pending") continue;
-    if (txn.available_on <= nowSeconds) continue;
-    if (earliest === null || txn.available_on < earliest) {
-      earliest = txn.available_on;
-    }
-  }
-
-  // Unix 秒 → ISO 文字列（拾えなければ null）
-  return earliest === null ? null : new Date(earliest * 1000).toISOString();
 }
 
 /**

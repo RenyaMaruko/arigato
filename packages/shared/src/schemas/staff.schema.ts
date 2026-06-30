@@ -256,6 +256,15 @@ export const StaffBalanceSchema = z.object({
   // 準備中の資金が最も早く available になる日時（ISO 文字列・「◯月◯日から送金できます」表示用）。
   // 準備中が無い／available_on を拾えない場合は null
   nextAvailableOn: z.string().nullable(),
+  // 【準備中の内訳】準備中（pending）を available_on の暦日ごと（Asia/Tokyo 基準）にまとめた配列（日付昇順）。
+  // 各要素は「その日（availableOn・ISO 文字列）」と「その日に送金できるようになる額（amount・円・整数）」。
+  // UI は「M月D日から ¥金額」を日付ごとに並べる。合計は pendingStripeAmount と一致する。
+  pendingBuckets: z.array(
+    z.object({
+      availableOn: z.string(),
+      amount: z.number().int(),
+    }),
+  ),
 });
 export type StaffBalance = z.infer<typeof StaffBalanceSchema>;
 

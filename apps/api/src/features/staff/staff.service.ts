@@ -539,6 +539,8 @@ export async function getStaffBalance(
   let sendableAmount = 0;
   let pendingStripeAmount = 0;
   let nextAvailableOn: string | null = null;
+  // 準備中の日付ごとの内訳（available_on の暦日ごとに合算・日付昇順）。未取得時は空配列で画面を壊さない
+  let pendingBuckets: StaffBalance["pendingBuckets"] = [];
   const connect = await repo.findStaffConnect(authUserId);
   if (verified && connect?.stripeAccountId) {
     try {
@@ -549,6 +551,8 @@ export async function getStaffBalance(
       // 準備中も負を表示に出さない（0 未満は 0 とする。負は内部的な調整中であり「準備中」ではない）
       pendingStripeAmount = Math.max(0, balance.pendingAmount);
       nextAvailableOn = balance.nextAvailableOn;
+      // 準備中の日付ごとの内訳をそのまま載せる（infra で暦日集計済み・合計＝pendingAmount）
+      pendingBuckets = balance.pendingBuckets;
     } catch (err) {
       // Stripe 残高取得に失敗しても画面を壊さない（DB 集計は返す）。0 にフォールバックしてログのみ。
       console.error(
@@ -568,6 +572,8 @@ export async function getStaffBalance(
     sendableAmount,
     pendingStripeAmount,
     nextAvailableOn,
+    // 準備中の日付ごとの内訳（UI が「M月D日から ¥金額」を行ごとに出す）
+    pendingBuckets,
   };
 }
 

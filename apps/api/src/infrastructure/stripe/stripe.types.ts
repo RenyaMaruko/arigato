@@ -165,4 +165,16 @@ export type ConnectBalance = {
   // 準備中の資金が最も早く available になる日時（ISO 文字列・「◯月◯日から送金できます」表示用）。
   // pending が無い／available_on を拾えない場合は null
   nextAvailableOn: string | null;
+  // 準備中（pending）の available_on を「暦日ごと（Asia/Tokyo 基準）」にまとめた内訳（日付昇順）。
+  // UI で「M月D日から ¥金額」を日付ごとに並べるために使う。
+  // 合計は pendingAmount と必ず一致させる（ページング等で差が出る場合は最早バケットへ寄せる）。
+  pendingBuckets: PendingBucket[];
+};
+
+// 準備中（pending）の内訳1件分（available_on の暦日ごとに合算した金額）。
+export type PendingBucket = {
+  // その日（Asia/Tokyo 基準の暦日の 0:00 を ISO 文字列で表す）。UI は「M月D日」に整形して表示する
+  availableOn: string;
+  // その日に available になる準備中の合計額（円・整数）
+  amount: number;
 };
