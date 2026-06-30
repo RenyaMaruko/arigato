@@ -133,7 +133,7 @@ export const ja = {
       // 所属店一覧（複数可・掛け持ち）。各店ごとにQRへ導く
       homeStoresLabel: "所属しているお店",
       homeStoreQr: "QRを表示",
-      homeNoStores: "まだお店に所属していません。招待リンクから参加してください。",
+      homeNoStores: "まだお店に所属していません。\n招待リンクから参加してください。",
       homeAccount: "口座登録",
       // ホームの残高カード（残高を1つにまとめて表示し、すぐ下に本人確認の導線を置く）
       homeBalanceLabel: "残高",

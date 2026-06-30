@@ -48,7 +48,7 @@ export function StaffStoresPage() {
       <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-6 pb-7 pt-4">
         {me.memberships.length === 0 ? (
           // 所属がまだ無いとき（招待リンクからの参加を促す）
-          <div className="mt-3 rounded-xl border-[1.5px] border-line bg-surface-subtle px-4 py-5 text-center text-token-sm leading-relaxed text-ink-sub">
+          <div className="mt-3 whitespace-pre-line rounded-xl border-[1.5px] border-line bg-surface-subtle px-4 py-5 text-center text-token-sm leading-relaxed text-ink-sub">
             {t("staff.homeNoStores")}
           </div>
         ) : (

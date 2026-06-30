@@ -104,7 +104,7 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           </div>
           {me.memberships.length === 0 ? (
             // 所属がまだ無いとき（招待リンクからの参加を促す）
-            <div className="mt-3 rounded-xl border-[1.5px] border-line bg-surface-subtle px-4 py-5 text-center text-token-sm leading-relaxed text-ink-sub">
+            <div className="mt-3 whitespace-pre-line rounded-xl border-[1.5px] border-line bg-surface-subtle px-4 py-5 text-center text-token-sm leading-relaxed text-ink-sub">
               {t("staff.homeNoStores")}
             </div>
           ) : (
