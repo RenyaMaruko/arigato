@@ -332,7 +332,7 @@ export const ja = {
       createNameLabel: "店名",
       createNamePlaceholder: "例）カフェ Arigato",
       createAgreeLabel:
-        "このお店で投げ銭を導入することに同意します（就業規則との整合は店舗側で確認します）。",
+        "このお店で、スタッフがお客さまからチップを受け取ることに同意します。",
       createSubmit: "このお店を作成する",
       createError: "お店を作成できませんでした。もう一度お試しください。",
       createAlreadyExists: "このアカウントには既にお店があります。",

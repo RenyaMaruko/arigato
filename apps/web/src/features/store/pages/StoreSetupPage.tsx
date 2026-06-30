@@ -67,9 +67,6 @@ export function StoreSetupPage() {
         {/* 見出し */}
         <div className="mt-6 text-center">
           <div className="text-token-3xl font-bold text-ink">{t("store.createTitle")}</div>
-          <div className="mt-3 whitespace-pre-line text-token-md leading-relaxed text-ink-sub">
-            {t("store.createLead")}
-          </div>
         </div>
 
         {/* 店舗作成フォーム（店名＋導入承認の同意） */}
