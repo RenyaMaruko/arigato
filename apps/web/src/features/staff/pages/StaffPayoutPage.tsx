@@ -204,71 +204,64 @@ export function StaffPayoutPage() {
               </div>
             )}
 
-            {/* 準備中・本人確認待ちの内訳（受取総額は隠さない・3段表示）。
-                送金ボタン（および未verify の本人確認CTA）の「下」に置く。
-                準備中は available_on の暦日ごとに「M月D日から ¥金額」を行で並べる。
-                本人確認待ち（held）＝未確認分も同じブロックにまとめる。 */}
-            {(pendingAmount > 0 || heldAmount > 0) && (
-              <div className="mt-6 flex flex-col gap-2.5">
-                {/* 準備中（pending）。日付ごとの内訳を出す。
-                    バケットが取れたら日付ごとに、取れなければ pendingStripeAmount の保険表示（最早日付1行）。 */}
-                {pendingAmount > 0 && (
-                  <div className="rounded-xl border border-line bg-surface-subtle px-4 py-3">
-                    {/* 見出し「準備中」 */}
-                    <div className="text-token-sm font-semibold text-ink-label">
-                      {t("staff.payoutPendingLabel")}
-                    </div>
-                    {pendingBuckets.length > 0 ? (
-                      /* 日付ごとの行（M月D日から ¥金額） */
-                      <div className="mt-1.5 flex flex-col gap-1.5">
-                        {pendingBuckets.map((bucket) => (
-                          <div
-                            key={bucket.availableOn}
-                            className="flex items-center justify-between"
-                          >
-                            <span className="text-token-xs text-muted">
-                              {t("staff.payoutPendingBucketDate", {
-                                date: formatAvailableDate(bucket.availableOn),
-                              })}
-                            </span>
-                            <span className="ml-3 flex-none text-token-md font-bold text-ink-sub">
-                              ¥{bucket.amount.toLocaleString()}
-                            </span>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      /* 保険表示: バケットが空でも pending があれば合算1行（最早日付があれば添える） */
-                      <div className="mt-1.5 flex items-center justify-between">
-                        <span className="text-token-xs text-muted">
-                          {nextAvailableLabel
-                            ? t("staff.payoutPendingBucketDate", { date: nextAvailableLabel })
-                            : t("staff.payoutPendingSub")}
-                        </span>
-                        <span className="ml-3 flex-none text-token-md font-bold text-ink-sub">
-                          ¥{pendingAmount.toLocaleString()}
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                )}
-                {/* 本人確認待ち（held）。未確認で溜まっている分 */}
-                {heldAmount > 0 && (
-                  <div className="flex items-start justify-between rounded-xl border border-line bg-surface-subtle px-4 py-3">
-                    <div className="min-w-0">
-                      <div className="text-token-sm font-semibold text-ink-label">
-                        {t("staff.payoutHeldLabel")}
-                      </div>
-                      <div className="mt-0.5 text-token-xs leading-relaxed text-muted">
-                        {t("staff.payoutHeldSub")}
-                      </div>
-                    </div>
-                    <span className="ml-3 flex-none text-token-md font-bold text-ink-sub">
+            {/* 準備中（pending）。送金履歴と同じ「見出し＋枠カードの中に行が並ぶ」レイアウトに統一する。
+                available_on の暦日ごとに「M月D日から … ¥金額」を行で並べる（バケットが空なら合算1行の保険表示）。
+                送金ボタン（および未verify の本人確認CTA）の「下」に置く。 */}
+            {pendingAmount > 0 && (
+              <section className="mt-9">
+                <div className="text-token-base font-bold text-ink-label">
+                  {t("staff.payoutPendingLabel")}
+                </div>
+                <div className="mt-3 overflow-hidden rounded-xl border-[1.5px] border-line bg-page">
+                  {pendingBuckets.length > 0
+                    ? // 日付ごとの行（行間は区切り線・送金履歴の行と同じ体裁）
+                      pendingBuckets.map((bucket, i) => (
+                        <div
+                          key={bucket.availableOn}
+                          className={`flex items-center justify-between px-4 py-3.5 ${i > 0 ? "border-t border-line-soft" : ""}`}
+                        >
+                          <span className="text-token-sm text-muted">
+                            {t("staff.payoutPendingBucketDate", {
+                              date: formatAvailableDate(bucket.availableOn),
+                            })}
+                          </span>
+                          <span className="ml-3 flex-none text-token-md font-bold text-ink">
+                            ¥{bucket.amount.toLocaleString()}
+                          </span>
+                        </div>
+                      ))
+                    : // 保険表示: バケットが空でも pending があれば合算1行（最早日付があれば添える）
+                      (
+                        <div className="flex items-center justify-between px-4 py-3.5">
+                          <span className="text-token-sm text-muted">
+                            {nextAvailableLabel
+                              ? t("staff.payoutPendingBucketDate", { date: nextAvailableLabel })
+                              : t("staff.payoutPendingSub")}
+                          </span>
+                          <span className="ml-3 flex-none text-token-md font-bold text-ink">
+                            ¥{pendingAmount.toLocaleString()}
+                          </span>
+                        </div>
+                      )}
+                </div>
+              </section>
+            )}
+
+            {/* 本人確認待ち（held）。準備中・送金履歴と同じ「見出し＋枠カード」レイアウトに揃える。 */}
+            {heldAmount > 0 && (
+              <section className="mt-9">
+                <div className="text-token-base font-bold text-ink-label">
+                  {t("staff.payoutHeldLabel")}
+                </div>
+                <div className="mt-3 overflow-hidden rounded-xl border-[1.5px] border-line bg-page">
+                  <div className="flex items-center justify-between px-4 py-3.5">
+                    <span className="text-token-sm text-muted">{t("staff.payoutHeldSub")}</span>
+                    <span className="ml-3 flex-none text-token-md font-bold text-ink">
                       ¥{heldAmount.toLocaleString()}
                     </span>
                   </div>
-                )}
-              </div>
+                </div>
+              </section>
             )}
 
             {/* 送金履歴（いつ・いくら・状態）。新しい順 */}
