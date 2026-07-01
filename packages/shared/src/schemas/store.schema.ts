@@ -20,6 +20,37 @@ export const StoreInviteStatusSchema = z.enum(["pending", "accepted", "revoked"]
 export type StoreInviteStatus = z.infer<typeof StoreInviteStatusSchema>;
 
 /**
+ * 店舗の管理者ロール（store_admin.role）。
+ * - owner: 店の所有者（管理者管理・owner譲渡・店削除ができる。各店に常に1人）
+ * - admin: 日常運用の管理者（店情報編集・スタッフ招待/管理・記録閲覧ができる）
+ */
+export const StoreRoleSchema = z.enum(["owner", "admin"]);
+export type StoreRole = z.infer<typeof StoreRoleSchema>;
+
+/**
+ * POST /store/:storeId/transfer-owner（owner 譲渡）の入力。
+ * 現 owner が、その店の active な管理者(admin)1人を指名して owner を引き継ぐ。
+ * targetAuthUserId は指名先の管理者（Supabase auth.users の UUID）。
+ */
+export const TransferStoreOwnerInputSchema = z.object({
+  // owner を引き継ぐ先の管理者（active な admin であること。Service で検証する）
+  targetAuthUserId: z.string().uuid(),
+});
+export type TransferStoreOwnerInput = z.infer<typeof TransferStoreOwnerInputSchema>;
+
+/**
+ * 店の管理者1件（store_admin 行の表現。管理者一覧・owner 譲渡の指名に使う）。
+ * 金額は一切持たせない（店はお金に触れない）。UI（一覧画面）はフェーズ3だが型はここで共有する。
+ */
+export const StoreAdminSchema = z.object({
+  authUserId: z.string().uuid(),
+  role: StoreRoleSchema,
+  // その店に管理者として加わった日時（ISO 文字列）。owner 自動継承の「最古参」判定にも使う
+  createdAt: z.string(),
+});
+export type StoreAdmin = z.infer<typeof StoreAdminSchema>;
+
+/**
  * GET /store/me・GET /store/:storeId（店プロフィール・店ホームの基盤）の応答。
  * 名前・紹介・業種・ロゴ・導入承認の同意日時を返す。金額・残高は一切含めない。
  * 運営審査ゲート（status の pending→approved）は廃止し、店がセルフサーブで作成する。

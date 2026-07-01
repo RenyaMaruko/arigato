@@ -152,7 +152,9 @@ export function createTipRepository(): TipRepository {
           s.stripe_account_id AS "stripeAccountId",
           st.id               AS "storeId",
           st.name             AS "storeName",
-          (ss.left_at IS NOT NULL) AS "left"
+          -- 脱退済み（staff_store.left_at）または店が閉店（store.closed_at）なら受付停止（新規投げ銭を弾く）。
+          -- 閉店店の QR は staff_store も無効化されるが、二重防御として店の閉店も直接見る。
+          (ss.left_at IS NOT NULL OR st.closed_at IS NOT NULL) AS "left"
         FROM staff_store ss
         JOIN staff s ON s.id = ss.staff_id
         JOIN store st ON st.id = ss.store_id

@@ -4,7 +4,9 @@ import type {
   StoreRow,
   StoreInviteRow,
   StoreStaffRow,
+  StoreAdminRow,
 } from "./store.repository.js";
+import type { StoreRole } from "./store.model.js";
 
 /**
  * store feature の Repository インメモリ実装。
@@ -12,7 +14,7 @@ import type {
  * 実 DB 実装（createStoreRepository）と同じ契約（StoreRepository）を満たす差し替え。
  *
  * 最重要原則は実 DB 実装と同じ: 金額・残高・着金は一切持たず、感謝は件数・メッセージ・店員名だけを扱う。
- * 開発用シード店は環境変数 SEED_STORE_ID / SEED_STORE_NAME から最小限を投入できる（未設定なら空）。
+ * owner 表現は store_admin（人×店×ロール）で持ち、閉店は store.closedAt で表す。
  */
 export function createInMemoryStoreRepository(): StoreRepository {
   // 店の簡易ストア（id をキー）
@@ -21,8 +23,13 @@ export function createInMemoryStoreRepository(): StoreRepository {
   const invitesByStore = new Map<string, StoreInviteRow[]>();
   // スタッフの簡易ストア（store_id ごとに保持）。leftAt は論理削除（在籍解除）の時刻（null＝在籍中）。
   const staffByStore = new Map<string, (StoreStaffRow & { joinedAt: string; leftAt: number | null })[]>();
+  // 店の管理者（store_admin）。store_id ごとに保持。leftAt は論理削除（null＝active）。
+  const adminsByStore = new Map<
+    string,
+    { authUserId: string; role: StoreRole; createdAt: string; leftAt: number | null }[]
+  >();
 
-  // 開発用シード店（任意）。owner 未紐付け・導入承認未同意の移行相当の店を1件用意する
+  // 開発用シード店（任意）。導入承認未同意の移行相当の店を1件用意する
   const seedStoreId = process.env.SEED_STORE_ID;
   if (seedStoreId) {
     stores.set(seedStoreId, {
@@ -32,7 +39,7 @@ export function createInMemoryStoreRepository(): StoreRepository {
       industry: null,
       logoUrl: null,
       adoptionAgreedAt: null,
-      ownerAuthUserId: null,
+      closedAt: null,
     });
   }
 
@@ -41,15 +48,29 @@ export function createInMemoryStoreRepository(): StoreRepository {
       return stores.get(storeId) ?? null;
     },
 
-    async findStoreByOwner(authUserId) {
-      for (const store of stores.values()) {
-        if (store.ownerAuthUserId === authUserId) return store;
+    // 自分が active な管理者である店を返す（owner 優先→古参順、閉店店は除外）
+    async findStoreForAdmin(authUserId) {
+      let best: { store: StoreRow; isOwner: boolean; createdAt: string } | null = null;
+      for (const [storeId, admins] of adminsByStore) {
+        const store = stores.get(storeId);
+        if (!store || store.closedAt !== null) continue;
+        const mine = admins.find((a) => a.authUserId === authUserId && a.leftAt === null);
+        if (!mine) continue;
+        const isOwner = mine.role === "owner";
+        // owner を優先し、次に古参（createdAt 小）を選ぶ
+        if (
+          !best ||
+          (isOwner && !best.isOwner) ||
+          (isOwner === best.isOwner && mine.createdAt < best.createdAt)
+        ) {
+          best = { store, isOwner, createdAt: mine.createdAt };
+        }
       }
-      return null;
+      return best?.store ?? null;
     },
 
-    async createStore(params) {
-      // セルフサーブ作成（作成者＝所有者・導入承認に同意済み）
+    // 店を作成し、同時に作成者を owner にする
+    async createStoreWithOwner(params) {
       const id = randomUUID();
       const created: StoreRow = {
         id,
@@ -58,10 +79,95 @@ export function createInMemoryStoreRepository(): StoreRepository {
         industry: params.industry,
         logoUrl: params.logoUrl,
         adoptionAgreedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
-        ownerAuthUserId: params.ownerAuthUserId,
+        closedAt: null,
       };
       stores.set(id, created);
+      adminsByStore.set(id, [
+        {
+          authUserId: params.creatorAuthUserId,
+          role: "owner",
+          createdAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+          leftAt: null,
+        },
+      ]);
       return created;
+    },
+
+    async findActiveAdminRole(storeId, authUserId) {
+      const a = (adminsByStore.get(storeId) ?? []).find(
+        (x) => x.authUserId === authUserId && x.leftAt === null,
+      );
+      return a?.role ?? null;
+    },
+
+    async listActiveAdmins(storeId) {
+      return (adminsByStore.get(storeId) ?? [])
+        .filter((a) => a.leftAt === null)
+        .sort((x, y) =>
+          x.createdAt < y.createdAt
+            ? -1
+            : x.createdAt > y.createdAt
+              ? 1
+              : x.authUserId < y.authUserId
+                ? -1
+                : 1,
+        )
+        .map<StoreAdminRow>((a) => ({
+          authUserId: a.authUserId,
+          role: a.role,
+          createdAt: a.createdAt,
+        }));
+    },
+
+    async leaveAdmin(storeId, authUserId) {
+      const a = (adminsByStore.get(storeId) ?? []).find(
+        (x) => x.authUserId === authUserId && x.leftAt === null,
+      );
+      if (!a) return 0;
+      a.leftAt = Date.now();
+      return 1;
+    },
+
+    async promoteAdminToOwner(storeId, authUserId) {
+      const a = (adminsByStore.get(storeId) ?? []).find(
+        (x) => x.authUserId === authUserId && x.role === "admin" && x.leftAt === null,
+      );
+      if (!a) return 0;
+      a.role = "owner";
+      return 1;
+    },
+
+    async transferOwner(storeId, fromAuthUserId, toAuthUserId) {
+      const admins = adminsByStore.get(storeId) ?? [];
+      const from = admins.find(
+        (x) => x.authUserId === fromAuthUserId && x.role === "owner" && x.leftAt === null,
+      );
+      if (!from) throw new Error("transfer_owner_from_not_owner");
+      const to = admins.find(
+        (x) => x.authUserId === toAuthUserId && x.role === "admin" && x.leftAt === null,
+      );
+      if (!to) throw new Error("transfer_owner_to_not_admin");
+      from.role = "admin";
+      to.role = "owner";
+    },
+
+    async closeStore(storeId) {
+      const store = stores.get(storeId);
+      if (!store || store.closedAt !== null) return null;
+      const closed: StoreRow = {
+        ...store,
+        closedAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+      };
+      stores.set(storeId, closed);
+      // 在籍中の所属（QR）を無効化する
+      for (const s of staffByStore.get(storeId) ?? []) {
+        if (s.leftAt === null) s.leftAt = Date.now();
+      }
+      // active な管理者を外す
+      for (const a of adminsByStore.get(storeId) ?? []) {
+        if (a.leftAt === null) a.leftAt = Date.now();
+      }
+      return closed;
     },
 
     async updateStore(storeId, params) {

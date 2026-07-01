@@ -60,6 +60,8 @@ import {
   removeStoreStaff,
   getStoreGratitude,
   uploadStoreLogo,
+  closeStore,
+  transferStoreOwner,
 } from "./features/store/store.service.js";
 import { createStoreRepository } from "./features/store/store.repository.js";
 import { createInMemoryStoreRepository } from "./features/store/store.repository.memory.js";
@@ -235,6 +237,11 @@ export function createApp() {
     // 感謝の集計の基準時刻はサーバーの現在時刻（now）を渡す。period（from/to）は記録画面の期間セレクタ由来
     getStoreGratitude: (authUserId, storeId, period) =>
       getStoreGratitude(storeRepo, authUserId, storeId, new Date(), period),
+    // 店を論理削除（閉店）する（owner のみ）。QR・所属を無効化し履歴・資金は保全する
+    closeStore: (authUserId, storeId) => closeStore(storeRepo, authUserId, storeId),
+    // owner を譲渡する（owner のみ）。active な admin へ引き継ぐ
+    transferStoreOwner: (authUserId, storeId, targetAuthUserId) =>
+      transferStoreOwner(storeRepo, authUserId, storeId, targetAuthUserId),
   });
 
   // Webhook ルートを配線（署名検証＝infrastructure、処理＝webhook Service + tip 更新）。

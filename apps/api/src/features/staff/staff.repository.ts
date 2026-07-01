@@ -502,12 +502,14 @@ export function createStaffRepository(): StaffRepository {
           storeName: string;
           status: InviteStatus;
           storeAdopted: boolean;
+          storeClosed: boolean;
         }>(sql`
           SELECT
             i.store_id AS "storeId",
             st.name    AS "storeName",
             i.status   AS "status",
-            (st.adoption_agreed_at IS NOT NULL) AS "storeAdopted"
+            (st.adoption_agreed_at IS NOT NULL) AS "storeAdopted",
+            (st.closed_at IS NOT NULL) AS "storeClosed"
           FROM staff_invite i
           JOIN store st ON st.id = i.store_id
           WHERE i.code = ${code}
@@ -515,7 +517,8 @@ export function createStaffRepository(): StaffRepository {
           FOR UPDATE OF i
         `);
         const invite = inviteRows[0];
-        if (!invite || invite.status !== "pending" || !invite.storeAdopted) {
+        // 招待が pending・店が導入承認済み・かつ店が営業中（閉店していない）のときだけ参加できる
+        if (!invite || invite.status !== "pending" || !invite.storeAdopted || invite.storeClosed) {
           throw new Error("invite_not_usable");
         }
 

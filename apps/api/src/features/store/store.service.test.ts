@@ -12,18 +12,25 @@ import {
   removeStoreStaff,
   getStoreGratitude,
   uploadStoreLogo,
+  closeStore,
+  transferStoreOwner,
+  handleOwnerDeparture,
   StoreForbiddenError,
+  StoreNotFoundError,
   StoreAlreadyExistsError,
   StoreInviteNotFoundError,
   StoreStaffNotFoundError,
+  StoreAdminNotFoundError,
   InvalidImageError,
 } from "./store.service.js";
 import { buildInviteUrl } from "./store.model.js";
+import type { StoreRole } from "./store.model.js";
 import type {
   StoreRepository,
   StoreRow,
   StoreInviteRow,
   StoreStaffRow,
+  StoreAdminRow,
   GratitudeVoiceRow,
   GratitudeTimeRow,
   GratitudePerStaffRow,
@@ -54,6 +61,11 @@ function createMockRepo() {
   const stores = new Map<string, StoreRow>();
   const invitesByStore = new Map<string, StoreInviteRow[]>();
   const staffByStore = new Map<string, StoreStaffRow[]>();
+  // 店の管理者（store_admin 相当）。store_id ごとに保持。leftAt は論理削除（null＝active）
+  const adminsByStore = new Map<
+    string,
+    { authUserId: string; role: StoreRole; createdAt: string; leftAt: number | null }[]
+  >();
   // 在籍解除（論理削除）済みの (storeId, staffId) 集合（left_at 相当）。在籍中＝この集合に無い
   const removedStaff = new Set<string>();
   const removedKey = (storeId: string, staffId: string) => `${storeId}::${staffId}`;
@@ -71,13 +83,26 @@ function createMockRepo() {
     async findStoreById(storeId) {
       return stores.get(storeId) ?? null;
     },
-    async findStoreByOwner(authUserId) {
-      for (const s of stores.values()) {
-        if (s.ownerAuthUserId === authUserId) return s;
+    async findStoreForAdmin(authUserId) {
+      // owner 優先→古参順で、閉店していない店のうち自分が active 管理者の店を返す
+      let best: { store: StoreRow; isOwner: boolean; createdAt: string } | null = null;
+      for (const [storeId, admins] of adminsByStore) {
+        const store = stores.get(storeId);
+        if (!store || store.closedAt !== null) continue;
+        const mine = admins.find((a) => a.authUserId === authUserId && a.leftAt === null);
+        if (!mine) continue;
+        const isOwner = mine.role === "owner";
+        if (
+          !best ||
+          (isOwner && !best.isOwner) ||
+          (isOwner === best.isOwner && mine.createdAt < best.createdAt)
+        ) {
+          best = { store, isOwner, createdAt: mine.createdAt };
+        }
       }
-      return null;
+      return best?.store ?? null;
     },
-    async createStore(params) {
+    async createStoreWithOwner(params) {
       const id = `store-${stores.size + 1}`;
       const created: StoreRow = {
         id,
@@ -86,10 +111,77 @@ function createMockRepo() {
         industry: params.industry,
         logoUrl: params.logoUrl,
         adoptionAgreedAt: "2026-06-23T00:00:00Z",
-        ownerAuthUserId: params.ownerAuthUserId,
+        closedAt: null,
       };
       stores.set(id, created);
+      adminsByStore.set(id, [
+        { authUserId: params.creatorAuthUserId, role: "owner", createdAt: "2026-06-23T00:00:00Z", leftAt: null },
+      ]);
       return created;
+    },
+    async findActiveAdminRole(storeId, authUserId) {
+      const a = (adminsByStore.get(storeId) ?? []).find(
+        (x) => x.authUserId === authUserId && x.leftAt === null,
+      );
+      return a?.role ?? null;
+    },
+    async listActiveAdmins(storeId) {
+      return (adminsByStore.get(storeId) ?? [])
+        .filter((a) => a.leftAt === null)
+        .sort((x, y) =>
+          x.createdAt < y.createdAt
+            ? -1
+            : x.createdAt > y.createdAt
+              ? 1
+              : x.authUserId < y.authUserId
+                ? -1
+                : 1,
+        )
+        .map<StoreAdminRow>((a) => ({ authUserId: a.authUserId, role: a.role, createdAt: a.createdAt }));
+    },
+    async leaveAdmin(storeId, authUserId) {
+      const a = (adminsByStore.get(storeId) ?? []).find(
+        (x) => x.authUserId === authUserId && x.leftAt === null,
+      );
+      if (!a) return 0;
+      a.leftAt = Date.now();
+      return 1;
+    },
+    async promoteAdminToOwner(storeId, authUserId) {
+      const a = (adminsByStore.get(storeId) ?? []).find(
+        (x) => x.authUserId === authUserId && x.role === "admin" && x.leftAt === null,
+      );
+      if (!a) return 0;
+      a.role = "owner";
+      return 1;
+    },
+    async transferOwner(storeId, fromAuthUserId, toAuthUserId) {
+      const admins = adminsByStore.get(storeId) ?? [];
+      const from = admins.find(
+        (x) => x.authUserId === fromAuthUserId && x.role === "owner" && x.leftAt === null,
+      );
+      if (!from) throw new Error("transfer_owner_from_not_owner");
+      const to = admins.find(
+        (x) => x.authUserId === toAuthUserId && x.role === "admin" && x.leftAt === null,
+      );
+      if (!to) throw new Error("transfer_owner_to_not_admin");
+      from.role = "admin";
+      to.role = "owner";
+    },
+    async closeStore(storeId) {
+      const store = stores.get(storeId);
+      if (!store || store.closedAt !== null) return null;
+      const closed: StoreRow = { ...store, closedAt: "2026-06-23T09:00:00Z" };
+      stores.set(storeId, closed);
+      // 在籍中の所属（QR）を無効化する（在籍解除集合に入れる）
+      for (const s of staffByStore.get(storeId) ?? []) {
+        removedStaff.add(removedKey(storeId, s.id));
+      }
+      // active な管理者を外す
+      for (const a of adminsByStore.get(storeId) ?? []) {
+        if (a.leftAt === null) a.leftAt = Date.now();
+      }
+      return closed;
     },
     async updateStore(storeId, params) {
       const s = stores.get(storeId);
@@ -195,6 +287,7 @@ function createMockRepo() {
     stores,
     invitesByStore,
     staffByStore,
+    adminsByStore,
     voicesByStore,
     timesByStore,
     perStaffByStore,
@@ -202,7 +295,8 @@ function createMockRepo() {
   };
 }
 
-// 所有者付きの店を1件用意するヘルパ（既に作成済みの店をシードする）
+// owner 付きの店を1件用意するヘルパ（既に作成済みの店＋owner の store_admin をシードする）。
+// ownerAuthUserId が null のときは「管理者が誰もいない店」（移行相当）をシードする。
 function seedOwnedStore(
   m: ReturnType<typeof createMockRepo>,
   storeId: string,
@@ -215,8 +309,27 @@ function seedOwnedStore(
     industry: null,
     logoUrl: null,
     adoptionAgreedAt: "2026-06-23T00:00:00Z",
-    ownerAuthUserId,
+    closedAt: null,
   });
+  m.adminsByStore.set(
+    storeId,
+    ownerAuthUserId
+      ? [{ authUserId: ownerAuthUserId, role: "owner", createdAt: "2026-06-23T00:00:00Z", leftAt: null }]
+      : [],
+  );
+}
+
+// 追加の管理者（admin）を店に足すヘルパ（owner 譲渡・自動継承のテスト用）。
+function seedAdmin(
+  m: ReturnType<typeof createMockRepo>,
+  storeId: string,
+  authUserId: string,
+  createdAt: string,
+  role: StoreRole = "admin",
+) {
+  const list = m.adminsByStore.get(storeId) ?? [];
+  list.push({ authUserId, role, createdAt, leftAt: null });
+  m.adminsByStore.set(storeId, list);
 }
 
 describe("store.service", () => {
@@ -644,6 +757,128 @@ describe("store.service", () => {
     expect(updated.name).toBe("新しい店名");
     expect(updated.description).toBeNull();
     expect(updated.industry).toBe("カフェ・喫茶");
+  });
+
+  // ── 権限（requireStoreAdmin / requireStoreOwner）のスコープ ──
+
+  it("requireStoreAdmin: active な admin は日常運用（店情報取得・更新）ができる", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    seedAdmin(m, "store-1", "admin-1", "2026-06-24T00:00:00Z");
+    // admin でも getStore / updateStore（日常運用）は通る
+    expect((await getStore(m.repo, "admin-1", "store-1")).id).toBe("store-1");
+    const updated = await updateStore(m.repo, "admin-1", "store-1", { name: "admin 更新" });
+    expect(updated.name).toBe("admin 更新");
+  });
+
+  it("requireStoreAdmin: 非管理者は 403 相当（他人は日常運用もできない）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    await expect(getStore(m.repo, "stranger", "store-1")).rejects.toBeInstanceOf(StoreForbiddenError);
+  });
+
+  // ── 店の論理削除（閉店） ──
+
+  it("closeStore: owner が閉店すると解決から除外され、所属（QR）が無効化される（履歴は保全）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: null, avatarUrl: null },
+    ]);
+    // 閉店前は在籍1人・自分の店として引ける
+    expect((await listStoreStaff(m.repo, "owner-1", "store-1")).count).toBe(1);
+    expect((await getMyStore(m.repo, "owner-1"))?.id).toBe("store-1");
+
+    await closeStore(m.repo, "owner-1", "store-1");
+
+    // 閉店後は自分の店の解決から除外（getMyStore は null）
+    expect(await getMyStore(m.repo, "owner-1")).toBeNull();
+    // 閉店店は日常運用の対象からも外れる（404 相当）
+    await expect(getStore(m.repo, "owner-1", "store-1")).rejects.toBeInstanceOf(StoreNotFoundError);
+    // 店行自体は残る（物理削除しない＝履歴保全）
+    expect((await m.repo.findStoreById("store-1"))?.closedAt).not.toBeNull();
+  });
+
+  it("closeStore: owner でない管理者(admin)は閉店できない（owner 専用）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    seedAdmin(m, "store-1", "admin-1", "2026-06-24T00:00:00Z");
+    await expect(closeStore(m.repo, "admin-1", "store-1")).rejects.toBeInstanceOf(StoreForbiddenError);
+    // 店はまだ営業中
+    expect((await m.repo.findStoreById("store-1"))?.closedAt).toBeNull();
+  });
+
+  it("closeStore: 他店・非管理者は 404/403 相当（閉店できない）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    await expect(closeStore(m.repo, "stranger", "store-1")).rejects.toBeInstanceOf(StoreForbiddenError);
+  });
+
+  // ── owner 譲渡 ──
+
+  it("transferStoreOwner: owner が admin を指名して譲渡すると role が入れ替わる（owner は常に1人）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    seedAdmin(m, "store-1", "admin-1", "2026-06-24T00:00:00Z");
+
+    await transferStoreOwner(m.repo, "owner-1", "store-1", "admin-1");
+
+    // 現 owner は admin へ、対象は owner へ
+    expect(await m.repo.findActiveAdminRole("store-1", "owner-1")).toBe("admin");
+    expect(await m.repo.findActiveAdminRole("store-1", "admin-1")).toBe("owner");
+    // active な owner は1人だけ（不変条件）
+    const owners = (await m.repo.listActiveAdmins("store-1")).filter((a) => a.role === "owner");
+    expect(owners.length).toBe(1);
+    expect(owners[0]!.authUserId).toBe("admin-1");
+    // 新 owner は owner 専用操作（閉店）ができ、旧 owner はできない
+    await expect(closeStore(m.repo, "owner-1", "store-1")).rejects.toBeInstanceOf(StoreForbiddenError);
+  });
+
+  it("transferStoreOwner: 指名先が active な admin でなければ StoreAdminNotFoundError", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    // 存在しない相手
+    await expect(
+      transferStoreOwner(m.repo, "owner-1", "store-1", "no-such"),
+    ).rejects.toBeInstanceOf(StoreAdminNotFoundError);
+  });
+
+  it("transferStoreOwner: owner でない管理者(admin)は譲渡できない（owner 専用）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    seedAdmin(m, "store-1", "admin-1", "2026-06-24T00:00:00Z");
+    seedAdmin(m, "store-1", "admin-2", "2026-06-25T00:00:00Z");
+    await expect(
+      transferStoreOwner(m.repo, "admin-1", "store-1", "admin-2"),
+    ).rejects.toBeInstanceOf(StoreForbiddenError);
+  });
+
+  // ── owner 離脱／消失時の自動継承・自動削除 ──
+
+  it("handleOwnerDeparture: 残る管理者がいれば最古参（created_at 最小）を owner へ自動昇格する", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    // 新しい方を先に足して、最古参が古参順で選ばれることを確認する
+    seedAdmin(m, "store-1", "admin-new", "2026-06-25T00:00:00Z");
+    seedAdmin(m, "store-1", "admin-old", "2026-06-24T00:00:00Z");
+
+    const result = await handleOwnerDeparture(m.repo, "store-1", "owner-1");
+
+    expect(result).toEqual({ action: "promoted", newOwnerAuthUserId: "admin-old" });
+    // 旧 owner は外れ、最古参が owner に
+    expect(await m.repo.findActiveAdminRole("store-1", "owner-1")).toBeNull();
+    expect(await m.repo.findActiveAdminRole("store-1", "admin-old")).toBe("owner");
+    expect(await m.repo.findActiveAdminRole("store-1", "admin-new")).toBe("admin");
+    // 店は生きたまま（閉店しない）
+    expect((await m.repo.findStoreById("store-1"))?.closedAt).toBeNull();
+    // owner は1人だけ
+    const owners = (await m.repo.listActiveAdmins("store-1")).filter((a) => a.role === "owner");
+    expect(owners.length).toBe(1);
+  });
+
+  it("handleOwnerDeparture: 管理者が誰もいなければ店を論理削除（閉店）する", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: null, avatarUrl: null },
+    ]);
+
+    const result = await handleOwnerDeparture(m.repo, "store-1", "owner-1");
+
+    expect(result).toEqual({ action: "closed" });
+    // 店は閉店（論理削除）され、解決から外れる
+    expect((await m.repo.findStoreById("store-1"))?.closedAt).not.toBeNull();
+    expect(await getMyStore(m.repo, "owner-1")).toBeNull();
   });
 });
 

@@ -4,6 +4,7 @@
  * auth.* は Supabase 管理のため、ここでは public.* のみを定義する。
  */
 export { store } from "./store.js";
+export { storeAdmin } from "./store-admin.js";
 export { staff } from "./staff.js";
 export { staffStore } from "./staff-store.js";
 export { staffInvite } from "./staff-invite.js";

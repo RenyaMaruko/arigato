@@ -5,6 +5,7 @@ import {
   CreateStoreInputSchema,
   CreateStoreInviteInputSchema,
   StoreGratitudeQuerySchema,
+  TransferStoreOwnerInputSchema,
   type StoreProfile,
   type StoreInviteCreated,
   type StoreInvitesResponse,
@@ -24,6 +25,7 @@ import {
   StoreAlreadyExistsError,
   StoreInviteNotFoundError,
   StoreStaffNotFoundError,
+  StoreAdminNotFoundError,
   InvalidImageError,
 } from "./store.service.js";
 
@@ -87,6 +89,14 @@ type StoreDeps = {
     storeId: string,
     period: { from?: string; to?: string; staffId?: string },
   ) => Promise<StoreGratitude>;
+  // 店を論理削除（閉店）する（owner のみ）。QR・所属を無効化し、履歴・資金は保全する
+  closeStore: (authUserId: string, storeId: string) => Promise<void>;
+  // owner を譲渡する（owner のみ）。active な admin1人（targetAuthUserId）を指名して引き継ぐ
+  transferStoreOwner: (
+    authUserId: string,
+    storeId: string,
+    targetAuthUserId: string,
+  ) => Promise<void>;
 };
 
 // 店スコープのアクセス制御エラーを HTTP ステータスに変換する共通ハンドラ。
@@ -294,7 +304,44 @@ export function createStoreRoute(deps: StoreDeps) {
         if (mapped) return c.json({ error: mapped.error }, mapped.status);
         throw err;
       }
-    });
+    })
+    // 店を論理削除（閉店）する（owner のみ）。QR・所属を無効化し、履歴・資金は保全する。
+    // owner でない・他店・非管理者・閉店済みは 404（情報秘匿）。
+    .post("/:storeId/close", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      try {
+        await deps.closeStore(authUser.id, storeId);
+        return c.json({ ok: true });
+      } catch (err) {
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // owner を譲渡する（owner のみ）。body の targetAuthUserId（active な admin）へ引き継ぐ。
+    // owner でない・他店は 404、target が active な admin でなければ 404。
+    .post(
+      "/:storeId/transfer-owner",
+      zValidator("json", TransferStoreOwnerInputSchema),
+      async (c) => {
+        const authUser = c.get("authUser");
+        const storeId = c.req.param("storeId");
+        const { targetAuthUserId } = c.req.valid("json");
+        try {
+          await deps.transferStoreOwner(authUser.id, storeId, targetAuthUserId);
+          return c.json({ ok: true });
+        } catch (err) {
+          // 指名先が active な admin でない（存在しない・owner 自身・脱退済み）は 404
+          if (err instanceof StoreAdminNotFoundError) {
+            return c.json({ error: "store_admin_not_found" }, 404);
+          }
+          const mapped = handleStoreScopeError(err);
+          if (mapped) return c.json({ error: mapped.error }, mapped.status);
+          throw err;
+        }
+      },
+    );
 
   return route;
 }
