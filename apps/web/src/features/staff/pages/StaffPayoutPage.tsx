@@ -186,19 +186,16 @@ export function StaffPayoutPage() {
                 >
                   {t("staff.payoutCta")}
                 </button>
-                {/* 送金できない理由（available 0/最低額未満）を控えめに添える。
-                    準備中があるなら「数日後に送金できます」（available_on があれば日付）を出す。 */}
-                {belowMinimum && (
+                {/* 送金できない理由（残高0/最低額未満）を控えめに添える。
+                    準備中のみ（pendingOnly）のときは、下の「準備中」セクションが日付ごとに説明するため
+                    ここには何も出さない（重複した「◯月◯日から送金できます」を廃止）。 */}
+                {belowMinimum && !pendingOnly && (
                   <p className="px-1 text-center text-token-xs leading-relaxed text-muted">
-                    {pendingOnly
-                      ? nextAvailableLabel
-                        ? t("staff.payoutPendingDate", { date: nextAvailableLabel })
-                        : t("staff.payoutPendingOnly")
-                      : sendableAmount === 0
-                        ? t("staff.payoutNoBalance")
-                        : t("staff.payoutBelowMinimum", {
-                            min: `¥${MIN_PAYOUT_AMOUNT.toLocaleString()}`,
-                          })}
+                    {sendableAmount === 0
+                      ? t("staff.payoutNoBalance")
+                      : t("staff.payoutBelowMinimum", {
+                          min: `¥${MIN_PAYOUT_AMOUNT.toLocaleString()}`,
+                        })}
                   </p>
                 )}
               </div>
@@ -310,7 +307,7 @@ export function StaffPayoutPage() {
               {t("staff.payoutConfirmTitle")}
             </div>
             {/* 送金する金額と着金タイミングを明示してから実行する */}
-            <p className="mt-3 text-center text-token-md leading-relaxed text-ink-sub">
+            <p className="mt-3 whitespace-pre-line text-center text-token-md leading-relaxed text-ink-sub">
               {t("staff.payoutConfirmBody", {
                 amount: `¥${sendableAmount.toLocaleString()}`,
               })}

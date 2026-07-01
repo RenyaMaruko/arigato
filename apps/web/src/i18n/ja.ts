@@ -247,7 +247,7 @@ export const ja = {
       payoutCta: "送金する",
       payoutConfirmTitle: "送金の確認",
       // {{amount}} に送金額（例: ¥7,650）
-      payoutConfirmBody: "{{amount}} を登録口座へ送金します。申請から数営業日で着金します。",
+      payoutConfirmBody: "{{amount}} を登録口座へ送金します。\n申請から数営業日で着金します。",
       payoutConfirmCta: "送金する",
       payoutCancel: "キャンセル",
       payoutSending: "送金中…",
