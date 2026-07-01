@@ -19,8 +19,8 @@ import type { StoreRole } from "./store.model.js";
 export function createInMemoryStoreRepository(): StoreRepository {
   // 店の簡易ストア（id をキー）
   const stores = new Map<string, StoreRow>();
-  // 招待の簡易ストア（store_id ごとに保持）
-  const invitesByStore = new Map<string, StoreInviteRow[]>();
+  // 招待の簡易ストア（store_id ごとに保持）。type（staff/admin）を内部で持ち、一覧はスタッフ招待のみ返す。
+  const invitesByStore = new Map<string, (StoreInviteRow & { type: "staff" | "admin" })[]>();
   // スタッフの簡易ストア（store_id ごとに保持）。leftAt は論理削除（在籍解除）の時刻（null＝在籍中）。
   const staffByStore = new Map<string, (StoreStaffRow & { joinedAt: string; leftAt: number | null })[]>();
   // 店の管理者（store_admin）。store_id ごとに保持。leftAt は論理削除（null＝active）。
@@ -119,6 +119,46 @@ export function createInMemoryStoreRepository(): StoreRepository {
         }));
     },
 
+    // 管理者一覧（表示用）。owner を先頭に、その後古参順。インメモリは staff プロフィールを持たないため
+    // 表示名・顔写真は null（実 DB は staff を左結合して埋める）。
+    async listAdminsForDisplay(storeId) {
+      return (adminsByStore.get(storeId) ?? [])
+        .filter((a) => a.leftAt === null)
+        .sort((x, y) => {
+          // owner を先頭にする
+          if ((x.role === "owner") !== (y.role === "owner")) return x.role === "owner" ? -1 : 1;
+          if (x.createdAt !== y.createdAt) return x.createdAt < y.createdAt ? -1 : 1;
+          return x.authUserId < y.authUserId ? -1 : 1;
+        })
+        .map((a) => ({
+          authUserId: a.authUserId,
+          role: a.role,
+          displayName: null,
+          avatarUrl: null,
+          createdAt: a.createdAt,
+        }));
+    },
+
+    // active な管理者(admin)1人を外す（owner は対象外）。外せた件数を返す
+    async removeAdmin(storeId, authUserId) {
+      const a = (adminsByStore.get(storeId) ?? []).find(
+        (x) => x.authUserId === authUserId && x.role === "admin" && x.leftAt === null,
+      );
+      if (!a) return 0;
+      a.leftAt = Date.now();
+      return 1;
+    },
+
+    // 自分が active な管理者である営業中の店が1つ以上あるか（モード切替の判定）
+    async hasManagedStore(authUserId) {
+      for (const [storeId, admins] of adminsByStore) {
+        const store = stores.get(storeId);
+        if (!store || store.closedAt !== null) continue;
+        if (admins.some((a) => a.authUserId === authUserId && a.leftAt === null)) return true;
+      }
+      return false;
+    },
+
     async leaveAdmin(storeId, authUserId) {
       const a = (adminsByStore.get(storeId) ?? []).find(
         (x) => x.authUserId === authUserId && x.leftAt === null,
@@ -193,14 +233,15 @@ export function createInMemoryStoreRepository(): StoreRepository {
     },
 
     async createInvite(storeId, code, label) {
-      const invite: StoreInviteRow = {
+      const invite = {
         code,
-        status: "pending",
+        status: "pending" as const,
         createdAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
         acceptedStaffName: null,
         acceptedAt: null,
         // 誰宛かの任意メモ（未入力は null）
         label: label ?? null,
+        type: "staff" as const,
       };
       const list = invitesByStore.get(storeId) ?? [];
       // 新しい順に保つため先頭に積む
@@ -209,9 +250,28 @@ export function createInMemoryStoreRepository(): StoreRepository {
       return invite;
     },
 
+    // 管理者招待（type='admin'）を発行する（受け入れで store_admin role=admin を作る）
+    async createAdminInvite(storeId, code, label) {
+      const invite = {
+        code,
+        status: "pending" as const,
+        createdAt: new Date().toISOString().replace(/\.\d+Z$/, "Z"),
+        acceptedStaffName: null,
+        acceptedAt: null,
+        label: label ?? null,
+        type: "admin" as const,
+      };
+      const list = invitesByStore.get(storeId) ?? [];
+      list.unshift(invite);
+      invitesByStore.set(storeId, list);
+      return invite;
+    },
+
     async listInvites(storeId) {
-      // 招待中（pending）だけを新しい順に返す（accepted/revoked は二重表示・履歴管理しないため除く）
-      return (invitesByStore.get(storeId) ?? []).filter((i) => i.status === "pending");
+      // 招待中（pending）のスタッフ招待だけを新しい順に返す（管理者招待・accepted/revoked は除く）
+      return (invitesByStore.get(storeId) ?? []).filter(
+        (i) => i.status === "pending" && i.type === "staff",
+      );
     },
 
     async findInviteByCode(storeId, code) {

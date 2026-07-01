@@ -20,6 +20,15 @@ export const StoreInviteStatusSchema = z.enum(["pending", "accepted", "revoked"]
 export type StoreInviteStatus = z.infer<typeof StoreInviteStatusSchema>;
 
 /**
+ * 招待の種類（staff_invite.type）。
+ * - staff: スタッフ招待（受け入れで staff_store 行＝在籍・QR を作る。owner＋管理者が発行できる）
+ * - admin: 管理者招待（受け入れで store_admin 行 role=admin を作る。owner のみ発行できる）
+ * ロールは発行時に確定し、受け手は選ばない（管理者招待で付与されるのは常に role=admin）。
+ */
+export const StoreInviteTypeSchema = z.enum(["staff", "admin"]);
+export type StoreInviteType = z.infer<typeof StoreInviteTypeSchema>;
+
+/**
  * 店舗の管理者ロール（store_admin.role）。
  * - owner: 店の所有者（管理者管理・owner譲渡・店削除ができる。各店に常に1人）
  * - admin: 日常運用の管理者（店情報編集・スタッフ招待/管理・記録閲覧ができる）
@@ -49,6 +58,50 @@ export const StoreAdminSchema = z.object({
   createdAt: z.string(),
 });
 export type StoreAdmin = z.infer<typeof StoreAdminSchema>;
+
+/**
+ * GET /store/:storeId/admins の1件分（管理者一覧・店の管理モード内）。
+ * 管理者の人（auth_user_id）・ロール（owner/admin）・表示名（staff プロフィールがあれば）を返す。
+ * 金額は一切含めない（店はお金に触れない）。isSelf はログイン中の本人かどうか（UI の「あなた」表示・
+ * 自分を外す/自分へ譲渡できない判定に使う）。
+ */
+export const StoreAdminListItemSchema = z.object({
+  authUserId: z.string().uuid(),
+  role: StoreRoleSchema,
+  // その人の staff プロフィール表示名（プロフィール未作成なら null）
+  displayName: z.string().nullable(),
+  // その人の staff プロフィール顔写真（未設定・未作成は null）
+  avatarUrl: z.string().nullable(),
+  // その店に管理者として加わった日時（ISO 文字列・古参順の表示に使う）
+  createdAt: z.string(),
+  // ログイン中の本人か（自分を外せない・自分へ譲渡できない等の UI 判定に使う）
+  isSelf: z.boolean(),
+});
+export type StoreAdminListItem = z.infer<typeof StoreAdminListItemSchema>;
+
+/**
+ * GET /store/:storeId/admins の応答（管理者一覧）。
+ * owner を先頭に、その後 admin を古参順で返す。viewerRole はログイン中の閲覧者のロール
+ * （owner のときだけ管理者の招待・削除・owner 譲渡ボタンを出す）。
+ */
+export const StoreAdminsResponseSchema = z.object({
+  items: z.array(StoreAdminListItemSchema),
+  // 閲覧者（ログイン中）のこの店でのロール。owner だけが管理者管理の操作を行える
+  viewerRole: StoreRoleSchema,
+});
+export type StoreAdminsResponse = z.infer<typeof StoreAdminsResponseSchema>;
+
+/**
+ * POST /store/:storeId/owner/leave（owner が店から抜ける）の応答（owner ライフサイクル §5.4）。
+ * - promoted: 残る最古参の管理者を owner へ自動昇格した（newOwnerAuthUserId が新 owner）
+ * - closed:   残る管理者がいないので店を論理削除（閉店）した
+ */
+export const StoreOwnerLeaveResultSchema = z.object({
+  action: z.enum(["promoted", "closed"]),
+  // promoted のときの新 owner（closed のときは null）
+  newOwnerAuthUserId: z.string().uuid().nullable(),
+});
+export type StoreOwnerLeaveResult = z.infer<typeof StoreOwnerLeaveResultSchema>;
 
 /**
  * GET /store/me・GET /store/:storeId（店プロフィール・店ホームの基盤）の応答。

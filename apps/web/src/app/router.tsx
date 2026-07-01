@@ -32,6 +32,8 @@ import { StoreInviteResendPage } from "../features/store/pages/StoreInviteResend
 import { StoreGratitudePage } from "../features/store/pages/StoreGratitudePage.js";
 import { StoreSettingsPage } from "../features/store/pages/StoreSettingsPage.js";
 import { StoreProfilePage } from "../features/store/pages/StoreProfilePage.js";
+import { StoreAdminsPage } from "../features/store/pages/StoreAdminsPage.js";
+import { StoreAdminInviteCreatePage } from "../features/store/pages/StoreAdminInviteCreatePage.js";
 
 /**
  * TanStack Router のルーティング定義。
@@ -317,6 +319,20 @@ const storeProfileRoute = createRoute({
   component: StoreProfilePage,
 });
 
+// "/store/admins" 管理者管理（一覧・招待・削除・owner 譲渡・退任・閉店）。owner 専用操作は画面内で出し分ける
+const storeAdminsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/admins",
+  component: StoreAdminsPage,
+});
+
+// "/store/admins/invite" 管理者招待（リンク発行・owner のみ）
+const storeAdminInviteRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/admins/invite",
+  component: StoreAdminInviteCreatePage,
+});
+
 // ルートツリーを組み立てる
 const routeTree = rootRoute.addChildren([
   indexRoute,
@@ -350,6 +366,8 @@ const routeTree = rootRoute.addChildren([
   storeGratitudeRoute,
   storeSettingsRoute,
   storeProfileRoute,
+  storeAdminsRoute,
+  storeAdminInviteRoute,
 ]);
 
 export const router = createRouter({ routeTree });

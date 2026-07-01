@@ -81,6 +81,8 @@ function toStaffMe(
   memberships: StaffMembershipRow[],
   receiptStores: StaffReceiptStoreRow[],
   buildUrl: BuildTipUrl,
+  // 兼任者（active な store_admin を持つ人）か。true のときだけ店員側に「店の管理へ」を出す
+  managesStore: boolean,
 ): StaffMe {
   return {
     id: profile.id,
@@ -88,6 +90,8 @@ function toStaffMe(
     headline: profile.headline,
     avatarUrl: profile.avatarUrl,
     identityStatus: profile.identityStatus,
+    // 兼任者（管理する店がある）か。モード切替導線「店の管理へ」の出し分けに使う
+    managesStore,
     // 所属店一覧（active のみ・各 membership ごとに店ごとQR用URL を組み立てる）
     memberships: memberships.map((m) => ({
       membershipId: m.membershipId,
@@ -124,6 +128,8 @@ export async function getInviteInfo(
     code: invite.code,
     storeId: invite.storeId,
     storeName: invite.storeName,
+    // 招待の種類（staff: 店員として参加 / admin: 店の管理者として参加）。受け入れ画面の表示を出し分ける
+    type: invite.inviteType,
     valid,
   };
 }
@@ -143,7 +149,9 @@ export async function getStaffMe(
   // 所属一覧（active のみ）と、受取履歴の店フィルタ用の店一覧（在籍中＋脱退済み）を併せて取得する
   const memberships = await repo.listMembershipsByAuthUserId(authUserId);
   const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
-  return toStaffMe(profile, memberships, receiptStores, buildUrl);
+  // 兼任者（active な store_admin を持つ人）か（モード切替導線の出し分け）
+  const managesStore = await repo.hasManagedStore(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore);
 }
 
 // プロフィール作成・参加で起こりうる業務エラー（Route で HTTP ステータスに変換する）
@@ -224,8 +232,10 @@ export async function createStaffProfile(
     }
   }
 
-  // 作成直後は所属なし・受取も無し。どちらも空配列で返す（後続の join で追加される）
-  return toStaffMe(profile, [], [], buildUrl);
+  // 作成直後は所属なし・受取も無し。どちらも空配列で返す（後続の join で追加される）。
+  // 稀に「先に店を作成（owner）してからプロフィール作成」した人もいるため managesStore は問い合わせる。
+  const managesStore = await repo.hasManagedStore(authUserId);
+  return toStaffMe(profile, [], [], buildUrl, managesStore);
 }
 
 /**
@@ -254,11 +264,29 @@ export async function joinStore(
     throw new InviteNotUsableError();
   }
 
-  // 所属を追加（既存なら already_member）。二重消費・一意制約は Repository のトランザクションで担保
+  // 受け入れ分岐（§2.3）: 招待の type で分ける。
+  //  - admin → store_admin 行（role=admin・active）を作る/再有効化する（所属＝staff_store は作らない）
+  //  - staff → 従来どおり staff_store 行（在籍・QR）を作る/再有効化する
   try {
+    if (invite.inviteType === "admin") {
+      // 管理者招待の受け入れ。二重付与防止・脱退再有効化は Repository のトランザクションで担保
+      const result = await repo.acceptAdminInvite(authUserId, inviteCode);
+      return {
+        status: result.outcome,
+        type: "admin",
+        // 管理者招待は所属（staff_store）を作らないため membership/QR は無い
+        membershipId: null,
+        storeId: result.storeId,
+        storeName: result.storeName,
+        tipUrl: null,
+      };
+    }
+
+    // スタッフ招待の受け入れ（従来フロー）。二重消費・一意制約は Repository のトランザクションで担保
     const result = await repo.joinStoreByInvite(authUserId, inviteCode);
     return {
       status: result.outcome,
+      type: "staff",
       membershipId: result.membershipId,
       storeId: result.storeId,
       storeName: result.storeName,
@@ -316,7 +344,8 @@ export async function leaveStoreMembership(
   // 脱退後の最新状態を返す（その店は memberships から消え、receiptStores には残る）
   const memberships = await repo.listMembershipsByAuthUserId(authUserId);
   const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
-  return toStaffMe(profile, memberships, receiptStores, buildUrl);
+  const managesStore = await repo.hasManagedStore(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore);
 }
 
 /**
@@ -339,7 +368,8 @@ export async function updateStaffProfile(
   // 更新後の所属一覧（active）・受取履歴の店一覧も併せて返す（ホーム再描画に使える）
   const memberships = await repo.listMembershipsByAuthUserId(authUserId);
   const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
-  return toStaffMe(profile, memberships, receiptStores, buildUrl);
+  const managesStore = await repo.hasManagedStore(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore);
 }
 
 // 画像を公開バケットへアップロードする infrastructure 関数の型（コンポジションルートで注入）。

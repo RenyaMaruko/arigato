@@ -93,23 +93,39 @@ export function StaffSettingsPage() {
         </div>
 
         {/*
-          店の管理・開設への暫定導線（フェーズ1）。
-          ログイン後は全員この店員ホーム側に着地するが、店を持つ人／これから開設する人が
-          /store へ到達できる経路を最低1つ残すためのもの。
-          本格的なモード切替 UX（兼任者のみ表示・owner 判定）はフェーズ3で作るため、ここは最小の暫定リンク。
+          モード切替 UX（フェーズ3・§4）。
+          - 兼任者（active な store_admin を持つ人＝me.managesStore）だけに「店の管理へ」を出す。
+          - 管理する店が無い人には「店を開設する」を出す（押すと店作成→owner→店の管理モード）。
+          どちらも器（/store）へ遷移する。/store 側が店の有無で「作成」か「ホーム」を出し分ける。
         */}
         <div className="mt-6 overflow-hidden rounded-2xl bg-page shadow-sm">
-          <SettingRow
-            label={t("staff.settingsStoreAdmin")}
-            onClick={() => navigate({ to: "/store" })}
-            icon={
-              <>
-                <path d="M3 9l1.5-5h15L21 9" />
-                <path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9" />
-                <path d="M9 20v-6h6v6" />
-              </>
-            }
-          />
+          {meQuery.data.managesStore ? (
+            <SettingRow
+              label={t("staff.settingsStoreManage")}
+              sublabel={t("staff.settingsStoreManageSub")}
+              onClick={() => navigate({ to: "/store" })}
+              icon={
+                <>
+                  <path d="M3 9l1.5-5h15L21 9" />
+                  <path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9" />
+                  <path d="M9 20v-6h6v6" />
+                </>
+              }
+            />
+          ) : (
+            <SettingRow
+              label={t("staff.settingsStoreOpen")}
+              sublabel={t("staff.settingsStoreOpenSub")}
+              onClick={() => navigate({ to: "/store" })}
+              icon={
+                <>
+                  <path d="M3 9l1.5-5h15L21 9" />
+                  <path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9" />
+                  <path d="M12 13v4M10 15h4" />
+                </>
+              }
+            />
+          )}
         </div>
 
         {/* ログアウト */}
@@ -132,10 +148,13 @@ export function StaffSettingsPage() {
  */
 function SettingRow({
   label,
+  sublabel,
   icon,
   onClick,
 }: {
   label: string;
+  // 補足の説明行（任意・モード切替の説明などに使う）
+  sublabel?: string;
   icon: ReactNode;
   onClick?: () => void;
 }) {
@@ -161,7 +180,10 @@ function SettingRow({
           {icon}
         </svg>
       </span>
-      <span className="flex-1 text-token-lg text-ink">{label}</span>
+      <span className="flex-1">
+        <span className="block text-token-lg text-ink">{label}</span>
+        {sublabel && <span className="mt-0.5 block text-token-xs text-muted">{sublabel}</span>}
+      </span>
       <span className="text-muted-soft">
         <svg
           width="18"

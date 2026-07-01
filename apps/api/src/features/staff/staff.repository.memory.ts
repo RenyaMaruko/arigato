@@ -41,6 +41,13 @@ export function createInMemoryStaffRepository(): StaffRepository {
     string,
     { stripeAccountId: string | null; identityStatus: IdentityStatus }
   >();
+  // 店の管理者（store_admin 相当）。キー `${storeId}::${authUserId}`。leftAt は論理削除（null＝active）。
+  // 管理者招待の受け入れ（acceptAdminInvite）とモード切替の判定（hasManagedStore）に使う。
+  const storeAdmins = new Map<
+    string,
+    { storeId: string; authUserId: string; role: "owner" | "admin"; leftAt: number | null }
+  >();
+  const adminKey = (storeId: string, authUserId: string) => `${storeId}::${authUserId}`;
 
   // 開発用シード招待（任意）。導入承認に同意済みの店の pending 招待を1件用意する
   const seedCode = process.env.SEED_INVITE_CODE;
@@ -50,6 +57,8 @@ export function createInMemoryStaffRepository(): StaffRepository {
       storeId: randomUUID(),
       storeName: process.env.SEED_STORE_NAME ?? "テスト店",
       inviteStatus: "pending",
+      // 開発シードはスタッフ招待（在籍・QR）
+      inviteType: "staff",
       storeAdopted: true,
     });
   }
@@ -170,6 +179,65 @@ export function createInMemoryStaffRepository(): StaffRepository {
         storeId: invite.storeId,
         storeName: invite.storeName,
       };
+    },
+
+    // 管理者招待（type='admin'）を受け入れて store_admin role=admin を作る/再有効化する
+    async acceptAdminInvite(authUserId, code) {
+      const invite = invites.get(code);
+      // pending かつ type='admin' かつ店承認済みのときだけ使える
+      if (
+        !invite ||
+        invite.inviteStatus !== "pending" ||
+        invite.inviteType !== "admin" ||
+        !invite.storeAdopted
+      ) {
+        throw new Error("invite_not_usable");
+      }
+      if (!profileByAuth.get(authUserId)) {
+        throw new Error("staff_not_found");
+      }
+      const key = adminKey(invite.storeId, authUserId);
+      const existing = storeAdmins.get(key);
+      // 既に active な管理者（owner/admin）→ already_member（二重付与しない・招待は消費しない）
+      if (existing && existing.leftAt === null) {
+        return {
+          outcome: "already_member" as const,
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      }
+      // 脱退済み → 再有効化（role='admin'）＋招待を消費
+      if (existing && existing.leftAt !== null) {
+        storeAdmins.set(key, { ...existing, role: "admin", leftAt: null });
+        invites.set(code, { ...invite, inviteStatus: "accepted" });
+        return {
+          outcome: "rejoined" as const,
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      }
+      // 無ければ新規に管理者(admin)を作る＋招待を消費
+      storeAdmins.set(key, {
+        storeId: invite.storeId,
+        authUserId,
+        role: "admin",
+        leftAt: null,
+      });
+      invites.set(code, { ...invite, inviteStatus: "accepted" });
+      return {
+        outcome: "joined" as const,
+        storeId: invite.storeId,
+        storeName: invite.storeName,
+      };
+    },
+
+    // 自分が active な管理者である店が1つ以上あるか（モード切替の判定）。
+    // メモリ実装は店の閉店を追わないため active な store_admin の有無だけで判定する。
+    async hasManagedStore(authUserId) {
+      for (const a of storeAdmins.values()) {
+        if (a.authUserId === authUserId && a.leftAt === null) return true;
+      }
+      return false;
     },
 
     async updateStaffProfile(authUserId, params) {

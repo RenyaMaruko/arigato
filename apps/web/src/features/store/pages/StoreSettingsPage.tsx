@@ -56,6 +56,19 @@ function StoreSettingsContent() {
             }
           />
           <Divider />
+          {/* 管理者（owner/admin の一覧・招待・削除・owner 譲渡）。owner のみ操作は一覧画面側で出し分ける */}
+          <SettingRow
+            label={t("store.settingsAdmins")}
+            onClick={() => navigate({ to: "/store/admins" })}
+            icon={
+              <>
+                <circle cx="9" cy="8" r="3.2" />
+                <path d="M3.5 19c0-3.2 2.6-5 5.5-5s5.5 1.8 5.5 5" />
+                <path d="M16 8.5a2.6 2.6 0 1 0 0-1M17 14c2.2.3 3.8 1.8 3.8 4.2" />
+              </>
+            }
+          />
+          <Divider />
           <SettingRow
             label={t("store.settingsApproval")}
             onClick={() => navigate({ to: "/store/approval" })}
@@ -97,6 +110,20 @@ function StoreSettingsContent() {
               <>
                 <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
                 <path d="M14 3v5h5" />
+              </>
+            }
+          />
+        </div>
+
+        {/* モード切替（店の管理 → 店員モード）。店の管理は兼任者のみ到達するため常に出してよい（§4） */}
+        <div className="mt-6 overflow-hidden rounded-2xl bg-page shadow-sm">
+          <SettingRow
+            label={t("store.settingsStaffMode")}
+            onClick={() => navigate({ to: "/staff" })}
+            icon={
+              <>
+                <circle cx="12" cy="8" r="4" />
+                <path d="M4.5 20c0-4 3.5-6 7.5-6s7.5 2 7.5 6" />
               </>
             }
           />

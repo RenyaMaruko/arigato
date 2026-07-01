@@ -12,6 +12,12 @@ import {
   fetchStoreStaffDetail,
   removeStoreStaff,
   fetchStoreGratitude,
+  fetchStoreAdmins,
+  createStoreAdminInvite,
+  removeStoreAdmin,
+  transferStoreOwner,
+  closeStore,
+  leaveStoreAsOwner,
 } from "../api/store.api.js";
 
 /**
@@ -190,5 +196,87 @@ export function useStoreGratitude(
     queryFn: () => fetchStoreGratitude(storeId!, period),
     enabled,
     retry: false,
+  });
+}
+
+/**
+ * 管理者一覧（GET /store/:storeId/admins）を取得する。
+ * 応答の viewerRole で owner だけに管理者の招待・削除・owner 譲渡ボタンを出す。
+ */
+export function useStoreAdmins(storeId: string | undefined) {
+  return useQuery({
+    queryKey: ["store", "admins", storeId],
+    queryFn: () => fetchStoreAdmins(storeId!),
+    enabled: Boolean(storeId),
+    retry: false,
+  });
+}
+
+/**
+ * 管理者招待リンクの発行（POST /store/:storeId/admin-invites・owner のみ）。
+ * 引数 label は「誰宛か」の任意メモ。成功で招待リンクを返す（一覧の無効化は不要＝別導線）。
+ */
+export function useCreateStoreAdminInvite(storeId: string | undefined) {
+  return useMutation({
+    mutationFn: (label?: string) => createStoreAdminInvite(storeId!, label),
+  });
+}
+
+/**
+ * 管理者を外す（POST /store/:storeId/admins/:authUserId/remove・owner のみ）。
+ * 成功時は管理者一覧を取り直す。
+ */
+export function useRemoveStoreAdmin(storeId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (authUserId: string) => removeStoreAdmin(storeId!, authUserId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["store", "admins", storeId] });
+    },
+  });
+}
+
+/**
+ * owner を譲渡する（POST /store/:storeId/transfer-owner・owner のみ）。
+ * 成功時は管理者一覧・自店（GET /store/me のロール起点）を取り直す。
+ */
+export function useTransferStoreOwner(storeId: string | undefined) {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (targetAuthUserId: string) => transferStoreOwner(storeId!, targetAuthUserId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["store", "admins", storeId] });
+      qc.invalidateQueries({ queryKey: STORE_ME_KEY });
+    },
+  });
+}
+
+/**
+ * 店を論理削除（閉店）する（POST /store/:storeId/close・owner のみ）。
+ * 成功時は自店・所属店（staff 側）を取り直す（閉店後は店ホームに来られなくなる）。
+ */
+export function useCloseStore() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (storeId: string) => closeStore(storeId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: STORE_ME_KEY });
+      qc.invalidateQueries({ queryKey: ["staff", "me"] });
+    },
+  });
+}
+
+/**
+ * owner が店から抜ける（POST /store/:storeId/owner/leave・owner のみ）。
+ * 残る管理者がいれば自動昇格・いなければ閉店。成功時は自店・所属店を取り直す。
+ */
+export function useLeaveStoreAsOwner() {
+  const qc = useQueryClient();
+  return useMutation({
+    mutationFn: (storeId: string) => leaveStoreAsOwner(storeId),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: STORE_ME_KEY });
+      qc.invalidateQueries({ queryKey: ["staff", "me"] });
+    },
   });
 }

@@ -15,6 +15,10 @@ import {
   closeStore,
   transferStoreOwner,
   handleOwnerDeparture,
+  createStoreAdminInvite,
+  listStoreAdmins,
+  removeStoreAdmin,
+  leaveStoreAsOwner,
   StoreForbiddenError,
   StoreNotFoundError,
   StoreAlreadyExistsError,
@@ -279,6 +283,56 @@ function createMockRepo() {
         }));
       }
       return [...(perStaffByStore.get(storeId) ?? [])];
+    },
+    // 管理者一覧（表示用）。owner 先頭・古参順。インメモリは staff プロフィールを持たないため表示名は null
+    async listAdminsForDisplay(storeId) {
+      return (adminsByStore.get(storeId) ?? [])
+        .filter((a) => a.leftAt === null)
+        .sort((x, y) => {
+          if ((x.role === "owner") !== (y.role === "owner")) return x.role === "owner" ? -1 : 1;
+          if (x.createdAt !== y.createdAt) return x.createdAt < y.createdAt ? -1 : 1;
+          return x.authUserId < y.authUserId ? -1 : 1;
+        })
+        .map((a) => ({
+          authUserId: a.authUserId,
+          role: a.role,
+          displayName: null,
+          avatarUrl: null,
+          createdAt: a.createdAt,
+        }));
+    },
+    // active な管理者(admin)1人を外す（owner は対象外）。外せた件数を返す
+    async removeAdmin(storeId, authUserId) {
+      const a = (adminsByStore.get(storeId) ?? []).find(
+        (x) => x.authUserId === authUserId && x.role === "admin" && x.leftAt === null,
+      );
+      if (!a) return 0;
+      a.leftAt = Date.now();
+      return 1;
+    },
+    // 自分が active な管理者である営業中の店が1つ以上あるか（モード切替の判定）
+    async hasManagedStore(authUserId) {
+      for (const [storeId, admins] of adminsByStore) {
+        const store = stores.get(storeId);
+        if (!store || store.closedAt !== null) continue;
+        if (admins.some((a) => a.authUserId === authUserId && a.leftAt === null)) return true;
+      }
+      return false;
+    },
+    // 管理者招待（type='admin'）を発行する（pending）。テストでは type を追跡しないが契約を満たす
+    async createAdminInvite(storeId, code, label) {
+      const invite: StoreInviteRow = {
+        code,
+        status: "pending",
+        createdAt: "2026-06-23T00:00:00Z",
+        acceptedStaffName: null,
+        acceptedAt: null,
+        label: label ?? null,
+      };
+      const list = invitesByStore.get(storeId) ?? [];
+      list.unshift(invite);
+      invitesByStore.set(storeId, list);
+      return invite;
     },
   };
 
@@ -939,5 +993,128 @@ describe("store.service uploadStoreLogo", () => {
       }),
     ).rejects.toBeInstanceOf(InvalidImageError);
     expect(fakeUpload).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// フェーズ3: 管理者招待の発行権限・管理者一覧/削除・owner 離脱の UI トリガ
+// ─────────────────────────────────────────────────────────────
+describe("store.service（管理者管理・フェーズ3）", () => {
+  let m: ReturnType<typeof createMockRepo>;
+  beforeEach(() => {
+    m = createMockRepo();
+  });
+
+  it("発行権限: スタッフ招待（createStoreInvite）は owner も管理者(admin)も発行できる", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    seedAdmin(m, "store-1", "admin-1", "2026-06-24T00:00:00Z");
+    // owner が発行できる
+    const byOwner = await createStoreInvite(m.repo, buildUrl, "owner-1", "store-1", {});
+    expect(byOwner.code).toBeTruthy();
+    // 管理者(admin)も発行できる（requireStoreAdmin）
+    const byAdmin = await createStoreInvite(m.repo, buildUrl, "admin-1", "store-1", {});
+    expect(byAdmin.code).toBeTruthy();
+  });
+
+  it("発行権限: 管理者招待（createStoreAdminInvite）は owner のみ発行できる（admin は 403 相当）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    seedAdmin(m, "store-1", "admin-1", "2026-06-24T00:00:00Z");
+    // owner は発行できる
+    const invite = await createStoreAdminInvite(m.repo, buildUrl, "owner-1", "store-1", {});
+    expect(invite.code).toBeTruthy();
+    expect(invite.inviteUrl).toContain("/invite/");
+    // 管理者(admin)は発行できない（requireStoreOwner → StoreForbiddenError）
+    await expect(
+      createStoreAdminInvite(m.repo, buildUrl, "admin-1", "store-1", {}),
+    ).rejects.toBeInstanceOf(StoreForbiddenError);
+    // 非管理者も発行できない
+    await expect(
+      createStoreAdminInvite(m.repo, buildUrl, "stranger", "store-1", {}),
+    ).rejects.toBeInstanceOf(StoreForbiddenError);
+  });
+
+  it("listStoreAdmins: owner 先頭・管理者を古参順で返し、viewerRole と isSelf を付ける", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    seedAdmin(m, "store-1", "admin-2", "2026-06-26T00:00:00Z");
+    seedAdmin(m, "store-1", "admin-1", "2026-06-24T00:00:00Z");
+
+    // owner から見た一覧
+    const asOwner = await listStoreAdmins(m.repo, "owner-1", "store-1");
+    expect(asOwner.viewerRole).toBe("owner");
+    // owner が先頭、その後 admin を古参順（admin-1 が admin-2 より古い）
+    expect(asOwner.items.map((a) => a.authUserId)).toEqual(["owner-1", "admin-1", "admin-2"]);
+    expect(asOwner.items[0]!.role).toBe("owner");
+    expect(asOwner.items.find((a) => a.authUserId === "owner-1")!.isSelf).toBe(true);
+    expect(asOwner.items.find((a) => a.authUserId === "admin-1")!.isSelf).toBe(false);
+
+    // admin から見ると viewerRole=admin（一覧は閲覧できる）
+    const asAdmin = await listStoreAdmins(m.repo, "admin-1", "store-1");
+    expect(asAdmin.viewerRole).toBe("admin");
+    expect(asAdmin.items.find((a) => a.authUserId === "admin-1")!.isSelf).toBe(true);
+
+    // 非管理者は 404 相当（StoreForbiddenError）
+    await expect(listStoreAdmins(m.repo, "stranger", "store-1")).rejects.toBeInstanceOf(
+      StoreForbiddenError,
+    );
+  });
+
+  it("removeStoreAdmin: owner が管理者(admin)を外せる。owner・非管理者・他店は不可", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    seedAdmin(m, "store-1", "admin-1", "2026-06-24T00:00:00Z");
+
+    // 管理者(admin)は管理者を外せない（requireStoreOwner）
+    await expect(
+      removeStoreAdmin(m.repo, "admin-1", "store-1", "admin-1"),
+    ).rejects.toBeInstanceOf(StoreForbiddenError);
+
+    // owner が admin-1 を外せる
+    await removeStoreAdmin(m.repo, "owner-1", "store-1", "admin-1");
+    const after = await listStoreAdmins(m.repo, "owner-1", "store-1");
+    expect(after.items.map((a) => a.authUserId)).toEqual(["owner-1"]);
+
+    // 既に外れた admin をもう一度外す → StoreAdminNotFoundError
+    await expect(
+      removeStoreAdmin(m.repo, "owner-1", "store-1", "admin-1"),
+    ).rejects.toBeInstanceOf(StoreAdminNotFoundError);
+
+    // owner 自身は removeAdmin では外せない（role=admin のみ対象）→ StoreAdminNotFoundError
+    await expect(
+      removeStoreAdmin(m.repo, "owner-1", "store-1", "owner-1"),
+    ).rejects.toBeInstanceOf(StoreAdminNotFoundError);
+  });
+
+  it("leaveStoreAsOwner: 残る管理者がいれば最古参を owner へ自動昇格（promoted）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    seedAdmin(m, "store-1", "admin-late", "2026-06-26T00:00:00Z");
+    seedAdmin(m, "store-1", "admin-old", "2026-06-24T00:00:00Z");
+
+    const result = await leaveStoreAsOwner(m.repo, "owner-1", "store-1");
+    expect(result.action).toBe("promoted");
+    // 最古参（admin-old）が新 owner
+    expect(result.newOwnerAuthUserId).toBe("admin-old");
+    // 旧 owner はもう管理者ではない（active な store_admin から外れる）
+    const admins = await listStoreAdmins(m.repo, "admin-old", "store-1");
+    expect(admins.viewerRole).toBe("owner");
+    expect(admins.items.some((a) => a.authUserId === "owner-1")).toBe(false);
+  });
+
+  it("leaveStoreAsOwner: 残る管理者がいなければ店を閉店（closed）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    const result = await leaveStoreAsOwner(m.repo, "owner-1", "store-1");
+    expect(result.action).toBe("closed");
+    expect(result.newOwnerAuthUserId).toBeNull();
+    // 閉店済みの店は自分の店として引けない
+    expect(await getMyStore(m.repo, "owner-1")).toBeNull();
+  });
+
+  it("leaveStoreAsOwner: 管理者(admin)・非管理者は不可（owner 専用）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    seedAdmin(m, "store-1", "admin-1", "2026-06-24T00:00:00Z");
+    await expect(leaveStoreAsOwner(m.repo, "admin-1", "store-1")).rejects.toBeInstanceOf(
+      StoreForbiddenError,
+    );
+    await expect(leaveStoreAsOwner(m.repo, "stranger", "store-1")).rejects.toBeInstanceOf(
+      StoreForbiddenError,
+    );
   });
 });

@@ -154,6 +154,11 @@ export const ja = {
       inviteLead: "このお店の店員さんとして登録します",
       inviteStoreLabel: "所属するお店",
       inviteStart: "参加する",
+      // 管理者招待（type=admin）の受け入れ表示
+      inviteTitleAdmin: "管理者への招待",
+      inviteLeadAdmin: "このお店の管理者として参加します",
+      inviteStoreLabelAdmin: "管理するお店",
+      inviteValidAdmin: "の管理者になります",
       // 参加（join）の処理中・完了・既に所属
       joining: "参加処理中…",
       joinErrorInvite: "招待が無効です。コードを確認してください。",
@@ -360,6 +365,11 @@ export const ja = {
       settingsExport: "申告データ（CSV）",
       // 店の管理・開設への暫定導線（フェーズ1。本格的なモード切替はフェーズ3）
       settingsStoreAdmin: "店の管理・開設へ",
+      // モード切替（兼任者のみ）・店の開設（管理する店が無い人）。フェーズ3の本設計
+      settingsStoreManage: "店の管理へ",
+      settingsStoreManageSub: "お店の管理モードに切り替える",
+      settingsStoreOpen: "店を開設する",
+      settingsStoreOpenSub: "あなたのお店をはじめる（オーナーになります）",
       // 共通
       loading: "読み込み中…",
     },
@@ -481,7 +491,56 @@ export const ja = {
       settingsTitle: "設定",
       settingsProfile: "店舗プロフィール",
       settingsStaff: "スタッフ招待・管理",
+      settingsAdmins: "管理者",
       settingsApproval: "導入・承認",
+      // モード切替（店の管理→店員モード）。店の管理は兼任者のみ到達するため常に出してよい
+      settingsStaffMode: "店員モードへ",
+      settingsStaffModeSub: "自分の受け取り・QR の画面に切り替える",
+      // 管理者一覧・招待・削除・owner 譲渡・owner 離脱・閉店（フェーズ3）
+      adminsTitle: "管理者",
+      adminsLead: "このお店を管理する人たちです",
+      adminsOwnerBadge: "オーナー",
+      adminsAdminBadge: "管理者",
+      adminsSelf: "（あなた）",
+      adminsNoName: "名前未設定",
+      adminsInviteCta: "管理者を招待する",
+      adminsLoadError: "管理者を読み込めませんでした",
+      // 管理者を外す（owner のみ）
+      adminsRemoveCta: "外す",
+      adminsRemoveConfirmTitle: "この管理者を外しますか？",
+      adminsRemoveConfirmBody: "外すと、この人はお店の管理ができなくなります。受け取り・記録には影響しません。",
+      adminsRemoveConfirmCta: "外す",
+      adminsRemoveCancel: "キャンセル",
+      adminsRemoving: "処理中…",
+      adminsRemoveError: "管理者を外せませんでした。もう一度お試しください。",
+      // owner 譲渡（owner のみ・対象 admin を選ぶ）
+      adminsTransferCta: "オーナーを譲渡",
+      adminsTransferConfirmTitle: "オーナーを譲渡しますか？",
+      adminsTransferConfirmBody: "「{{name}}」をこのお店のオーナーにします。あなたは管理者になります。",
+      adminsTransferConfirmCta: "譲渡する",
+      adminsTransferring: "処理中…",
+      adminsTransferError: "オーナーを譲渡できませんでした。もう一度お試しください。",
+      // owner が店から抜ける・店を閉じる（owner のみ・危険な操作）
+      adminsDangerTitle: "オーナーの操作",
+      adminsLeaveCta: "オーナーを退任して抜ける",
+      adminsLeaveConfirmTitle: "オーナーを退任しますか？",
+      adminsLeaveConfirmBody:
+        "他に管理者がいれば、最も古い管理者が自動でオーナーになります。管理者がいなければお店は閉店します。",
+      adminsLeaveConfirmCta: "退任する",
+      adminsLeaving: "処理中…",
+      adminsLeaveError: "退任できませんでした。もう一度お試しください。",
+      adminsCloseCta: "お店を閉じる（閉店）",
+      adminsCloseConfirmTitle: "お店を閉じますか？",
+      adminsCloseConfirmBody:
+        "閉店するとQR・所属は無効になります。これまでの記録や、スタッフが受け取った収益は残ります。",
+      adminsCloseConfirmCta: "閉店する",
+      adminsClosing: "処理中…",
+      adminsCloseError: "閉店できませんでした。もう一度お試しください。",
+      // 管理者招待（リンク発行・owner のみ）
+      adminInviteTitle: "管理者を招待",
+      adminInviteHeading: "管理者を招待するための\nリンクを発行します",
+      adminInviteLead: "このリンクから参加した人は、\nこのお店の管理者になります。",
+      adminInviteError: "招待リンクの発行に失敗しました。もう一度お試しください。",
       settingsNotifications: "通知設定",
       settingsFaq: "よくある質問",
       settingsContact: "お問い合わせ",

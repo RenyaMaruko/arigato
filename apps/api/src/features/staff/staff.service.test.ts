@@ -82,6 +82,12 @@ function createMockRepo() {
   const payoutsByStaff = new Map<string, TestPayout>();
   // 脱退済み（論理削除）の membershipId 集合（leftAt 相当）。在籍中＝この集合に無い
   const leftMembershipIds = new Set<string>();
+  // 店の管理者（store_admin 相当）。キー `${storeId}::${authUserId}`。管理者招待の受け入れ・モード判定に使う
+  const storeAdmins = new Map<
+    string,
+    { storeId: string; authUserId: string; role: "owner" | "admin"; leftAt: number | null }
+  >();
+  const adminKey = (storeId: string, authUserId: string) => `${storeId}::${authUserId}`;
   // membership ID の採番カウンタ
   let membershipSeq = 0;
   // payout ID の採番カウンタ
@@ -463,9 +469,66 @@ function createMockRepo() {
     async listReconcileTotalsByStaff() {
       return [];
     },
+    // 管理者招待（type='admin'）の受け入れ。store_admin(role=admin) を作る/再有効化する。
+    // 二重付与防止（既に active なら already_member）・脱退再有効化（rejoined）を担保する。
+    async acceptAdminInvite(authUserId, code) {
+      const invite = invites.get(code);
+      if (
+        !invite ||
+        invite.inviteStatus !== "pending" ||
+        invite.inviteType !== "admin" ||
+        !invite.storeAdopted
+      ) {
+        throw new Error("invite_not_usable");
+      }
+      if (!staffByAuth.get(authUserId)) {
+        throw new Error("staff_not_found");
+      }
+      const key = adminKey(invite.storeId, authUserId);
+      const existing = storeAdmins.get(key);
+      if (existing && existing.leftAt === null) {
+        return {
+          outcome: "already_member" as const,
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      }
+      if (existing && existing.leftAt !== null) {
+        storeAdmins.set(key, { ...existing, role: "admin", leftAt: null });
+        invites.set(code, { ...invite, inviteStatus: "accepted" });
+        return {
+          outcome: "rejoined" as const,
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      }
+      storeAdmins.set(key, { storeId: invite.storeId, authUserId, role: "admin", leftAt: null });
+      invites.set(code, { ...invite, inviteStatus: "accepted" });
+      return {
+        outcome: "joined" as const,
+        storeId: invite.storeId,
+        storeName: invite.storeName,
+      };
+    },
+    // 自分が active な管理者である店が1つ以上あるか（モード切替の判定）
+    async hasManagedStore(authUserId) {
+      for (const a of storeAdmins.values()) {
+        if (a.authUserId === authUserId && a.leftAt === null) return true;
+      }
+      return false;
+    },
   };
 
-  return { repo, invites, staffByAuth, membershipsByAuth, tipsByAuth, accountByAuth, payoutsByStaff };
+  return {
+    repo,
+    invites,
+    staffByAuth,
+    membershipsByAuth,
+    tipsByAuth,
+    accountByAuth,
+    payoutsByStaff,
+    storeAdmins,
+  };
 }
 
 // QR用URL の組み立て（ローカルのベース URL を使う・membership 単位）
@@ -505,6 +568,7 @@ describe("staff.service", () => {
       storeId: "store-1",
       storeName: "カフェ Arigato",
       inviteStatus: "pending",
+      inviteType: "staff",
       storeAdopted: true,
     });
     // 別の承認済み店の pending 招待（掛け持ち検証用）
@@ -513,6 +577,7 @@ describe("staff.service", () => {
       storeId: "store-bar",
       storeName: "バー Arigato",
       inviteStatus: "pending",
+      inviteType: "staff",
       storeAdopted: true,
     });
     // 店が未承認の招待（使えないはず）
@@ -521,6 +586,7 @@ describe("staff.service", () => {
       storeId: "store-2",
       storeName: "未承認の店",
       inviteStatus: "pending",
+      inviteType: "staff",
       storeAdopted: false,
     });
   });
@@ -646,6 +712,7 @@ describe("staff.service", () => {
       storeId: "store-1",
       storeName: "カフェ Arigato",
       inviteStatus: "pending",
+      inviteType: "staff",
       storeAdopted: true,
     });
     const again = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-OK-2");
@@ -709,7 +776,7 @@ describe("staff.service", () => {
     expect(me!.memberships).toHaveLength(1);
 
     // 自分でその店を脱退する（本人スコープ）
-    const after = await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    const after = await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId!);
     // 脱退後は active な所属が0件（その店は消える）
     expect(after!.memberships).toHaveLength(0);
     me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
@@ -718,7 +785,7 @@ describe("staff.service", () => {
 
   it("leaveStoreMembership: receiptStores には脱退店が残る（過去の収益を確認できる）", async () => {
     const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
-    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId!);
     const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
     // active な所属は0だが、受取履歴の店フィルタには脱退店が残る
     expect(me!.memberships).toHaveLength(0);
@@ -734,7 +801,7 @@ describe("staff.service", () => {
     });
     // user-2 が user-1 の membership を脱退しようとしても作用しない（404）
     await expect(
-      leaveStoreMembership(mock.repo, buildUrl, "auth-user-2", joined.membershipId),
+      leaveStoreMembership(mock.repo, buildUrl, "auth-user-2", joined.membershipId!),
     ).rejects.toBeInstanceOf(MembershipNotFoundError);
     // user-1 の所属は健在（脱退されていない）
     const me1 = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
@@ -743,15 +810,15 @@ describe("staff.service", () => {
 
   it("leaveStoreMembership: 既に脱退済みの membership は 404（二重脱退不可）", async () => {
     const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
-    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId!);
     await expect(
-      leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId),
+      leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId!),
     ).rejects.toBeInstanceOf(MembershipNotFoundError);
   });
 
   it("joinStore: 脱退済みの店に再参加すると rejoined で再有効化し、同じ membershipId が復活する", async () => {
     const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
-    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId!);
 
     // 同じ店の別の pending 招待を用意する（再参加用）
     mock.invites.set("INV-OK-REJOIN", {
@@ -759,18 +826,19 @@ describe("staff.service", () => {
       storeId: "store-1",
       storeName: "カフェ Arigato",
       inviteStatus: "pending",
+      inviteType: "staff",
       storeAdopted: true,
     });
     const rejoined = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-OK-REJOIN");
     // 再有効化（新規行は作らない＝同じ membershipId）
     expect(rejoined.status).toBe("rejoined");
-    expect(rejoined.membershipId).toBe(joined.membershipId);
+    expect(rejoined.membershipId!).toBe(joined.membershipId!);
     // 同じ QR（/tip/:membershipId）が再び有効
     expect(rejoined.tipUrl).toBe(`http://localhost:5173/tip/${joined.membershipId}`);
     // active な所属一覧に再び現れる
     const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
     expect(me!.memberships).toHaveLength(1);
-    expect(me!.memberships[0]!.membershipId).toBe(joined.membershipId);
+    expect(me!.memberships[0]!.membershipId).toBe(joined.membershipId!);
   });
 
   // --- プロフィール編集（所属は変わらない） ---
@@ -1744,5 +1812,124 @@ describe("staff.service uploadStaffAvatar", () => {
     });
     expect(result).toBeNull();
     expect(fakeUpload).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// フェーズ3: 招待 type 分岐（管理者招待→store_admin）・二重付与防止・脱退再有効化・モード判定
+// ─────────────────────────────────────────────────────────────
+describe("staff.service（招待 type 分岐・管理者招待・フェーズ3）", () => {
+  let mock: ReturnType<typeof createMockRepo>;
+  beforeEach(() => {
+    mock = createMockRepo();
+    // 承認済み店の pending なスタッフ招待
+    mock.invites.set("INV-STAFF", {
+      code: "INV-STAFF",
+      storeId: "store-1",
+      storeName: "カフェ Arigato",
+      inviteStatus: "pending",
+      inviteType: "staff",
+      storeAdopted: true,
+    });
+    // 承認済み店の pending な管理者招待（受け入れで store_admin role=admin を作る）
+    mock.invites.set("INV-ADMIN", {
+      code: "INV-ADMIN",
+      storeId: "store-1",
+      storeName: "カフェ Arigato",
+      inviteStatus: "pending",
+      inviteType: "admin",
+      storeAdopted: true,
+    });
+    // 同じ店の2枚目の管理者招待（二重付与防止・再有効化の検証に使う）
+    mock.invites.set("INV-ADMIN-2", {
+      code: "INV-ADMIN-2",
+      storeId: "store-1",
+      storeName: "カフェ Arigato",
+      inviteStatus: "pending",
+      inviteType: "admin",
+      storeAdopted: true,
+    });
+  });
+
+  it("getInviteInfo: 管理者招待は type='admin' を返す（受け入れ画面の表示を出し分ける）", async () => {
+    const info = await getInviteInfo(mock.repo, "INV-ADMIN");
+    expect(info!.type).toBe("admin");
+    const staffInfo = await getInviteInfo(mock.repo, "INV-STAFF");
+    expect(staffInfo!.type).toBe("staff");
+  });
+
+  it("joinStore: 管理者招待を受け入れると store_admin(admin) を作る（membership は作らない・managesStore=true）", async () => {
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-1", {
+      displayName: "店長 太郎",
+    });
+    const result = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-ADMIN");
+    expect(result.status).toBe("joined");
+    expect(result.type).toBe("admin");
+    // 管理者招待は所属（staff_store）・QR を作らない
+    expect(result.membershipId).toBeNull();
+    expect(result.tipUrl).toBeNull();
+    // 招待は消費される
+    expect(mock.invites.get("INV-ADMIN")!.inviteStatus).toBe("accepted");
+    // store_admin(role=admin・active) が作られる
+    const admin = mock.storeAdmins.get("store-1::auth-user-1");
+    expect(admin?.role).toBe("admin");
+    expect(admin?.leftAt).toBeNull();
+    // 兼任者になったので managesStore=true・所属（memberships）は空のまま
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.managesStore).toBe(true);
+    expect(me!.memberships).toHaveLength(0);
+  });
+
+  it("joinStore: 既に管理者なら二重付与しない（already_member・招待は消費しない）", async () => {
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-1", {
+      displayName: "店長 太郎",
+    });
+    await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-ADMIN");
+    // 同じ店の別の管理者招待で再度受け入れようとすると already_member
+    const again = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-ADMIN-2");
+    expect(again.status).toBe("already_member");
+    expect(again.type).toBe("admin");
+    // 2枚目の招待は消費されない（pending のまま）
+    expect(mock.invites.get("INV-ADMIN-2")!.inviteStatus).toBe("pending");
+    // store_admin は1件のまま（active）
+    expect(mock.storeAdmins.get("store-1::auth-user-1")?.role).toBe("admin");
+  });
+
+  it("joinStore: 脱退済みの管理者は再有効化する（rejoined・left_at→null）", async () => {
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-1", {
+      displayName: "店長 太郎",
+    });
+    await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-ADMIN");
+    // 管理者を外す（論理削除）
+    mock.storeAdmins.get("store-1::auth-user-1")!.leftAt = Date.now();
+    // モード判定は false に戻る
+    let me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.managesStore).toBe(false);
+    // 新しい管理者招待で再有効化する
+    const rejoined = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-ADMIN-2");
+    expect(rejoined.status).toBe("rejoined");
+    expect(mock.storeAdmins.get("store-1::auth-user-1")!.leftAt).toBeNull();
+    me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.managesStore).toBe(true);
+  });
+
+  it("joinStore: スタッフ招待は従来どおり staff_store を作り、store_admin は作らない（managesStore=false）", async () => {
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-1", {
+      displayName: "山田 さくら",
+    });
+    const result = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-STAFF");
+    expect(result.type).toBe("staff");
+    expect(result.membershipId).not.toBeNull();
+    // store_admin は作られない
+    expect(mock.storeAdmins.get("store-1::auth-user-1")).toBeUndefined();
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.managesStore).toBe(false);
+    expect(me!.memberships).toHaveLength(1);
+  });
+
+  it("joinStore: 管理者招待もプロフィール未作成なら参加できない（StaffNotFoundError）", async () => {
+    await expect(
+      joinStore(mock.repo, buildUrl, "no-staff", "INV-ADMIN"),
+    ).rejects.toBeInstanceOf(StaffNotFoundError);
   });
 });

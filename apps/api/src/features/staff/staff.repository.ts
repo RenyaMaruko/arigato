@@ -23,8 +23,18 @@ export type InviteRow = {
   storeId: string;
   storeName: string;
   inviteStatus: InviteStatus;
+  // 招待の種類（staff: 在籍・QR / admin: 店の管理者として参加）。受け入れ時にこの type で分岐する
+  inviteType: "staff" | "admin";
   // 発行元の店が導入承認に同意済みか（adoption_agreed_at が設定されているか）
   storeAdopted: boolean;
+};
+
+// 管理者招待の受け入れ結果（store_admin role=admin を作った/再有効化した/既に管理者だった）。
+// joined: 新たに管理者になった / rejoined: 脱退済み管理者を再有効化した / already_member: 既に active な管理者
+export type AdminJoinResultRow = {
+  outcome: JoinOutcome;
+  storeId: string;
+  storeName: string;
 };
 
 // プロフィール本体（人ごと1つ。所属は別途 membership で持つ）
@@ -206,6 +216,14 @@ export type StaffRepository = {
   // 招待を accepted 化し、当該店への membership を1件作る（既に同店所属なら already_member）。
   // 招待二重消費の防止と membership 一意制約を1トランザクションで担保する。
   joinStoreByInvite: (authUserId: string, code: string) => Promise<JoinResultRow>;
+  // 管理者招待（type='admin'）を受け入れて store_admin role=admin を作る（受け入れ分岐の admin 側）。
+  // 招待を accepted 化し（accepted_auth_user_id に本人を記録）、store_admin を1件作る/再有効化する。
+  //  - 既に active な管理者（owner/admin）なら already_member（二重付与しない・招待は消費しない）
+  //  - 脱退済み（left_at あり）なら left_at→null・role='admin' に再有効化（rejoined）
+  // 招待二重消費の防止と一意制約を1トランザクションで担保する。プロフィール未作成なら staff_not_found。
+  acceptAdminInvite: (authUserId: string, code: string) => Promise<AdminJoinResultRow>;
+  // 自分が active な管理者である営業中の店が1つ以上あるか（モード切替の判定・GET /staff/me の managesStore）
+  hasManagedStore: (authUserId: string) => Promise<boolean>;
   // 自分のプロフィール（display_name・headline・avatar）を更新する。更新後の行を返す
   updateStaffProfile: (
     authUserId: string,
@@ -388,6 +406,7 @@ export function createStaffRepository(): StaffRepository {
           i.store_id    AS "storeId",
           st.name       AS "storeName",
           i.status      AS "inviteStatus",
+          i.type        AS "inviteType",
           (st.adoption_agreed_at IS NOT NULL) AS "storeAdopted"
         FROM staff_invite i
         JOIN store st ON st.id = i.store_id
@@ -612,6 +631,145 @@ export function createStaffRepository(): StaffRepository {
           storeName: invite.storeName,
         };
       });
+    },
+
+    // 管理者招待（type='admin'）を受け入れて store_admin role=admin を作る（受け入れ分岐の admin 側）。
+    // 1トランザクションで:
+    //  1. 招待を取得（pending かつ type='admin' かつ店が導入承認済み・営業中のときだけ使える）
+    //  2. 本人の staff（人）を引く（未作成なら staff_not_found。§1.5: 全員プロフィールを先に持つ）
+    //  3. 既存 (store, auth_user) の store_admin を在籍状態込みで引く
+    //     - active（left_at IS NULL）→ already_member（owner/admin いずれも二重付与しない・招待は消費しない）
+    //     - 脱退済み（left_at あり）→ left_at→null・role='admin' に再有効化（rejoined）・招待を消費
+    //     - 無ければ store_admin(role='admin') を新規作成（joined）・招待を消費
+    async acceptAdminInvite(authUserId, code) {
+      const db = getDb();
+      return await db.transaction(async (tx) => {
+        // 招待を取得（行ロック）。管理者招待・pending・店が承認済み・営業中のときだけ使える
+        const inviteRows = await tx.execute<{
+          storeId: string;
+          storeName: string;
+          status: InviteStatus;
+          inviteType: "staff" | "admin";
+          storeAdopted: boolean;
+          storeClosed: boolean;
+        }>(sql`
+          SELECT
+            i.store_id AS "storeId",
+            st.name    AS "storeName",
+            i.status   AS "status",
+            i.type     AS "inviteType",
+            (st.adoption_agreed_at IS NOT NULL) AS "storeAdopted",
+            (st.closed_at IS NOT NULL) AS "storeClosed"
+          FROM staff_invite i
+          JOIN store st ON st.id = i.store_id
+          WHERE i.code = ${code}
+          LIMIT 1
+          FOR UPDATE OF i
+        `);
+        const invite = inviteRows[0];
+        if (
+          !invite ||
+          invite.status !== "pending" ||
+          invite.inviteType !== "admin" ||
+          !invite.storeAdopted ||
+          invite.storeClosed
+        ) {
+          throw new Error("invite_not_usable");
+        }
+
+        // 本人の staff（人）を引く（プロフィール未作成は staff_not_found）
+        const staffRows = await tx.execute<{ id: string }>(sql`
+          SELECT id AS "id" FROM staff WHERE auth_user_id = ${authUserId} LIMIT 1
+        `);
+        if (!staffRows[0]) {
+          throw new Error("staff_not_found");
+        }
+
+        // 既存の store_admin（store×人）を在籍状態込みで引く（UNIQUE のため最大1件・行ロック）
+        const existingRows = await tx.execute<{ id: string; leftAt: string | null }>(sql`
+          SELECT id AS "id", left_at AS "leftAt"
+          FROM store_admin
+          WHERE store_id = ${invite.storeId} AND auth_user_id = ${authUserId}
+          LIMIT 1
+          FOR UPDATE
+        `);
+        const existing = existingRows[0];
+
+        // active（owner/admin いずれも）→ already_member（二重付与しない・招待は消費しない）
+        if (existing && existing.leftAt === null) {
+          return {
+            outcome: "already_member" as const,
+            storeId: invite.storeId,
+            storeName: invite.storeName,
+          };
+        }
+
+        // 脱退済み → 再有効化（left_at→null・role='admin'）＋招待を消費
+        if (existing && existing.leftAt !== null) {
+          await tx.execute(sql`
+            UPDATE store_admin
+            SET left_at = NULL, role = 'admin'
+            WHERE id = ${existing.id}
+          `);
+          const accepted = await tx.execute<{ id: string }>(sql`
+            UPDATE staff_invite
+            SET status = 'accepted',
+                accepted_auth_user_id = ${authUserId},
+                accepted_at = now()
+            WHERE code = ${code}
+              AND status = 'pending'
+            RETURNING id AS "id"
+          `);
+          if (accepted.length === 0) {
+            throw new Error("invite_not_usable");
+          }
+          return {
+            outcome: "rejoined" as const,
+            storeId: invite.storeId,
+            storeName: invite.storeName,
+          };
+        }
+
+        // 無ければ store_admin(role='admin') を新規作成する
+        await tx.execute(sql`
+          INSERT INTO store_admin (store_id, auth_user_id, role)
+          VALUES (${invite.storeId}, ${authUserId}, 'admin')
+        `);
+        // 招待を消費する（pending のときのみ。二重消費はここで弾く）
+        const accepted = await tx.execute<{ id: string }>(sql`
+          UPDATE staff_invite
+          SET status = 'accepted',
+              accepted_auth_user_id = ${authUserId},
+              accepted_at = now()
+          WHERE code = ${code}
+            AND status = 'pending'
+          RETURNING id AS "id"
+        `);
+        if (accepted.length === 0) {
+          throw new Error("invite_not_usable");
+        }
+        return {
+          outcome: "joined" as const,
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      });
+    },
+
+    // 自分が active な管理者である営業中の店が1つ以上あるか（モード切替の判定）
+    async hasManagedStore(authUserId) {
+      const db = getDb();
+      const rows = await db.execute<{ exists: boolean }>(sql`
+        SELECT EXISTS (
+          SELECT 1
+          FROM store_admin sa
+          JOIN store st ON st.id = sa.store_id
+          WHERE sa.auth_user_id = ${authUserId}
+            AND sa.left_at IS NULL
+            AND st.closed_at IS NULL
+        ) AS "exists"
+      `);
+      return rows[0]?.exists ?? false;
     },
 
     // 自分のプロフィールを更新（所属は変更しない）。本人の auth_user_id で限定する

@@ -62,6 +62,10 @@ import {
   uploadStoreLogo,
   closeStore,
   transferStoreOwner,
+  createStoreAdminInvite,
+  listStoreAdmins,
+  removeStoreAdmin,
+  leaveStoreAsOwner,
 } from "./features/store/store.service.js";
 import { createStoreRepository } from "./features/store/store.repository.js";
 import { createInMemoryStoreRepository } from "./features/store/store.repository.memory.js";
@@ -242,6 +246,16 @@ export function createApp() {
     // owner を譲渡する（owner のみ）。active な admin へ引き継ぐ
     transferStoreOwner: (authUserId, storeId, targetAuthUserId) =>
       transferStoreOwner(storeRepo, authUserId, storeId, targetAuthUserId),
+    // 管理者一覧（owner/admin・店の管理モード。金額なし）。閲覧者のロールも返す
+    listStoreAdmins: (authUserId, storeId) => listStoreAdmins(storeRepo, authUserId, storeId),
+    // 管理者招待の発行（owner のみ・リンク発行）。受け入れで store_admin role=admin を作る
+    createStoreAdminInvite: (authUserId, storeId, input) =>
+      createStoreAdminInvite(storeRepo, buildStoreInviteUrl, authUserId, storeId, input),
+    // 管理者を外す（owner のみ・論理削除）。owner は外せない（譲渡か閉店を使う）
+    removeStoreAdmin: (authUserId, storeId, targetAuthUserId) =>
+      removeStoreAdmin(storeRepo, authUserId, storeId, targetAuthUserId),
+    // owner が店から抜ける（owner のみ）。残る管理者がいれば自動昇格・いなければ閉店
+    leaveStoreAsOwner: (authUserId, storeId) => leaveStoreAsOwner(storeRepo, authUserId, storeId),
   });
 
   // Webhook ルートを配線（署名検証＝infrastructure、処理＝webhook Service + tip 更新）。

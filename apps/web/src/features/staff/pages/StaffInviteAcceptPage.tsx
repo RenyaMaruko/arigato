@@ -24,6 +24,8 @@ export function StaffInviteAcceptPage() {
   const { isAuthenticated } = useAuthSession();
   // 招待検証
   const inviteQuery = useInviteInfo(code);
+  // 管理者招待（type=admin）かどうかで見出し・ラベルを出し分ける（§2.3/§3.2）
+  const isAdmin = inviteQuery.data?.type === "admin";
 
   // 「はじめる」: 招待コードを引き継いで参加フローへ
   const handleStart = () => {
@@ -51,10 +53,14 @@ export function StaffInviteAcceptPage() {
   return (
     <PhoneFrame>
       <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-6 pb-7 pt-2">
-        {/* 見出し */}
+        {/* 見出し（管理者招待なら「管理者への招待」を出す） */}
         <div className="mt-10 text-center">
-          <div className="text-token-3xl font-bold text-ink">{t("staff.inviteTitle")}</div>
-          <div className="mt-2 text-token-md text-ink-sub">{t("staff.inviteLead")}</div>
+          <div className="text-token-3xl font-bold text-ink">
+            {isAdmin ? t("staff.inviteTitleAdmin") : t("staff.inviteTitle")}
+          </div>
+          <div className="mt-2 text-token-md text-ink-sub">
+            {isAdmin ? t("staff.inviteLeadAdmin") : t("staff.inviteLead")}
+          </div>
         </div>
 
         {/* 招待検証の結果 */}
@@ -66,14 +72,18 @@ export function StaffInviteAcceptPage() {
             </div>
           )}
 
-          {/* 有効な招待: 所属先の店名を表示 */}
+          {/* 有効な招待: 所属先（管理者招待なら管理先）の店名を表示 */}
           {inviteQuery.data && inviteQuery.data.valid && (
             <div className="rounded-xl border-[1.5px] border-rose bg-rose-soft px-5 py-7 text-center">
-              <div className="text-token-sm text-ink-sub">{t("staff.inviteStoreLabel")}</div>
+              <div className="text-token-sm text-ink-sub">
+                {isAdmin ? t("staff.inviteStoreLabelAdmin") : t("staff.inviteStoreLabel")}
+              </div>
               <div className="mt-2 text-token-3xl font-bold text-ink">
                 {inviteQuery.data.storeName}
               </div>
-              <div className="mt-2 text-token-md text-rose">{t("staff.inviteValid")}</div>
+              <div className="mt-2 text-token-md text-rose">
+                {isAdmin ? t("staff.inviteValidAdmin") : t("staff.inviteValid")}
+              </div>
             </div>
           )}
 
