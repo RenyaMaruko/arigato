@@ -74,12 +74,28 @@ export function subscribeSession(sub: Subscriber): () => void {
   };
 }
 
+// パスワード再設定リンクからの復帰中か（PASSWORD_RECOVERY イベントで true になる）。
+// 再設定ページはこのフラグを見て「新しいパスワードを設定」フォームを出す。
+let passwordRecoveryActive = false;
+
+/**
+ * パスワード再設定リンク経由での復帰中かを返す（再設定ページのモード判定に使う）。
+ */
+export function isPasswordRecoveryActive(): boolean {
+  return passwordRecoveryActive;
+}
+
 // 認証イベントを購読し、メモリセッションを同期的に差し替える。
 // 重要：このコールバック内では await する Supabase 呼び出しをしない（デッドロック回避）。
-// INITIAL_SESSION / SIGNED_IN / TOKEN_REFRESHED / SIGNED_OUT を反映する。
-supabase.auth.onAuthStateChange((_event, session) => {
+// INITIAL_SESSION / SIGNED_IN / TOKEN_REFRESHED / SIGNED_OUT / PASSWORD_RECOVERY を反映する。
+supabase.auth.onAuthStateChange((event, session) => {
   currentSession = session;
   bootstrapped = true;
+  // パスワード再設定リンクからの復帰は recovery セッションを伴う。
+  // 再設定ページが新パスワード設定フォームを出せるようフラグを立てる。
+  if (event === "PASSWORD_RECOVERY") {
+    passwordRecoveryActive = true;
+  }
   notify();
 });
 
@@ -161,14 +177,19 @@ export function isSessionBootstrapped(): boolean {
 }
 
 /**
- * メールアドレスでサインイン/サインアップ（マジックリンク）。
- * 既存・新規を問わずワンタイムリンクで認証する（パスワードを自前で持たない方針）。
+ * メール＋パスワードで新規登録（サインアップ）する。
+ * 登録時メール確認あり。確認リンクをクリックすると emailRedirectTo に戻り、
+ * セッションが確立して初回フロー（プロフィール作成）へ進む。
+ * 確認前はログインできない（Supabase の email confirmation 設定に依存）。
+ *
+ * 統合アカウント方針のため店員/店舗で分けず、戻り先は共通の店員ホーム入口（/staff）にする。
  */
-export async function signInWithEmail(email: string): Promise<void> {
-  const { error } = await supabase.auth.signInWithOtp({
+export async function signUpWithPassword(email: string, password: string): Promise<void> {
+  const { error } = await supabase.auth.signUp({
     email,
+    password,
     options: {
-      // 認証後に戻ってくる先（ログイン後の起点）。招待コードがあれば付与する。
+      // メール確認リンクからの復帰先（確認後の起点）。全員まず /staff に着地する。
       emailRedirectTo: `${window.location.origin}/staff`,
     },
   });
@@ -178,7 +199,19 @@ export async function signInWithEmail(email: string): Promise<void> {
 }
 
 /**
+ * メール＋パスワードでログイン（サインイン）する。
+ * メール未確認のアカウントは Supabase 側でエラーになる（確認前はログイン不可）。
+ */
+export async function signInWithPassword(email: string, password: string): Promise<void> {
+  const { error } = await supabase.auth.signInWithPassword({ email, password });
+  if (error) {
+    throw error;
+  }
+}
+
+/**
  * Google でサインイン/サインアップ（OAuth リダイレクト）。
+ * 統合アカウント方針のため店員/店舗で分けず、戻り先は共通の店員ホーム入口（/staff）にする。
  */
 export async function signInWithGoogle(): Promise<void> {
   const { error } = await supabase.auth.signInWithOAuth({
@@ -193,15 +226,14 @@ export async function signInWithGoogle(): Promise<void> {
 }
 
 /**
- * 店アカウント向け: メールアドレスでサインイン/サインアップ（マジックリンク）。
- * 認証後の戻り先を店入口（/store）にする点だけが店員さん向けと異なる。
+ * パスワード再設定メールを送る（リセット申請）。
+ * メール内リンクをクリックすると redirectTo（再設定ページ）へ戻り、
+ * PASSWORD_RECOVERY セッションが確立して新しいパスワードを設定できる。
  */
-export async function signInWithEmailForStore(email: string): Promise<void> {
-  const { error } = await supabase.auth.signInWithOtp({
-    email,
-    options: {
-      emailRedirectTo: `${window.location.origin}/store`,
-    },
+export async function requestPasswordReset(email: string): Promise<void> {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    // 再設定リンクからの戻り先（新パスワード設定フォームを出すページ）
+    redirectTo: `${window.location.origin}/reset-password`,
   });
   if (error) {
     throw error;
@@ -209,19 +241,18 @@ export async function signInWithEmailForStore(email: string): Promise<void> {
 }
 
 /**
- * 店アカウント向け: Google でサインイン/サインアップ（OAuth リダイレクト）。
- * 認証後の戻り先を店入口（/store）にする。
+ * ログイン中（または再設定リンクで復帰した）ユーザーのパスワードを更新する。
+ * パスワード再設定ページで新しいパスワードを確定するのに使う。
  */
-export async function signInWithGoogleForStore(): Promise<void> {
-  const { error } = await supabase.auth.signInWithOAuth({
-    provider: "google",
-    options: {
-      redirectTo: `${window.location.origin}/store`,
-    },
-  });
+export async function updatePassword(password: string): Promise<void> {
+  const { error } = await supabase.auth.updateUser({ password });
   if (error) {
     throw error;
   }
+  // 注意: ここで recovery フラグを落とさない。
+  // updateUser は USER_UPDATED を発火して再設定ページを再描画させるが、
+  // フラグを落とすと親が「申請フォーム」へ切り替わり、変更完了画面を見せられなくなる。
+  // フラグはメモリ保持のみで、ページ再読込（次回のモジュール初期化）で自然にリセットされる。
 }
 
 /**

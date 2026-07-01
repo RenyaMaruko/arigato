@@ -88,7 +88,7 @@ export function StaffProfileCreatePage() {
         // ストレージが使えなくても致命的でない
       }
     }
-    navigate({ to: "/staff/login" });
+    navigate({ to: "/login" });
   }, [authLoading, isAuthenticated, invite, navigate]);
 
   // ガード: プロフィール作成済みなら作成画面を出さず、招待があれば参加、無ければホームへ

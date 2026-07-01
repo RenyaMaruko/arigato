@@ -37,14 +37,14 @@ export function StaffInviteAcceptPage() {
       }
       navigate({ to: "/staff/setup", search: { invite: code } });
     } else {
-      // 未ログインはログイン画面へ。ログインを跨いで引き継ぐため sessionStorage に退避する。
+      // 未ログインは統合ログイン画面へ。ログインを跨いで引き継ぐため sessionStorage に退避する。
       // ログイン後に入口（/staff）が保留中の招待を拾って参加へ進む（拾った時点で消費・除去する）。
       try {
         sessionStorage.setItem(PENDING_INVITE_KEY, code);
       } catch {
         // ストレージが使えない環境ではログイン後に手動で招待リンクを開き直す
       }
-      navigate({ to: "/staff/login" });
+      navigate({ to: "/login" });
     }
   };
 

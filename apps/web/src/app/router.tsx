@@ -9,7 +9,8 @@ import { HomePage } from "../features/home/HomePage.js";
 import { TipPage } from "../features/tip/pages/TipPage.js";
 import { TipCompletePage } from "../features/tip/pages/TipCompletePage.js";
 import { StaffPage } from "../features/staff/pages/StaffPage.js";
-import { StaffLoginPage } from "../features/staff/pages/StaffLoginPage.js";
+import { AuthPage } from "../features/auth/pages/AuthPage.js";
+import { ResetPasswordPage } from "../features/auth/pages/ResetPasswordPage.js";
 import { StaffProfileCreatePage } from "../features/staff/pages/StaffProfileCreatePage.js";
 import { StaffStoresPage } from "../features/staff/pages/StaffStoresPage.js";
 import { StaffStoreDetailPage } from "../features/staff/pages/StaffStoreDetailPage.js";
@@ -23,7 +24,6 @@ import { StaffIdentityCompletePage } from "../features/staff/pages/StaffIdentity
 import { StaffTaxExportPage } from "../features/staff/pages/StaffTaxExportPage.js";
 import { StaffSettingsPage } from "../features/staff/pages/StaffSettingsPage.js";
 import { StorePage } from "../features/store/pages/StorePage.js";
-import { StoreLoginPage } from "../features/store/pages/StoreLoginPage.js";
 import { StoreApprovalPage } from "../features/store/pages/StoreApprovalPage.js";
 import { StoreStaffPage } from "../features/store/pages/StoreStaffPage.js";
 import { StoreStaffDetailPage } from "../features/store/pages/StoreStaffDetailPage.js";
@@ -38,7 +38,9 @@ import { StoreProfilePage } from "../features/store/pages/StoreProfilePage.js";
  * ホーム（疎通確認）に加え、お客さま投げ銭フローと店員さんアカウント系の画面を登録する。
  *  - /tip/$membershipId          投げ銭画面（membership＝人×店。金額・メッセージ・支払いシート）
  *  - /tip/$membershipId/complete 完了画面（?tipId= で当該 tip の再掲情報を引く）
- *  - /staff                      店員さん入口（認証ゲート: 未ログイン→ログイン / 未作成→作成 / 作成済→ホーム）
+ *  - /login                      統合ログイン／サインアップ（店員・店舗共通の唯一の認証入口。旧 /staff/login・/store/login はここへリダイレクト）
+ *  - /reset-password             パスワード再設定（リセット申請＋新パスワード設定）
+ *  - /staff                      店員さん入口（認証ゲート: 未ログイン→/login / 未作成→作成 / 作成済→ホーム）
  *  - /staff/setup                プロフィール作成（?invite= で招待コードを引き継ぐ・作成済はガードで弾く）
  *  - /staff/stores               所属店舗の一覧（掛け持ち対応・店をタップで詳細へ）
  *  - /staff/stores/$membershipId 所属店舗の詳細（その店ごとのQR・印刷。/tip/:membershipId を指す）
@@ -103,11 +105,27 @@ const staffRoute = createRoute({
   component: StaffPage,
 });
 
-// "/staff/login" ログイン画面（直接アクセス用。ログイン済みなら入口の判定でホームへ進む）
+// "/login" 統合ログイン／サインアップ画面（店員・店舗共通の唯一の認証入口）
+const loginRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/login",
+  component: AuthPage,
+});
+
+// "/reset-password" パスワード再設定（リセット申請＋新パスワード設定を1画面で扱う）
+const resetPasswordRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/reset-password",
+  component: ResetPasswordPage,
+});
+
+// "/staff/login" 旧・店員ログイン。統合ログイン画面（/login）へリダイレクトで集約する
 const staffLoginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/staff/login",
-  component: StaffLoginPage,
+  beforeLoad: () => {
+    throw redirect({ to: "/login" });
+  },
 });
 
 // 招待コードを ?invite= で受け取る検索バリデーション（プロフィール作成・オンボード共通）
@@ -230,11 +248,13 @@ const storeRoute = createRoute({
   component: StorePage,
 });
 
-// "/store/login" 店ログイン画面（直接アクセス用）
+// "/store/login" 旧・店舗ログイン。統合ログイン画面（/login）へリダイレクトで集約する
 const storeLoginRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/store/login",
-  component: StoreLoginPage,
+  beforeLoad: () => {
+    throw redirect({ to: "/login" });
+  },
 });
 
 // "/store/approval" 導入・承認画面（pending→approved）
@@ -303,6 +323,8 @@ const routeTree = rootRoute.addChildren([
   tipRoute,
   tipCompleteRoute,
   staffRoute,
+  loginRoute,
+  resetPasswordRoute,
   staffLoginRoute,
   staffSetupRoute,
   staffOnboardRoute,

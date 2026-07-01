@@ -1,8 +1,9 @@
+import { useEffect } from "react";
 import { useTranslation } from "react-i18next";
+import { useNavigate } from "@tanstack/react-router";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { useAuthSession } from "../../../lib/use-auth-session.js";
 import { useMyStore } from "../hooks/useStore.js";
-import { StoreLoginPage } from "./StoreLoginPage.js";
 import { StoreSetupPage } from "./StoreSetupPage.js";
 import { StoreHomePage } from "./StoreHomePage.js";
 
@@ -16,19 +17,21 @@ import { StoreHomePage } from "./StoreHomePage.js";
  */
 export function StorePage() {
   const { t } = useTranslation();
+  const navigate = useNavigate();
   // Supabase セッション（ログイン状態）
   const { isAuthenticated, loading: authLoading } = useAuthSession();
   // 自分が所有する店（ログイン済みのときだけ取得）
   const storeQuery = useMyStore(isAuthenticated);
 
-  // セッション確定前はローディング
-  if (authLoading) {
-    return <StoreLoading label={t("store.loading")} />;
-  }
+  // 未ログインなら統合ログイン画面（/login）へ送る（ログイン入口を1画面に集約したため）
+  useEffect(() => {
+    if (authLoading || isAuthenticated) return;
+    navigate({ to: "/login" });
+  }, [authLoading, isAuthenticated, navigate]);
 
-  // 未ログインならログイン画面へ
-  if (!isAuthenticated) {
-    return <StoreLoginPage />;
+  // セッション確定前・未ログイン（/login へ送る前）はローディング
+  if (authLoading || !isAuthenticated) {
+    return <StoreLoading label={t("store.loading")} />;
   }
 
   // 店取得中はローディング

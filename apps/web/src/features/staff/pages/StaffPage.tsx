@@ -4,7 +4,6 @@ import { useNavigate } from "@tanstack/react-router";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe } from "../hooks/useStaff.js";
-import { StaffLoginPage } from "./StaffLoginPage.js";
 import { StaffProfileCreatePage } from "./StaffProfileCreatePage.js";
 import { StaffHomePage } from "./StaffHomePage.js";
 
@@ -28,6 +27,13 @@ export function StaffPage() {
   // 自分のプロフィール（ログイン済みのときだけ取得）
   const meQuery = useStaffMe(isAuthenticated);
 
+  // 未ログインなら統合ログイン画面（/login）へ送る。
+  // ログイン入口を1画面に集約したため、入口はここで一元的にリダイレクトする。
+  useEffect(() => {
+    if (authLoading || isAuthenticated) return;
+    navigate({ to: "/login" });
+  }, [authLoading, isAuthenticated, navigate]);
+
   // ログイン後に保留中の招待があれば参加フローへ送る（招待リンク→ログイン→参加の引き継ぎ）。
   // 副作用で1度だけ実行し、退避した招待コードは消費して取り除く。
   useEffect(() => {
@@ -49,14 +55,9 @@ export function StaffPage() {
     }
   }, [authLoading, isAuthenticated, meQuery.isLoading, navigate]);
 
-  // セッション確定前はローディング（ガードのちらつき防止）
-  if (authLoading) {
+  // セッション確定前・未ログイン（/login へ送る前）はローディング（ガードのちらつき防止）
+  if (authLoading || !isAuthenticated) {
     return <StaffLoading label={t("staff.loading")} />;
-  }
-
-  // 未ログインならログイン画面へ
-  if (!isAuthenticated) {
-    return <StaffLoginPage />;
   }
 
   // プロフィール取得中はローディング

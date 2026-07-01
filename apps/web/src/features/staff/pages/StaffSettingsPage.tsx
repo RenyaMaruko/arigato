@@ -92,6 +92,26 @@ export function StaffSettingsPage() {
           />
         </div>
 
+        {/*
+          店の管理・開設への暫定導線（フェーズ1）。
+          ログイン後は全員この店員ホーム側に着地するが、店を持つ人／これから開設する人が
+          /store へ到達できる経路を最低1つ残すためのもの。
+          本格的なモード切替 UX（兼任者のみ表示・owner 判定）はフェーズ3で作るため、ここは最小の暫定リンク。
+        */}
+        <div className="mt-6 overflow-hidden rounded-2xl bg-page shadow-sm">
+          <SettingRow
+            label={t("staff.settingsStoreAdmin")}
+            onClick={() => navigate({ to: "/store" })}
+            icon={
+              <>
+                <path d="M3 9l1.5-5h15L21 9" />
+                <path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9" />
+                <path d="M9 20v-6h6v6" />
+              </>
+            }
+          />
+        </div>
+
         {/* ログアウト */}
         <button
           type="button"

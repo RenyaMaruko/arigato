@@ -77,6 +77,56 @@ export const ja = {
       // 決済開始（Checkout 作成）に失敗したとき
       payStartError: "決済を開始できませんでした。もう一度お試しください。",
     },
+    // 統合ログイン／サインアップ・パスワード再設定（店員・店舗共通の唯一の認証入口）
+    auth: {
+      // ログイン／サインアップ画面
+      loginTitle: "ログイン",
+      signupTitle: "アカウント作成",
+      loginLead: "メールアドレスとパスワードでログイン",
+      signupLead: "メールアドレスとパスワードで新規登録",
+      continueWithGoogle: "Google で続ける",
+      or: "または",
+      emailLabel: "メールアドレス",
+      emailPlaceholder: "you@example.com",
+      passwordLabel: "パスワード",
+      passwordPlaceholder: "8文字以上",
+      loginSubmit: "ログイン",
+      signupSubmit: "アカウントを作成",
+      toSignup: "アカウントをお持ちでない方はこちら",
+      toLogin: "すでにアカウントをお持ちの方はこちら",
+      forgotPassword: "パスワードをお忘れですか？",
+      // 入力・認証のエラー
+      emailEmpty: "メールアドレスを入力してください。",
+      passwordEmpty: "パスワードを入力してください。",
+      passwordTooShort: "パスワードは8文字以上で入力してください。",
+      loginError: "ログインに失敗しました。メールアドレスとパスワードをご確認ください。",
+      emailNotConfirmed:
+        "メールの確認が完了していません。確認メールのリンクを開いてからログインしてください。",
+      signupError: "登録に失敗しました。もう一度お試しください。",
+      signupExists: "このメールアドレスは既に登録されています。ログインをお試しください。",
+      // サインアップ後（メール確認の案内）
+      signupSentTitle: "確認メールを送りました",
+      signupSentLead:
+        "メールのリンクを開くと登録が完了します。確認後にログインできます。",
+      backToLogin: "ログインへ戻る",
+      loginNote: "店の招待リンクからの登録で、所属が確定します",
+      // パスワード再設定（申請）
+      resetTitle: "パスワードの再設定",
+      resetRequestLead: "登録したメールアドレスに、再設定用のリンクを送ります。",
+      resetSubmit: "再設定メールを送る",
+      resetSentLead: "メールのリンクを開いて、新しいパスワードを設定してください。",
+      resetError: "送信に失敗しました。もう一度お試しください。",
+      // パスワード再設定（新パスワード設定）
+      newPasswordTitle: "新しいパスワードを設定",
+      newPasswordLead: "新しいパスワードを入力してください。",
+      newPasswordLabel: "新しいパスワード",
+      newPasswordConfirmLabel: "新しいパスワード（確認）",
+      newPasswordSubmit: "パスワードを変更する",
+      newPasswordMismatch: "パスワードが一致しません。",
+      newPasswordDoneTitle: "パスワードを変更しました",
+      newPasswordDoneLead: "新しいパスワードでご利用いただけます。",
+      toHome: "ホームへ",
+    },
     // 店員さん画面
     staff: {
       san: "さん",
@@ -86,8 +136,6 @@ export const ja = {
       continueWithGoogle: "Google で続ける",
       emailLabel: "メールアドレス",
       emailPlaceholder: "you@example.com",
-      sendMagicLink: "メールでログインリンクを送る",
-      magicLinkSent: "ログイン用のリンクをメールに送りました。メールを確認してください。",
       or: "または",
       loginNote: "店の招待リンクからの登録で、所属が確定します",
       loginError: "ログインに失敗しました。もう一度お試しください。",
@@ -310,6 +358,8 @@ export const ja = {
       settingsProfile: "プロフィール編集",
       settingsIdentity: "本人確認・口座登録",
       settingsExport: "申告データ（CSV）",
+      // 店の管理・開設への暫定導線（フェーズ1。本格的なモード切替はフェーズ3）
+      settingsStoreAdmin: "店の管理・開設へ",
       // 共通
       loading: "読み込み中…",
     },
@@ -321,8 +371,6 @@ export const ja = {
       continueWithGoogle: "Google で続ける",
       emailLabel: "メールアドレス",
       emailPlaceholder: "store@example.com",
-      sendMagicLink: "メールでログインリンクを送る",
-      magicLinkSent: "ログイン用のリンクをメールに送りました。メールを確認してください。",
       or: "または",
       loginNote: "店舗アカウントでログインしてください",
       loginError: "ログインに失敗しました。もう一度お試しください。",
