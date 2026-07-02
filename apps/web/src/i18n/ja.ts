@@ -420,13 +420,24 @@ export const ja = {
       staffTitle: "スタッフ一覧",
       staffTabActive: "在籍中",
       staffTabInvited: "招待中",
+      // 管理者タブ（owner＋admin を表示・owner はオーナーバッジ）
+      staffTabAdmins: "管理者",
       staffEmpty: "まだ在籍中のスタッフはいません",
-      staffInviteCta: "スタッフを招待する",
+      staffInviteCta: "招待する",
+      // 招待中タブの種類バッジ（スタッフ招待／管理者招待）
+      invitedTypeStaffBadge: "スタッフ",
+      invitedTypeAdminBadge: "管理者",
+      // 管理者タブが空・読み込み中
+      adminsTabEmpty: "管理者がいません",
       // スタッフ詳細（一覧の行タップ→基本情報・在籍解除）
       staffDetailTitle: "スタッフ詳細",
       staffDetailJoinedAt: "参加日：{{date}}",
       staffDetailNoHeadline: "一言は設定されていません",
       staffDetailLoadError: "スタッフ情報を読み込めませんでした",
+      // スタッフ詳細での管理者操作（owner のみ・対象が管理者のとき・§11.3）
+      staffDetailRemoveAdminCta: "管理者権限を外す",
+      staffDetailMakeOwnerCta: "このユーザーをオーナーにする",
+      staffDetailAdminSectionTitle: "管理者としての操作",
       // 在籍解除（このスタッフを外す）＋確認ダイアログ
       staffRemoveCta: "このスタッフを外す",
       staffRemoveConfirmTitle: "このスタッフを外しますか？",
@@ -438,9 +449,14 @@ export const ja = {
       staffRemoving: "処理中…",
       staffRemoveError: "スタッフを外せませんでした。もう一度お試しください。",
       // スタッフ招待（04）
-      inviteTitle: "スタッフ招待",
+      inviteTitle: "招待",
       inviteHeading: "スタッフを招待するための\nリンクを発行します",
       inviteLead: "このリンクから新規登録したスタッフは、\n自動でこのお店に所属します。",
+      // 招待の種類選択（スタッフとして／管理者として）。管理者は owner のみ選べる（§3.2）
+      inviteTypeSectionLabel: "招待の種類",
+      inviteTypeStaff: "スタッフとして",
+      inviteTypeAdmin: "管理者として",
+      inviteTypeAdminOwnerOnly: "管理者として招待できるのはオーナーだけです",
       // 招待者名（任意メモ。誰宛の招待かを見分けるため）
       inviteLabelLabel: "招待者名",
       inviteLabelPlaceholder: "例：佐藤さん／ホール担当",

@@ -32,8 +32,6 @@ import { StoreInviteResendPage } from "../features/store/pages/StoreInviteResend
 import { StoreGratitudePage } from "../features/store/pages/StoreGratitudePage.js";
 import { StoreSettingsPage } from "../features/store/pages/StoreSettingsPage.js";
 import { StoreProfilePage } from "../features/store/pages/StoreProfilePage.js";
-import { StoreAdminsPage } from "../features/store/pages/StoreAdminsPage.js";
-import { StoreAdminInviteCreatePage } from "../features/store/pages/StoreAdminInviteCreatePage.js";
 
 /**
  * TanStack Router のルーティング定義。
@@ -271,9 +269,18 @@ const storeStaffRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/store/staff",
   component: StoreStaffPage,
-  // 初期タブ（在籍中=active / 招待中=invited）。それ以外は active 扱い
-  validateSearch: (search: Record<string, unknown>): { tab?: "active" | "invited" } => ({
-    tab: search.tab === "invited" ? "invited" : search.tab === "active" ? "active" : undefined,
+  // 初期タブ（在籍中=active / 招待中=invited / 管理者=admins）。それ以外は active 扱い
+  validateSearch: (
+    search: Record<string, unknown>,
+  ): { tab?: "active" | "invited" | "admins" } => ({
+    tab:
+      search.tab === "invited"
+        ? "invited"
+        : search.tab === "admins"
+          ? "admins"
+          : search.tab === "active"
+            ? "active"
+            : undefined,
   }),
 });
 
@@ -319,19 +326,8 @@ const storeProfileRoute = createRoute({
   component: StoreProfilePage,
 });
 
-// "/store/admins" 管理者管理（一覧・招待・削除・owner 譲渡・退任・閉店）。owner 専用操作は画面内で出し分ける
-const storeAdminsRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/store/admins",
-  component: StoreAdminsPage,
-});
-
-// "/store/admins/invite" 管理者招待（リンク発行・owner のみ）
-const storeAdminInviteRoute = createRoute({
-  getParentRoute: () => rootRoute,
-  path: "/store/admins/invite",
-  component: StoreAdminInviteCreatePage,
-});
+// 管理者一覧・管理者招待はスタッフ画面の「管理者」タブ／統合招待フロー（/store/invites/new）へ移設（§11.2）。
+// 旧 /store/admins・/store/admins/invite は削除した。
 
 // ルートツリーを組み立てる
 const routeTree = rootRoute.addChildren([
@@ -366,8 +362,6 @@ const routeTree = rootRoute.addChildren([
   storeGratitudeRoute,
   storeSettingsRoute,
   storeProfileRoute,
-  storeAdminsRoute,
-  storeAdminInviteRoute,
 ]);
 
 export const router = createRouter({ routeTree });

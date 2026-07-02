@@ -232,6 +232,8 @@ export function useRemoveStoreAdmin(storeId: string | undefined) {
     mutationFn: (authUserId: string) => removeStoreAdmin(storeId!, authUserId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["store", "admins", storeId] });
+      // スタッフ一覧・詳細のロール表示も変わるため取り直す（管理者→店員のみ）
+      qc.invalidateQueries({ queryKey: ["store", "staff", storeId] });
     },
   });
 }
@@ -247,6 +249,8 @@ export function useTransferStoreOwner(storeId: string | undefined) {
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["store", "admins", storeId] });
       qc.invalidateQueries({ queryKey: STORE_ME_KEY });
+      // スタッフ詳細の viewerRole/role も変わるため取り直す
+      qc.invalidateQueries({ queryKey: ["store", "staff", storeId] });
     },
   });
 }

@@ -56,10 +56,11 @@ function StoreSettingsContent() {
             }
           />
           <Divider />
-          {/* 管理者（owner/admin の一覧・招待・削除・owner 譲渡）。owner のみ操作は一覧画面側で出し分ける */}
+          {/* 管理者（owner/admin の一覧）。スタッフ画面の「管理者」タブへ集約（§11.2）。
+              owner のみ操作（外す・オーナー譲渡）はスタッフ詳細で出し分ける */}
           <SettingRow
             label={t("store.settingsAdmins")}
-            onClick={() => navigate({ to: "/store/admins" })}
+            onClick={() => navigate({ to: "/store/staff", search: { tab: "admins" } })}
             icon={
               <>
                 <circle cx="9" cy="8" r="3.2" />

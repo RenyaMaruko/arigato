@@ -268,10 +268,8 @@ export function createInMemoryStoreRepository(): StoreRepository {
     },
 
     async listInvites(storeId) {
-      // 招待中（pending）のスタッフ招待だけを新しい順に返す（管理者招待・accepted/revoked は除く）
-      return (invitesByStore.get(storeId) ?? []).filter(
-        (i) => i.status === "pending" && i.type === "staff",
-      );
+      // 招待中（pending）のスタッフ招待＋管理者招待を新しい順に返す（accepted/revoked は除く・§11.2 統合タブ）
+      return (invitesByStore.get(storeId) ?? []).filter((i) => i.status === "pending");
     },
 
     async findInviteByCode(storeId, code) {
@@ -301,7 +299,9 @@ export function createInMemoryStoreRepository(): StoreRepository {
         }));
     },
 
-    // 在籍中スタッフ1人の詳細を返す（脱退済み・他店・存在しないは null）
+    // 在籍中スタッフ1人の詳細を返す（脱退済み・他店・存在しないは null）。
+    // インメモリは staff プロフィール（auth_user_id）や store_admin を保持しないため、
+    // authUserId は staff の id で代用し、管理者ロールは null を返す（実 DB は store_admin を左結合して埋める）。
     async findStaffDetail(storeId, staffId) {
       const s = (staffByStore.get(storeId) ?? []).find(
         (x) => x.id === staffId && x.leftAt === null,
@@ -313,6 +313,8 @@ export function createInMemoryStoreRepository(): StoreRepository {
         headline: s.headline,
         avatarUrl: s.avatarUrl,
         joinedAt: s.joinedAt,
+        authUserId: s.id,
+        role: null,
       };
     },
 

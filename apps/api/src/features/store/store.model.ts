@@ -13,6 +13,9 @@ import { randomBytes } from "node:crypto";
 // 招待ステータス（pending: 招待中 / accepted: 所属確定 / revoked: 失効）
 export type StoreInviteStatus = "pending" | "accepted" | "revoked";
 
+// 招待の種類（staff: スタッフ招待＝在籍・QR / admin: 管理者招待＝store_admin role=admin）
+export type StoreInviteType = "staff" | "admin";
+
 // 店舗の管理者ロール（owner: 所有者 / admin: 管理者）
 export type StoreRole = "owner" | "admin";
 

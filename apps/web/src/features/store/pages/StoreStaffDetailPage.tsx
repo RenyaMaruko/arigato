@@ -5,42 +5,88 @@ import type { StoreProfile } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StoreBottomNav } from "../components/StoreBottomNav.js";
 import { StoreGuard } from "../components/StoreGuard.js";
-import { useStoreStaffDetail, useRemoveStoreStaff } from "../hooks/useStore.js";
+import {
+  useStoreStaffDetail,
+  useRemoveStoreStaff,
+  useRemoveStoreAdmin,
+  useTransferStoreOwner,
+} from "../hooks/useStore.js";
 import { formatDate } from "../utils/format.js";
 
 /**
  * スタッフ詳細画面（/store/staff/:staffId・店スコープ）。
  * スタッフ一覧の行タップで来る。在籍中スタッフの基本情報（表示名・一言・顔写真・参加日）を表示し、
  * 「このスタッフを外す」（在籍解除＝論理削除）を確認ダイアログ付きで行う。
+ *
+ * 管理者操作（§11.3・owner のみ・対象が管理者(admin)のとき）:
+ *  - 「管理者権限を外す」: store_admin を論理削除のみ（店員としては残す＝QR・受取維持）。
+ *  - 「このユーザーをオーナーにする」: 明示的な owner 譲渡（既存 transfer-owner）。
+ *  - owner 自身には「管理者権限を外す」を出さない（owner を空にできない）。
+ *
  * 金額・受取件数は一切表示しない（店はお金に触れない）。お金は移動しない（受け取り済みは本人のもの）。
- * 在籍解除すると一覧へ戻り、その人は在籍中一覧・記録のスタッフ別から消える。
  */
 export function StoreStaffDetailPage() {
   return <StoreGuard>{(store) => <StoreStaffDetailContent store={store} />}</StoreGuard>;
 }
+
+// 確認ダイアログの対象アクション（none＝閉じている）
+type PendingAction = "removeStaff" | "removeAdmin" | "makeOwner" | null;
 
 function StoreStaffDetailContent({ store }: { store: StoreProfile }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   // URL から対象スタッフ ID を受け取る
   const { staffId } = useParams({ from: "/store/staff/$staffId" });
-  // スタッフ詳細（在籍中のみ・店スコープ）
+  // スタッフ詳細（在籍中のみ・店スコープ。ロール・閲覧者ロールを含む）
   const detailQuery = useStoreStaffDetail(store.id, staffId);
-  // 在籍解除（このスタッフを外す）。確認ダイアログの開閉は UI 状態として持つ
-  const removeMutation = useRemoveStoreStaff(store.id);
-  const [confirmingRemove, setConfirmingRemove] = useState(false);
+  // 在籍解除・管理者権限を外す・オーナー譲渡（いずれも確認ダイアログを挟む）
+  const removeStaffMutation = useRemoveStoreStaff(store.id);
+  const removeAdminMutation = useRemoveStoreAdmin(store.id);
+  const transferMutation = useTransferStoreOwner(store.id);
+  const [pending, setPending] = useState<PendingAction>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const detail = detailQuery.data;
+  // owner だけが管理者操作を出せる。対象が管理者(admin)のときだけ「外す／オーナーにする」を出す。
+  // owner 自身（対象が owner）には「管理者権限を外す」を出さない（owner を空にできない）。
+  const viewerIsOwner = detail?.viewerRole === "owner";
+  const targetIsAdmin = detail?.role === "admin";
+  const canManageAdmin = Boolean(viewerIsOwner && targetIsAdmin);
 
-  // このスタッフを外す（確認ダイアログで実行）。成功したら一覧へ戻す（その人は一覧から消える）。
-  const handleRemove = () => {
-    if (!detail) return;
-    removeMutation.mutate(detail.id, {
-      onSuccess: () => {
-        setConfirmingRemove(false);
-        navigate({ to: "/store/staff" });
-      },
-    });
+  const busy =
+    removeStaffMutation.isPending || removeAdminMutation.isPending || transferMutation.isPending;
+
+  // 確認ダイアログで「実行」を押したときの処理（アクションごとに分岐）
+  const handleConfirm = () => {
+    if (!detail || !pending) return;
+    setError(null);
+    if (pending === "removeStaff") {
+      removeStaffMutation.mutate(detail.id, {
+        onSuccess: () => {
+          setPending(null);
+          // 在籍解除するとその人は一覧から消えるため一覧へ戻す
+          navigate({ to: "/store/staff" });
+        },
+        onError: () => setError(t("store.staffRemoveError")),
+      });
+    } else if (pending === "removeAdmin") {
+      removeAdminMutation.mutate(detail.authUserId, {
+        onSuccess: () => {
+          setPending(null);
+          // 管理者権限を外しても店員としては残る。管理者タブへ戻して最新を見せる
+          navigate({ to: "/store/staff", search: { tab: "admins" } });
+        },
+        onError: () => setError(t("store.adminsRemoveError")),
+      });
+    } else if (pending === "makeOwner") {
+      transferMutation.mutate(detail.authUserId, {
+        onSuccess: () => {
+          setPending(null);
+          navigate({ to: "/store/staff", search: { tab: "admins" } });
+        },
+        onError: () => setError(t("store.adminsTransferError")),
+      });
+    }
   };
 
   return (
@@ -81,7 +127,7 @@ function StoreStaffDetailContent({ store }: { store: StoreProfile }) {
           </div>
         ) : (
           <>
-            {/* 基本情報（顔写真・名前・一言） */}
+            {/* 基本情報（顔写真・名前・一言・ロールバッジ） */}
             <div className="flex flex-col items-center pt-4 text-center">
               <div className="flex h-[88px] w-[88px] items-center justify-center overflow-hidden rounded-full bg-rose-soft text-token-xl text-muted">
                 {detail.avatarUrl ? (
@@ -95,10 +141,22 @@ function StoreStaffDetailContent({ store }: { store: StoreProfile }) {
                 )}
               </div>
               <div className="mt-4 text-token-2xl font-bold text-ink">{detail.displayName}</div>
+              {/* この店でのロール（owner/admin）を持つ人はバッジを出す（店員のみは出さない） */}
+              {detail.role && (
+                <span
+                  className={`mt-2 inline-block rounded-pill px-2.5 py-[3px] text-token-xs font-bold ${
+                    detail.role === "owner" ? "bg-rose-soft text-rose" : "bg-surface-subtle text-ink-sub"
+                  }`}
+                >
+                  {detail.role === "owner"
+                    ? t("store.adminsOwnerBadge")
+                    : t("store.adminsAdminBadge")}
+                </span>
+              )}
               {detail.headline ? (
-                <div className="mt-1.5 text-token-sm text-muted">{detail.headline}</div>
+                <div className="mt-2 text-token-sm text-muted">{detail.headline}</div>
               ) : (
-                <div className="mt-1.5 text-token-sm text-muted-soft">
+                <div className="mt-2 text-token-sm text-muted-soft">
                   {t("store.staffDetailNoHeadline")}
                 </div>
               )}
@@ -114,43 +172,79 @@ function StoreStaffDetailContent({ store }: { store: StoreProfile }) {
             {/* このスタッフを外す（在籍解除・控えめなボタン。実行は確認ダイアログを挟む） */}
             <button
               type="button"
-              onClick={() => setConfirmingRemove(true)}
+              onClick={() => {
+                setError(null);
+                setPending("removeStaff");
+              }}
               className="mt-8 block w-full rounded-xl border-[1.5px] border-rose-spark py-4 text-center text-token-md font-bold text-rose"
             >
               {t("store.staffRemoveCta")}
             </button>
+
+            {/* 管理者操作（owner のみ・対象が管理者(admin)のとき・§11.3） */}
+            {canManageAdmin && (
+              <div className="mt-8">
+                <div className="text-token-sm font-bold text-ink-label">
+                  {t("store.staffDetailAdminSectionTitle")}
+                </div>
+                <div className="mt-3 flex flex-col gap-2.5">
+                  {/* このユーザーをオーナーにする（明示的な owner 譲渡） */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setError(null);
+                      setPending("makeOwner");
+                    }}
+                    className="block w-full rounded-xl border-[1.5px] border-line bg-page py-3.5 text-center text-token-md font-semibold text-ink-label"
+                  >
+                    {t("store.staffDetailMakeOwnerCta")}
+                  </button>
+                  {/* 管理者権限を外す（店員としては残す） */}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setError(null);
+                      setPending("removeAdmin");
+                    }}
+                    className="block w-full rounded-xl border-[1.5px] border-rose-soft bg-page py-3.5 text-center text-token-md font-semibold text-rose"
+                  >
+                    {t("store.staffDetailRemoveAdminCta")}
+                  </button>
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
 
-      {/* 在籍解除の確認ダイアログ（お金は移動しない旨を明記） */}
-      {confirmingRemove && detail && (
+      {/* 確認ダイアログ（下からのシート・アクションごとに文言を出し分ける） */}
+      {pending && detail && (
         <div className="absolute inset-0 z-20 flex items-end justify-center bg-ink/40">
           <div className="w-full rounded-t-2xl bg-page px-6 pb-7 pt-6">
-            <h2 className="text-token-lg font-bold text-ink">
-              {t("store.staffRemoveConfirmTitle")}
+            <h2 className="text-center text-token-lg font-bold text-ink">
+              {confirmTitle(pending, t)}
             </h2>
-            <p className="mt-3 text-token-sm leading-relaxed text-ink-sub">
-              {t("store.staffRemoveConfirmBody", { name: detail.displayName })}
+            <p className="mt-3 whitespace-pre-line text-center text-token-sm leading-relaxed text-ink-sub">
+              {confirmBody(pending, detail.displayName, t)}
             </p>
-            {removeMutation.isError && (
-              <p className="mt-3 text-token-sm text-rose">{t("store.staffRemoveError")}</p>
-            )}
+            {error && <p className="mt-3 text-center text-token-sm text-rose">{error}</p>}
             <div className="mt-5 flex flex-col gap-2.5">
               <button
                 type="button"
-                onClick={handleRemove}
-                disabled={removeMutation.isPending}
+                onClick={handleConfirm}
+                disabled={busy}
                 className="rounded-xl bg-rose py-3.5 text-center text-token-md font-bold text-page disabled:opacity-60"
               >
-                {removeMutation.isPending
-                  ? t("store.staffRemoving")
-                  : t("store.staffRemoveConfirmCta")}
+                {busy ? t("store.staffRemoving") : confirmCta(pending, t)}
               </button>
               <button
                 type="button"
-                onClick={() => setConfirmingRemove(false)}
-                disabled={removeMutation.isPending}
+                onClick={() => {
+                  if (busy) return;
+                  setPending(null);
+                  setError(null);
+                }}
+                disabled={busy}
                 className="py-2 text-center text-token-sm font-semibold text-muted"
               >
                 {t("store.staffRemoveCancel")}
@@ -163,4 +257,44 @@ function StoreStaffDetailContent({ store }: { store: StoreProfile }) {
       <StoreBottomNav active="staff" />
     </PhoneFrame>
   );
+}
+
+// 確認ダイアログの見出しをアクションごとに返す
+function confirmTitle(p: NonNullable<PendingAction>, t: (k: string) => string): string {
+  switch (p) {
+    case "removeStaff":
+      return t("store.staffRemoveConfirmTitle");
+    case "removeAdmin":
+      return t("store.adminsRemoveConfirmTitle");
+    case "makeOwner":
+      return t("store.adminsTransferConfirmTitle");
+  }
+}
+
+// 確認ダイアログの本文をアクションごとに返す（対象名を差し込む）
+function confirmBody(
+  p: NonNullable<PendingAction>,
+  name: string,
+  t: (k: string, o?: Record<string, string>) => string,
+): string {
+  switch (p) {
+    case "removeStaff":
+      return t("store.staffRemoveConfirmBody", { name });
+    case "removeAdmin":
+      return t("store.adminsRemoveConfirmBody");
+    case "makeOwner":
+      return t("store.adminsTransferConfirmBody", { name });
+  }
+}
+
+// 確認ダイアログの実行ボタン文言をアクションごとに返す
+function confirmCta(p: NonNullable<PendingAction>, t: (k: string) => string): string {
+  switch (p) {
+    case "removeStaff":
+      return t("store.staffRemoveConfirmCta");
+    case "removeAdmin":
+      return t("store.adminsRemoveConfirmCta");
+    case "makeOwner":
+      return t("store.adminsTransferConfirmCta");
+  }
 }

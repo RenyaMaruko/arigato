@@ -398,6 +398,8 @@ export async function listStoreInvites(
     items: invites.map((i) => ({
       code: i.code,
       status: i.status,
+      // 招待の種類（staff/admin）。招待中タブで種類ラベルを出し分ける（§11.2）
+      type: i.type,
       createdAt: i.createdAt,
       inviteUrl: buildInviteUrl(i.code),
       acceptedStaffName: i.acceptedStaffName,
@@ -479,7 +481,8 @@ export async function getStoreStaffDetail(
   storeId: string,
   staffId: string,
 ): Promise<StoreStaffDetail> {
-  await requireStoreAdmin(repo, authUserId, storeId);
+  // 閲覧者のロール（viewerRole）を取得する。owner のときだけ管理者操作を出し分ける（§11.3）
+  const { role: viewerRole } = await requireStoreAdmin(repo, authUserId, storeId);
   const detail = await repo.findStaffDetail(storeId, staffId);
   if (!detail) {
     throw new StoreStaffNotFoundError();
@@ -490,6 +493,11 @@ export async function getStoreStaffDetail(
     headline: detail.headline,
     avatarUrl: detail.avatarUrl,
     joinedAt: detail.joinedAt,
+    // 対象の人（管理者操作の対象）と、その人のこの店でのロール（owner/admin/なし）
+    authUserId: detail.authUserId,
+    role: detail.role,
+    // 閲覧者のロール（owner だけに管理者操作を出す）
+    viewerRole,
   };
 }
 

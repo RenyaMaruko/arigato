@@ -180,6 +180,8 @@ export type StoreInviteCreated = z.infer<typeof StoreInviteCreatedSchema>;
 export const StoreInviteItemSchema = z.object({
   code: z.string(),
   status: StoreInviteStatusSchema,
+  // 招待の種類（staff: スタッフ招待 / admin: 管理者招待）。招待中タブで種類ラベルを出し分ける
+  type: StoreInviteTypeSchema,
   // 発行日時（ISO 文字列）
   createdAt: z.string(),
   // 招待リンク（/invite/:code を指す絶対 URL）
@@ -242,6 +244,14 @@ export const StoreStaffDetailSchema = z.object({
   avatarUrl: z.string().nullable(),
   // その店に参加した日（staff_store.created_at。ISO 文字列）
   joinedAt: z.string(),
+  // 対象スタッフの人（Supabase auth.users の UUID）。
+  // 管理者操作（管理者権限を外す・オーナーにする）は auth_user_id を対象に取るため詳細に含める。
+  authUserId: z.string().uuid(),
+  // その人のこの店での管理者ロール（owner / admin）。管理者でなければ null。
+  // owner のみに「管理者権限を外す」「オーナーにする」を出し分けるために使う（§11.3）。
+  role: StoreRoleSchema.nullable(),
+  // 閲覧者（ログイン中）のこの店でのロール。owner のときだけ管理者操作を出す。
+  viewerRole: StoreRoleSchema,
 });
 export type StoreStaffDetail = z.infer<typeof StoreStaffDetailSchema>;
 

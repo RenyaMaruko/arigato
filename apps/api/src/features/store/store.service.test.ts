@@ -64,7 +64,8 @@ function inPeriod(receivedAt: string, period?: { from?: string; to?: string }): 
 function createMockRepo() {
   const stores = new Map<string, StoreRow>();
   const invitesByStore = new Map<string, StoreInviteRow[]>();
-  const staffByStore = new Map<string, StoreStaffRow[]>();
+  // スタッフ行に authUserId（任意）を持たせ、店員でもある管理者のロール解決（詳細のロール出し分け）を検証できるようにする
+  const staffByStore = new Map<string, (StoreStaffRow & { authUserId?: string })[]>();
   // 店の管理者（store_admin 相当）。store_id ごとに保持。leftAt は論理削除（null＝active）
   const adminsByStore = new Map<
     string,
@@ -203,6 +204,7 @@ function createMockRepo() {
       const invite: StoreInviteRow = {
         code,
         status: "pending",
+        type: "staff",
         createdAt: "2026-06-23T00:00:00Z",
         acceptedStaffName: null,
         acceptedAt: null,
@@ -214,7 +216,7 @@ function createMockRepo() {
       return invite;
     },
     async listInvites(storeId) {
-      // 実装と同じく招待中（pending）だけを返す
+      // 実装と同じく招待中（pending）だけを返す（スタッフ招待＋管理者招待の両方）
       return (invitesByStore.get(storeId) ?? []).filter((i) => i.status === "pending");
     },
     async findInviteByCode(storeId, code) {
@@ -234,16 +236,23 @@ function createMockRepo() {
         (s) => !removedStaff.has(removedKey(storeId, s.id)),
       );
     },
-    // 在籍中スタッフ1人の詳細（参加日付き・金額なし）。脱退済み・他店・存在しないは null
+    // 在籍中スタッフ1人の詳細（参加日付き・金額なし）。脱退済み・他店・存在しないは null。
+    // その人の authUserId（無ければ id で代用）から active な管理者ロールを引いて role を埋める（詳細のロール出し分け検証用）。
     async findStaffDetail(storeId, staffId) {
       const s = (staffByStore.get(storeId) ?? []).find((x) => x.id === staffId);
       if (!s || removedStaff.has(removedKey(storeId, staffId))) return null;
+      const authUserId = s.authUserId ?? s.id;
+      const admin = (adminsByStore.get(storeId) ?? []).find(
+        (a) => a.authUserId === authUserId && a.leftAt === null,
+      );
       return {
         id: s.id,
         displayName: s.displayName,
         headline: s.headline,
         avatarUrl: s.avatarUrl,
         joinedAt: "2026-06-23T00:00:00Z",
+        authUserId,
+        role: admin?.role ?? null,
       };
     },
     // 自店のスタッフを在籍解除する（論理削除）。在籍中のみ対象。解除できた件数を返す
@@ -324,6 +333,7 @@ function createMockRepo() {
       const invite: StoreInviteRow = {
         code,
         status: "pending",
+        type: "admin",
         createdAt: "2026-06-23T00:00:00Z",
         acceptedStaffName: null,
         acceptedAt: null,
@@ -483,6 +493,7 @@ describe("store.service", () => {
       {
         code: "pending-1",
         status: "pending",
+        type: "staff",
         createdAt: "2026-06-23T00:00:00Z",
         acceptedStaffName: null,
         acceptedAt: null,
@@ -491,6 +502,7 @@ describe("store.service", () => {
       {
         code: "accepted-1",
         status: "accepted",
+        type: "staff",
         createdAt: "2026-06-22T00:00:00Z",
         acceptedStaffName: "山田 さくら",
         acceptedAt: "2026-06-22T01:00:00Z",
@@ -499,6 +511,7 @@ describe("store.service", () => {
       {
         code: "revoked-1",
         status: "revoked",
+        type: "staff",
         createdAt: "2026-06-21T00:00:00Z",
         acceptedStaffName: null,
         acceptedAt: null,
@@ -511,6 +524,19 @@ describe("store.service", () => {
     expect(list.items[0]!.code).toBe("pending-1");
     expect(list.items[0]!.status).toBe("pending");
     expect(list.pendingCount).toBe(1);
+  });
+
+  it("listStoreInvites: スタッフ招待と管理者招待の両方を種類つきで返す（§11.2 統合タブ）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    // スタッフ招待・管理者招待をそれぞれ発行する（owner は両方発行できる）
+    await createStoreInvite(m.repo, buildUrl, "owner-1", "store-1", { label: "ホール担当" });
+    await createStoreAdminInvite(m.repo, buildUrl, "owner-1", "store-1", { label: "副店長" });
+    const list = await listStoreInvites(m.repo, buildUrl, "owner-1", "store-1");
+    // 両方の招待中が返り、種類（staff/admin）が付く
+    expect(list.items.length).toBe(2);
+    const types = list.items.map((i) => i.type).sort();
+    expect(types).toEqual(["admin", "staff"]);
+    expect(list.pendingCount).toBe(2);
   });
 
   it("revokeStoreInvite: 招待中（pending）を取り消すと一覧から消える", async () => {
@@ -578,6 +604,33 @@ describe("store.service", () => {
     expect(detail.joinedAt).toBeTruthy();
     // 金額に関わるキーが含まれない（店はお金に触れない）
     expect(JSON.stringify(detail)).not.toMatch(/amount|customer_total|platform_fee|balance|payout/i);
+  });
+
+  it("getStoreStaffDetail: 店員でもある管理者は role とviewerRole を返す（owner のみ管理者操作を出す・§11.3）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    // 管理者(admin) でもある店員（authUserId が admin と一致）
+    seedAdmin(m, "store-1", "admin-user", "2026-06-24T00:00:00Z", "admin");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "田中 管理", headline: null, avatarUrl: null, authUserId: "admin-user" },
+    ]);
+    // owner が見ると、対象のロール(admin)・自分のロール(owner)・対象の authUserId を得られる
+    const asOwner = await getStoreStaffDetail(m.repo, "owner-1", "store-1", "s1");
+    expect(asOwner.role).toBe("admin");
+    expect(asOwner.viewerRole).toBe("owner");
+    expect(asOwner.authUserId).toBe("admin-user");
+    // admin 自身が見ると viewerRole は admin（管理者操作は出せない）
+    const asAdmin = await getStoreStaffDetail(m.repo, "admin-user", "store-1", "s1");
+    expect(asAdmin.viewerRole).toBe("admin");
+  });
+
+  it("getStoreStaffDetail: 店員だけ（管理者でない）は role が null", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      { id: "s1", displayName: "山田 さくら", headline: null, avatarUrl: null, authUserId: "plain-staff" },
+    ]);
+    const detail = await getStoreStaffDetail(m.repo, "owner-1", "store-1", "s1");
+    expect(detail.role).toBeNull();
+    expect(detail.viewerRole).toBe("owner");
   });
 
   it("getStoreStaffDetail: 他店のオーナーは取得できない（店スコープ・404 相当）", async () => {

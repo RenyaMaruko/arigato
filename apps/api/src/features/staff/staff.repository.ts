@@ -684,6 +684,18 @@ export function createStaffRepository(): StaffRepository {
         if (!staffRows[0]) {
           throw new Error("staff_not_found");
         }
+        const staffId = staffRows[0].id;
+
+        // 兼任（§11.1）: 管理者は「その店の店員」も兼ねる。受け入れ時に staff_store（所属・QR）を
+        // 作る／再有効化する（既に在籍中なら ON CONFLICT で no-op＝既存流用・重複を作らない）。
+        // 一意制約 (staff_id, store_id) と整合。管理者を外しても staff_store は残す（別処理）。
+        const ensureStaffStore = async () => {
+          await tx.execute(sql`
+            INSERT INTO staff_store (staff_id, store_id)
+            VALUES (${staffId}, ${invite.storeId})
+            ON CONFLICT (staff_id, store_id) DO UPDATE SET left_at = NULL
+          `);
+        };
 
         // 既存の store_admin（store×人）を在籍状態込みで引く（UNIQUE のため最大1件・行ロック）
         const existingRows = await tx.execute<{ id: string; leftAt: string | null }>(sql`
@@ -711,6 +723,8 @@ export function createStaffRepository(): StaffRepository {
             SET left_at = NULL, role = 'admin'
             WHERE id = ${existing.id}
           `);
+          // 兼任: 店員としての在籍（staff_store）も作る／再有効化する
+          await ensureStaffStore();
           const accepted = await tx.execute<{ id: string }>(sql`
             UPDATE staff_invite
             SET status = 'accepted',
@@ -735,6 +749,8 @@ export function createStaffRepository(): StaffRepository {
           INSERT INTO store_admin (store_id, auth_user_id, role)
           VALUES (${invite.storeId}, ${authUserId}, 'admin')
         `);
+        // 兼任: 店員としての在籍（staff_store）も作る／再有効化する（既に在籍中なら既存流用）
+        await ensureStaffStore();
         // 招待を消費する（pending のときのみ。二重消費はここで弾く）
         const accepted = await tx.execute<{ id: string }>(sql`
           UPDATE staff_invite

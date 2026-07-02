@@ -1,5 +1,5 @@
 import { getDb, sql } from "@arigato/db";
-import type { StoreInviteStatus, StoreRole } from "./store.model.js";
+import type { StoreInviteStatus, StoreInviteType, StoreRole } from "./store.model.js";
 
 /**
  * store feature の Repository 層（DB アクセス専用・生 SQL）。
@@ -60,6 +60,8 @@ export type StoreAdminListRow = {
 export type StoreInviteRow = {
   code: string;
   status: StoreInviteStatus;
+  // 招待の種類（staff: スタッフ招待 / admin: 管理者招待）。招待中タブで種類ラベルを出す
+  type: StoreInviteType;
   // 発行日時（ISO 文字列）
   createdAt: string;
   // 消費して所属した店員さんの表示名（未消費は null）
@@ -86,6 +88,10 @@ export type StoreStaffDetailRow = {
   avatarUrl: string | null;
   // その店に参加した日時（staff_store.created_at。ISO 文字列）
   joinedAt: string;
+  // 対象スタッフの人（Supabase auth.users の UUID）。管理者操作の対象特定に使う
+  authUserId: string;
+  // その人のこの店での active な管理者ロール（owner/admin）。管理者でなければ null（出し分け用）
+  role: StoreRole | null;
 };
 
 // 感謝の「お客さまの声」1件分（金額なし）
@@ -317,6 +323,17 @@ export function createStoreRepository(): StoreRepository {
           INSERT INTO store_admin (store_id, auth_user_id, role)
           VALUES (${store.id}, ${params.creatorAuthUserId}, 'owner')
         `);
+        // 兼任（§11.1）: 作成者を「その店の店員（staff_store）」としても在籍させる（QR・受取を持てる）。
+        // 作成者の staff プロフィール（人ごと1つ）を auth_user_id で引いて所属を1件作る。
+        // プロフィール未作成のケース（稀）では SELECT が 0 行になり staff_store は作られない（店作成自体は成立）。
+        // ON CONFLICT は新店では発生しないが、再有効化の意味も兼ねて安全側に置く（一意制約と整合）。
+        await tx.execute(sql`
+          INSERT INTO staff_store (staff_id, store_id)
+          SELECT s.id, ${store.id}
+          FROM staff s
+          WHERE s.auth_user_id = ${params.creatorAuthUserId}
+          ON CONFLICT (staff_id, store_id) DO UPDATE SET left_at = NULL
+        `);
         return store;
       });
     },
@@ -538,6 +555,7 @@ export function createStoreRepository(): StoreRepository {
         RETURNING
           code      AS "code",
           status    AS "status",
+          type      AS "type",
           to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')   AS "createdAt",
           NULL      AS "acceptedStaffName",
           NULL      AS "acceptedAt",
@@ -555,6 +573,7 @@ export function createStoreRepository(): StoreRepository {
         RETURNING
           code      AS "code",
           status    AS "status",
+          type      AS "type",
           to_char(created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')   AS "createdAt",
           NULL      AS "acceptedStaffName",
           NULL      AS "acceptedAt",
@@ -563,14 +582,16 @@ export function createStoreRepository(): StoreRepository {
       return rows[0]!;
     },
 
-    // 自店の招待中（pending）だけを新しい順に取得する。
+    // 自店の招待中（pending）だけを新しい順に取得する（スタッフ招待＋管理者招待の両方＝統合タブ用）。
     // accepted（在籍中タブに出る）・revoked（履歴管理しない）は二重表示を避けるため返さない。
+    // type（staff/admin）を併せて返し、招待中タブで種類ラベルを出し分ける（§11.2）。
     async listInvites(storeId) {
       const db = getDb();
       const rows = await db.execute<StoreInviteRow>(sql`
         SELECT
           i.code        AS "code",
           i.status      AS "status",
+          i.type        AS "type",
           to_char(i.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')   AS "createdAt",
           NULL          AS "acceptedStaffName",
           NULL          AS "acceptedAt",
@@ -578,19 +599,20 @@ export function createStoreRepository(): StoreRepository {
         FROM staff_invite i
         WHERE i.store_id = ${storeId}
           AND i.status = 'pending'
-          AND i.type = 'staff'
         ORDER BY i.created_at DESC
       `);
       return rows;
     },
 
-    // 自店の招待 1 件（pending）を取得する（再コピー画面・取り消しの対象確認）。pending 以外は対象外
+    // 自店の招待 1 件（pending）を取得する（再コピー画面・取り消しの対象確認）。pending 以外は対象外。
+    // スタッフ招待・管理者招待どちらも対象（type で絞らない）。
     async findInviteByCode(storeId, code) {
       const db = getDb();
       const rows = await db.execute<StoreInviteRow>(sql`
         SELECT
           i.code        AS "code",
           i.status      AS "status",
+          i.type        AS "type",
           to_char(i.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"')   AS "createdAt",
           NULL          AS "acceptedStaffName",
           NULL          AS "acceptedAt",
@@ -641,6 +663,8 @@ export function createStoreRepository(): StoreRepository {
 
     // 自店の在籍中スタッフ1人の詳細を取得する（店スコープ・金額なし）。
     // 在籍中（left_at IS NULL）のみ対象。他店・脱退済み・存在しないなら null。
+    // 兼任（§11.1/§11.3）: staff.auth_user_id で store_admin（active）を左結合し、その人のこの店での
+    // 管理者ロール（owner/admin）を role として返す（管理者でなければ null）。authUserId は管理者操作の対象特定に使う。
     async findStaffDetail(storeId, staffId) {
       const db = getDb();
       const rows = await db.execute<StoreStaffDetailRow>(sql`
@@ -649,9 +673,15 @@ export function createStoreRepository(): StoreRepository {
           s.display_name  AS "displayName",
           s.headline      AS "headline",
           s.avatar_url    AS "avatarUrl",
-          to_char(ss.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "joinedAt"
+          to_char(ss.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "joinedAt",
+          s.auth_user_id  AS "authUserId",
+          sa.role         AS "role"
         FROM staff_store ss
         JOIN staff s ON s.id = ss.staff_id
+        LEFT JOIN store_admin sa
+          ON sa.store_id = ss.store_id
+          AND sa.auth_user_id = s.auth_user_id
+          AND sa.left_at IS NULL
         WHERE ss.store_id = ${storeId}
           AND ss.staff_id = ${staffId}
           AND ss.left_at IS NULL
