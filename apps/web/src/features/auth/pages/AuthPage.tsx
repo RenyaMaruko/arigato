@@ -166,25 +166,8 @@ export function AuthPage() {
           </div>
         </div>
 
-        {/* Google で続ける */}
-        <button
-          type="button"
-          onClick={handleGoogle}
-          className="mt-8 flex items-center justify-center gap-[7px] rounded-xl border-[1.5px] border-line bg-page py-4 text-token-lg font-semibold text-ink"
-        >
-          <span className="text-token-xl font-bold text-google-blue">G</span>
-          {t("auth.continueWithGoogle")}
-        </button>
-
-        {/* 区切り */}
-        <div className="my-6 flex items-center gap-3 text-token-sm text-muted">
-          <span className="h-px flex-1 bg-line-soft" />
-          {t("auth.or")}
-          <span className="h-px flex-1 bg-line-soft" />
-        </div>
-
-        {/* メール＋パスワードのフォーム */}
-        <form onSubmit={handleSubmit} className="flex flex-col">
+        {/* メール＋パスワードのフォーム（上に配置） */}
+        <form onSubmit={handleSubmit} className="mt-8 flex flex-col">
           <label className="text-token-sm text-ink-sub" htmlFor="auth-email">
             {t("auth.emailLabel")}
           </label>
@@ -223,6 +206,23 @@ export function AuthPage() {
         {/* エラー表示 */}
         {error && <div className="mt-4 text-center text-token-sm text-rose">{error}</div>}
 
+        {/* 区切り */}
+        <div className="my-6 flex items-center gap-3 text-token-sm text-muted">
+          <span className="h-px flex-1 bg-line-soft" />
+          {t("auth.or")}
+          <span className="h-px flex-1 bg-line-soft" />
+        </div>
+
+        {/* Google で続ける（下に配置） */}
+        <button
+          type="button"
+          onClick={handleGoogle}
+          className="flex items-center justify-center gap-[7px] rounded-xl border-[1.5px] border-line bg-page py-4 text-token-lg font-semibold text-ink"
+        >
+          <span className="text-token-xl font-bold text-google-blue">G</span>
+          {t("auth.continueWithGoogle")}
+        </button>
+
         {/* パスワードを忘れた導線（ログイン時のみ） */}
         {mode === "login" && (
           <button
@@ -234,11 +234,11 @@ export function AuthPage() {
           </button>
         )}
 
-        {/* ログイン⇄サインアップの切替 */}
+        {/* ログイン⇄サインアップの切替（テキストリンクのまま、少し大きく太字で目立たせる） */}
         <button
           type="button"
           onClick={() => switchMode(mode === "login" ? "signup" : "login")}
-          className="mt-3 text-center text-token-sm text-rose"
+          className="mt-5 text-center text-token-md font-bold text-rose underline underline-offset-4"
         >
           {mode === "login" ? t("auth.toSignup") : t("auth.toLogin")}
         </button>
