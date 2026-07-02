@@ -92,6 +92,31 @@ export const StoreAdminsResponseSchema = z.object({
 export type StoreAdminsResponse = z.infer<typeof StoreAdminsResponseSchema>;
 
 /**
+ * GET /store/mine の1件分（自分が管理する店の一覧・複数店舗＋中央ナビ切替 §11.4）。
+ * 管理者（owner/admin）として関わる各店を、店の管理モードへ切り替える選択肢として返す。
+ * 金額・残高・件数は一切含めない（店はお金に触れない）。id/名前/ロゴ/自分のロールだけを返す。
+ */
+export const StoreManagedItemSchema = z.object({
+  id: z.string().uuid(),
+  name: z.string(),
+  // 店ロゴ（未設定は null。選択一覧のアイコン表示に使う）
+  logoUrl: z.string().nullable(),
+  // その店での自分のロール（owner/admin）。一覧の「オーナー」バッジ等の表示に使う
+  role: StoreRoleSchema,
+});
+export type StoreManagedItem = z.infer<typeof StoreManagedItemSchema>;
+
+/**
+ * GET /store/mine の応答（自分が管理する店の一覧・§11.4）。
+ * owner を先頭に、その後 admin を古参順で返す（findStoreForAdmin と同じ並び）。
+ * 中央ナビの切替で「1件なら直行・複数なら一覧から選択」を出し分けるために使う。金額は含めない。
+ */
+export const StoreManagedListResponseSchema = z.object({
+  items: z.array(StoreManagedItemSchema),
+});
+export type StoreManagedListResponse = z.infer<typeof StoreManagedListResponseSchema>;
+
+/**
  * POST /store/:storeId/owner/leave（owner が店から抜ける）の応答（owner ライフサイクル §5.4）。
  * - promoted: 残る最古参の管理者を owner へ自動昇格した（newOwnerAuthUserId が新 owner）
  * - closed:   残る管理者がいないので店を論理削除（閉店）した

@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { UpdateStoreProfileInput, CreateStoreInput } from "@arigato/shared";
 import {
   fetchMyStore,
+  fetchManagedStores,
+  fetchStore,
   createStore,
   updateStore,
   uploadStoreLogo,
@@ -27,6 +29,8 @@ import {
 
 // クエリキー
 const STORE_ME_KEY = ["store", "me"] as const;
+// 自分が管理する店の一覧（GET /store/mine）のクエリキー（中央ナビ切替の判定・選択に使う）
+const STORE_MINE_KEY = ["store", "mine"] as const;
 
 /**
  * 自分（ログイン中の店アカウント）が所有する店（GET /store/me）を取得する。
@@ -42,6 +46,34 @@ export function useMyStore(enabled: boolean) {
 }
 
 /**
+ * 自分が管理する店の一覧（GET /store/mine・§11.4）を取得する。
+ * 中央ナビの切替ボタンの表示条件（items.length >= 1）と、切替時の分岐（1件直行/複数一覧）に使う。
+ * enabled でログイン済みのときだけ走らせる。純店員は items 空配列。金額は含まれない。
+ */
+export function useManagedStores(enabled: boolean) {
+  return useQuery({
+    queryKey: STORE_MINE_KEY,
+    queryFn: fetchManagedStores,
+    enabled,
+    retry: false,
+  });
+}
+
+/**
+ * 選択中の店（GET /store/:storeId）を取得する（§11.4・選択店解決）。
+ * 単一 /store/me 前提を廃し、中央ナビで選んだ storeId の店プロフィールを引く。
+ * storeId が確定しているときだけ走らせる。
+ */
+export function useStore(storeId: string | undefined) {
+  return useQuery({
+    queryKey: ["store", "detail", storeId],
+    queryFn: () => fetchStore(storeId!),
+    enabled: Boolean(storeId),
+    retry: false,
+  });
+}
+
+/**
  * 店舗をセルフサーブで新規作成する（POST /store）。
  * 成功時は store/me を更新・無効化して最新を取り直し、ホームへ進める。
  */
@@ -52,6 +84,10 @@ export function useCreateStore() {
     onSuccess: (store) => {
       qc.setQueryData(STORE_ME_KEY, store);
       qc.invalidateQueries({ queryKey: STORE_ME_KEY });
+      // 管理する店が増えるため一覧（中央ナビの表示条件・選択肢）を取り直す（§11.4）
+      qc.invalidateQueries({ queryKey: STORE_MINE_KEY });
+      // 店員側 me の managesStore も true に変わるため取り直す（設定・ナビの出し分け）
+      qc.invalidateQueries({ queryKey: ["staff", "me"] });
     },
   });
 }
@@ -265,6 +301,8 @@ export function useCloseStore() {
     mutationFn: (storeId: string) => closeStore(storeId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: STORE_ME_KEY });
+      // 管理する店が減るため一覧（中央ナビの表示条件・選択肢）を取り直す（§11.4）
+      qc.invalidateQueries({ queryKey: STORE_MINE_KEY });
       qc.invalidateQueries({ queryKey: ["staff", "me"] });
     },
   });
@@ -280,6 +318,8 @@ export function useLeaveStoreAsOwner() {
     mutationFn: (storeId: string) => leaveStoreAsOwner(storeId),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: STORE_ME_KEY });
+      // 管理する店が減る場合があるため一覧（中央ナビの表示条件・選択肢）を取り直す（§11.4）
+      qc.invalidateQueries({ queryKey: STORE_MINE_KEY });
       qc.invalidateQueries({ queryKey: ["staff", "me"] });
     },
   });

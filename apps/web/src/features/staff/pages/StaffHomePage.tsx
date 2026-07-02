@@ -165,6 +165,13 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
             onClick={() => navigate({ to: "/staff/profile" })}
             icon={<UserIcon />}
           />
+          {/* 店舗作成（§11.4）。管理店の有無に関わらず常に表示（何店でも作れる）。
+              押すと店作成フロー（/store/new）へ。作成後は店員ホームへ戻り中央ナビ切替が出る。 */}
+          <FeatureTile
+            label={t("staff.homeCreateStore")}
+            onClick={() => navigate({ to: "/store/new" })}
+            icon={<StoreCreateIcon />}
+          />
         </div>
       </div>
 
@@ -277,6 +284,28 @@ function ExportIcon() {
       <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
       <path d="M14 3v5h5" />
       <path d="M12 18v-6M9.5 14.5 12 12l2.5 2.5" />
+    </svg>
+  );
+}
+
+/** 店舗作成（建物＋プラス）アイコン。ホームの「店舗作成」タイルに使う。 */
+function StoreCreateIcon() {
+  return (
+    <svg
+      width="30"
+      height="30"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 9.5 5.2 5h13.6L20 9.5" />
+      <path d="M4 9.5V20h9" />
+      <path d="M4 9.5a2 2 0 0 0 4 0 2 2 0 0 0 4 0 2 2 0 0 0 4 0 2 2 0 0 0 4 0" />
+      <path d="M17 15v6M14 18h6" />
     </svg>
   );
 }

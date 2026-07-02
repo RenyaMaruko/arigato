@@ -69,6 +69,31 @@ export function createInMemoryStoreRepository(): StoreRepository {
       return best?.store ?? null;
     },
 
+    // 自分が active な管理者（owner/admin）である営業中の店を全件返す（owner 先頭→古参順・閉店除外）
+    async listManagedStores(authUserId) {
+      const rows: { id: string; name: string; logoUrl: string | null; role: StoreRole; createdAt: string }[] = [];
+      for (const [storeId, admins] of adminsByStore) {
+        const store = stores.get(storeId);
+        if (!store || store.closedAt !== null) continue;
+        const mine = admins.find((a) => a.authUserId === authUserId && a.leftAt === null);
+        if (!mine) continue;
+        rows.push({
+          id: store.id,
+          name: store.name,
+          logoUrl: store.logoUrl,
+          role: mine.role,
+          createdAt: mine.createdAt,
+        });
+      }
+      // owner を先頭に、その後古参順（createdAt 昇順）で並べる
+      rows.sort((x, y) => {
+        if ((x.role === "owner") !== (y.role === "owner")) return x.role === "owner" ? -1 : 1;
+        if (x.createdAt !== y.createdAt) return x.createdAt < y.createdAt ? -1 : 1;
+        return x.id < y.id ? -1 : 1;
+      });
+      return rows.map(({ id, name, logoUrl, role }) => ({ id, name, logoUrl, role }));
+    },
+
     // 店を作成し、同時に作成者を owner にする
     async createStoreWithOwner(params) {
       const id = randomUUID();

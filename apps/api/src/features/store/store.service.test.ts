@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import {
   getMyStore,
+  listMyManagedStores,
   createStore,
   getStore,
   updateStore,
@@ -21,7 +22,6 @@ import {
   leaveStoreAsOwner,
   StoreForbiddenError,
   StoreNotFoundError,
-  StoreAlreadyExistsError,
   StoreInviteNotFoundError,
   StoreStaffNotFoundError,
   StoreAdminNotFoundError,
@@ -106,6 +106,23 @@ function createMockRepo() {
         }
       }
       return best?.store ?? null;
+    },
+    // 自分が active な管理者（owner/admin）である営業中の店を全件返す（owner 先頭→古参順・閉店除外）
+    async listManagedStores(authUserId) {
+      const rows: { id: string; name: string; logoUrl: string | null; role: StoreRole; createdAt: string }[] = [];
+      for (const [storeId, admins] of adminsByStore) {
+        const store = stores.get(storeId);
+        if (!store || store.closedAt !== null) continue;
+        const mine = admins.find((a) => a.authUserId === authUserId && a.leftAt === null);
+        if (!mine) continue;
+        rows.push({ id: store.id, name: store.name, logoUrl: store.logoUrl, role: mine.role, createdAt: mine.createdAt });
+      }
+      rows.sort((x, y) => {
+        if ((x.role === "owner") !== (y.role === "owner")) return x.role === "owner" ? -1 : 1;
+        if (x.createdAt !== y.createdAt) return x.createdAt < y.createdAt ? -1 : 1;
+        return x.id < y.id ? -1 : 1;
+      });
+      return rows.map(({ id, name, logoUrl, role }) => ({ id, name, logoUrl, role }));
     },
     async createStoreWithOwner(params) {
       const id = `store-${stores.size + 1}`;
@@ -425,12 +442,41 @@ describe("store.service", () => {
     expect((await getMyStore(m.repo, "owner-1"))?.id).toBe(created.id);
   });
 
-  it("createStore: 1アカウント1店舗（既に作成済みなら拒否）", async () => {
-    await createStore(m.repo, "owner-1", { name: "1号店", adoptionAgreed: true });
-    // 同じアカウントの2回目は拒否
-    await expect(
-      createStore(m.repo, "owner-1", { name: "2号店", adoptionAgreed: true }),
-    ).rejects.toBeInstanceOf(StoreAlreadyExistsError);
+  it("createStore: 複数店舗を作成できる（§11.4・1アカウントで何店でも）", async () => {
+    const a = await createStore(m.repo, "owner-1", { name: "1号店", adoptionAgreed: true });
+    // 同じアカウントの2回目も作成できる（1アカウント1店舗の制限は撤廃）
+    const b = await createStore(m.repo, "owner-1", { name: "2号店", adoptionAgreed: true });
+    expect(a.id).not.toBe(b.id);
+    // 両方とも自分が管理する店として引ける（GET /store/mine）
+    const mine = await listMyManagedStores(m.repo, "owner-1");
+    expect(mine.items.map((i) => i.name).sort()).toEqual(["1号店", "2号店"]);
+    // 作成した2店ともロールは owner
+    expect(mine.items.every((i) => i.role === "owner")).toBe(true);
+  });
+
+  it("listMyManagedStores: owner/admin として管理する店を owner 先頭・古参順で返す（金額なし）", async () => {
+    // owner の店・admin の店・他人だけの店・閉店した自分の店 を用意する
+    seedOwnedStore(m, "store-owner", "me");
+    seedOwnedStore(m, "store-admin", "someone");
+    seedAdmin(m, "store-admin", "me", "2026-06-24T00:00:00Z", "admin");
+    seedOwnedStore(m, "store-other", "stranger");
+    seedOwnedStore(m, "store-closed", "me");
+    m.stores.set("store-closed", { ...m.stores.get("store-closed")!, closedAt: "2026-06-25T00:00:00Z" });
+
+    const mine = await listMyManagedStores(m.repo, "me");
+    // 自分が active 管理者の営業中の店だけ（他人だけの店・閉店店は出ない）
+    expect(mine.items.map((i) => i.id)).toEqual(["store-owner", "store-admin"]);
+    // owner を先頭に並ぶ
+    expect(mine.items[0]!.role).toBe("owner");
+    expect(mine.items[1]!.role).toBe("admin");
+    // 金額・件数・残高は含めない（id/name/logoUrl/role のみ）
+    expect(Object.keys(mine.items[0]!).sort()).toEqual(["id", "logoUrl", "name", "role"]);
+  });
+
+  it("listMyManagedStores: 純店員（管理する店なし）は空配列", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    const mine = await listMyManagedStores(m.repo, "pure-staff");
+    expect(mine.items).toEqual([]);
   });
 
   it("店スコープ: 他店（別 owner）には触れない（404 相当）", async () => {

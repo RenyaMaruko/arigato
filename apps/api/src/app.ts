@@ -49,6 +49,7 @@ import { createInMemoryStaffRepository } from "./features/staff/staff.repository
 import { buildTipUrl } from "./features/staff/staff.model.js";
 import {
   getMyStore,
+  listMyManagedStores,
   createStore,
   getStore,
   updateStore,
@@ -218,6 +219,8 @@ export function createApp() {
   const storeRoute = createStoreRoute({
     authMiddleware,
     getMyStore: (authUserId) => getMyStore(storeRepo, authUserId),
+    // 自分が管理する店の一覧（GET /store/mine・§11.4）。中央ナビの切替に使う。金額なし
+    listMyManagedStores: (authUserId) => listMyManagedStores(storeRepo, authUserId),
     createStore: (authUserId, input) => createStore(storeRepo, authUserId, input),
     getStore: (authUserId, storeId) => getStore(storeRepo, authUserId, storeId),
     updateStore: (authUserId, storeId, input) =>

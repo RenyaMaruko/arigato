@@ -6,6 +6,7 @@ import {
   StoreStaffDetailSchema,
   StoreGratitudeSchema,
   StoreAdminsResponseSchema,
+  StoreManagedListResponseSchema,
   StoreOwnerLeaveResultSchema,
   LogoUploadResultSchema,
   type StoreProfile,
@@ -16,6 +17,7 @@ import {
   type StoreStaffDetail,
   type StoreGratitude,
   type StoreAdminsResponse,
+  type StoreManagedListResponse,
   type StoreOwnerLeaveResult,
   type UpdateStoreProfileInput,
   type CreateStoreInput,
@@ -67,6 +69,19 @@ export async function createStore(input: CreateStoreInput): Promise<StoreProfile
     throw new Error(code);
   }
   return StoreProfileSchema.parse(await res.json());
+}
+
+/**
+ * GET /store/mine — 自分が管理する店の一覧を取得する（§11.4）。
+ * 中央ナビの切替（1件なら直行・複数なら一覧から選択）に使う。管理する店が無ければ items は空配列。
+ * 金額・残高・件数は含まれない（バックが返さない）。
+ */
+export async function fetchManagedStores(): Promise<StoreManagedListResponse> {
+  const res = await apiClient.store.mine.$get();
+  if (!res.ok) {
+    throw new Error(`store mine request failed: ${res.status}`);
+  }
+  return StoreManagedListResponseSchema.parse(await res.json());
 }
 
 /**

@@ -46,6 +46,15 @@ export type StoreAdminRow = {
   createdAt: string;
 };
 
+// 自分が管理する店の一覧の1件（GET /store/mine・§11.4）。金額は持たない。
+// id/名前/ロゴ/自分のロールだけを返し、中央ナビの切替（1件直行/複数一覧）に使う。
+export type StoreManagedRow = {
+  id: string;
+  name: string;
+  logoUrl: string | null;
+  role: StoreRole;
+};
+
 // 管理者一覧の1件（表示用）。store_admin に staff プロフィール（表示名・顔写真）を左結合して返す。
 // staff プロフィール未作成の管理者もあり得るため displayName / avatarUrl は null 可（金額は持たない）。
 export type StoreAdminListRow = {
@@ -146,6 +155,10 @@ export type StoreRepository = {
   // 自分（auth ユーザー）が active な管理者（store_admin）である店を取得する（店ホーム・設定の起点）。
   // owner を優先し、次に古参順で1件返す。閉店（closed_at）店は除外する（フェーズ2は1店の一般ケース）。
   findStoreForAdmin: (authUserId: string) => Promise<StoreRow | null>;
+  // 自分（auth ユーザー）が active な管理者（owner/admin）である営業中の店を全件返す（GET /store/mine・§11.4）。
+  // owner を先頭に、その後 admin を古参順（created_at 昇順）で返す。閉店（closed_at）店は除外する。
+  // 金額は含めず、中央ナビの切替（1件直行/複数一覧）の選択肢として使う。
+  listManagedStores: (authUserId: string) => Promise<StoreManagedRow[]>;
   // 店舗をセルフサーブで新規作成し、同時に作成者を owner（store_admin role=owner）にする（1トランザクション）。
   // 作成した店行を返す（導入承認に同意済み）。
   createStoreWithOwner: (params: CreateStoreParams) => Promise<StoreRow>;
@@ -298,6 +311,27 @@ export function createStoreRepository(): StoreRepository {
         LIMIT 1
       `);
       return rows[0] ?? null;
+    },
+
+    // 自分が active な管理者（owner/admin）である営業中の店を全件返す（GET /store/mine・§11.4）。
+    // owner を先頭に、その後古参順（created_at 昇順）で並べる。閉店（closed_at）店は除外する。
+    // 金額カラムは一切 SELECT しない（id/名前/ロゴ/自分のロールのみ・店はお金に触れない）。
+    async listManagedStores(authUserId) {
+      const db = getDb();
+      const rows = await db.execute<StoreManagedRow>(sql`
+        SELECT
+          st.id        AS "id",
+          st.name      AS "name",
+          st.logo_url  AS "logoUrl",
+          sa.role      AS "role"
+        FROM store_admin sa
+        JOIN store st ON st.id = sa.store_id
+        WHERE sa.auth_user_id = ${authUserId}
+          AND sa.left_at IS NULL
+          AND st.closed_at IS NULL
+        ORDER BY (sa.role = 'owner') DESC, sa.created_at ASC, st.id ASC
+      `);
+      return rows;
     },
 
     // 店舗をセルフサーブで新規作成し、同時に作成者を owner（store_admin role=owner）にする。

@@ -7,6 +7,7 @@ import type {
   StoreStaffDetail,
   StoreGratitude,
   StoreAdminsResponse,
+  StoreManagedListResponse,
   StoreOwnerLeaveResult,
   UpdateStoreProfileInput,
   CreateStoreInput,
@@ -121,34 +122,40 @@ export async function getMyStore(
   return toStoreProfile(store);
 }
 
-// 店舗の重複作成（1アカウント1店舗）を防ぐためのエラー（Route で 409 に変換する）
-export class StoreAlreadyExistsError extends Error {
-  constructor() {
-    super("store_already_exists");
-    this.name = "StoreAlreadyExistsError";
-  }
+/**
+ * 自分（ログイン中のアカウント）が管理する店の一覧を取得する（GET /store/mine・§11.4）。
+ * 中央ナビの切替（1件なら直行・複数なら一覧から選択）に使う。owner を先頭に古参順で返す。
+ * 金額・残高・件数は一切含めない（店はお金に触れない）。管理する店が無ければ空配列。
+ */
+export async function listMyManagedStores(
+  repo: StoreRepository,
+  authUserId: string,
+): Promise<StoreManagedListResponse> {
+  const rows = await repo.listManagedStores(authUserId);
+  return {
+    items: rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      logoUrl: r.logoUrl,
+      role: r.role,
+    })),
+  };
 }
 
 /**
  * 店舗をセルフサーブで新規作成する（POST /store）。
- * ログイン中の店アカウントを所有者にし、店名等と「導入承認の同意」を受けて作成する。
+ * ログイン中のアカウントを所有者にし、店名等と「導入承認の同意」を受けて作成する。
  * 同意（adoption_agreed_at）は Repository が作成時刻で記録する（店自身の一手間）。
  * 運営の事前発行・claim・承認ゲートは廃止し、ここで自己登録を完結させる。
  *
- * - 既に自分の店があれば多重作成を防ぐ（StoreAlreadyExistsError・1アカウント1店舗）。
+ * 複数店舗（§11.4）: 1アカウントで何店でも作れる（既に店を管理していても新規作成を許す）。
+ * フェーズ2の「1アカウント1店」制限は撤廃した。作成後は店員ホームへ戻り、中央ナビの切替で管理モードに入る。
  */
 export async function createStore(
   repo: StoreRepository,
   authUserId: string,
   input: CreateStoreInput,
 ): Promise<StoreProfile> {
-  // 多重作成の防止（フェーズ2は「1アカウント1店」の一般ケース。既に管理者である店があれば拒否）。
-  // 多店舗管理はフェーズ3。
-  const existing = await repo.findStoreForAdmin(authUserId);
-  if (existing) {
-    throw new StoreAlreadyExistsError();
-  }
-
   // 空文字の任意項目は未入力（null）に正規化して保存する
   const normalize = (v: string | undefined): string | null => {
     if (v == null) return null;

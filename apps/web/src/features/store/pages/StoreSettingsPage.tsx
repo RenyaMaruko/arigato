@@ -116,19 +116,10 @@ function StoreSettingsContent() {
           />
         </div>
 
-        {/* モード切替（店の管理 → 店員モード）。店の管理は兼任者のみ到達するため常に出してよい（§4） */}
-        <div className="mt-6 overflow-hidden rounded-2xl bg-page shadow-sm">
-          <SettingRow
-            label={t("store.settingsStaffMode")}
-            onClick={() => navigate({ to: "/staff" })}
-            icon={
-              <>
-                <circle cx="12" cy="8" r="4" />
-                <path d="M4.5 20c0-4 3.5-6 7.5-6s7.5 2 7.5 6" />
-              </>
-            }
-          />
-        </div>
+        {/*
+          モード切替は設定から廃止（§11.4）。
+          店の管理 → 店員モードの切替は、ボトムナビ中央の切替ボタン（StoreModeSwitch）に一本化した。
+        */}
 
         {/* ログアウト */}
         <button

@@ -93,40 +93,10 @@ export function StaffSettingsPage() {
         </div>
 
         {/*
-          モード切替 UX（フェーズ3・§4）。
-          - 兼任者（active な store_admin を持つ人＝me.managesStore）だけに「店の管理へ」を出す。
-          - 管理する店が無い人には「店を開設する」を出す（押すと店作成→owner→店の管理モード）。
-          どちらも器（/store）へ遷移する。/store 側が店の有無で「作成」か「ホーム」を出し分ける。
+          モード切替は設定から廃止（§11.4）。
+          店員 ⇄ 店の管理の切替は、ボトムナビ中央の切替ボタン（StoreModeSwitch）に一本化した。
+          店舗の新規開設は店員ホームの「店舗作成」導線（/store/new）に置く。
         */}
-        <div className="mt-6 overflow-hidden rounded-2xl bg-page shadow-sm">
-          {meQuery.data.managesStore ? (
-            <SettingRow
-              label={t("staff.settingsStoreManage")}
-              sublabel={t("staff.settingsStoreManageSub")}
-              onClick={() => navigate({ to: "/store" })}
-              icon={
-                <>
-                  <path d="M3 9l1.5-5h15L21 9" />
-                  <path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9" />
-                  <path d="M9 20v-6h6v6" />
-                </>
-              }
-            />
-          ) : (
-            <SettingRow
-              label={t("staff.settingsStoreOpen")}
-              sublabel={t("staff.settingsStoreOpenSub")}
-              onClick={() => navigate({ to: "/store" })}
-              icon={
-                <>
-                  <path d="M3 9l1.5-5h15L21 9" />
-                  <path d="M4 9v10a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V9" />
-                  <path d="M12 13v4M10 15h4" />
-                </>
-              }
-            />
-          )}
-        </div>
 
         {/* ログアウト */}
         <button

@@ -24,6 +24,7 @@ import { StaffIdentityCompletePage } from "../features/staff/pages/StaffIdentity
 import { StaffTaxExportPage } from "../features/staff/pages/StaffTaxExportPage.js";
 import { StaffSettingsPage } from "../features/staff/pages/StaffSettingsPage.js";
 import { StorePage } from "../features/store/pages/StorePage.js";
+import { StoreSetupPage } from "../features/store/pages/StoreSetupPage.js";
 import { StoreApprovalPage } from "../features/store/pages/StoreApprovalPage.js";
 import { StoreStaffPage } from "../features/store/pages/StoreStaffPage.js";
 import { StoreStaffDetailPage } from "../features/store/pages/StoreStaffDetailPage.js";
@@ -248,6 +249,13 @@ const storeRoute = createRoute({
   component: StorePage,
 });
 
+// "/store/new" 店舗作成（セルフサーブ）。店員ホームの「店舗作成」導線から来る（何店でも作れる・§11.4）
+const storeNewRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/new",
+  component: StoreSetupPage,
+});
+
 // "/store/login" 旧・店舗ログイン。統合ログイン画面（/login）へリダイレクトで集約する
 const storeLoginRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -353,6 +361,7 @@ const routeTree = rootRoute.addChildren([
   staffJoinedRoute,
   inviteRoute,
   storeRoute,
+  storeNewRoute,
   storeLoginRoute,
   storeApprovalRoute,
   storeStaffRoute,

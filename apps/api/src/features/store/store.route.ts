@@ -13,6 +13,7 @@ import {
   type StoreStaffDetail,
   type StoreGratitude,
   type StoreAdminsResponse,
+  type StoreManagedListResponse,
   type StoreOwnerLeaveResult,
   type UpdateStoreProfileInput,
   type CreateStoreInput,
@@ -24,7 +25,6 @@ import type { AuthVariables } from "../../middleware/auth.js";
 import {
   StoreNotFoundError,
   StoreForbiddenError,
-  StoreAlreadyExistsError,
   StoreInviteNotFoundError,
   StoreStaffNotFoundError,
   StoreAdminNotFoundError,
@@ -46,6 +46,8 @@ type StoreDeps = {
   authMiddleware: MiddlewareHandler;
   // ログイン中の店アカウントが所有する店を取得（未作成なら null）
   getMyStore: (authUserId: string) => Promise<StoreProfile | null>;
+  // 自分が管理する店の一覧（GET /store/mine・§11.4）。中央ナビの切替（1件直行/複数一覧）に使う。金額なし
+  listMyManagedStores: (authUserId: string) => Promise<StoreManagedListResponse>;
   // 店舗をセルフサーブで新規作成（店名＋導入承認の同意。作成者＝所有者）
   createStore: (authUserId: string, input: CreateStoreInput) => Promise<StoreProfile>;
   // 自店プロフィールの取得（店スコープ）
@@ -142,20 +144,20 @@ export function createStoreRoute(deps: StoreDeps) {
       }
       return c.json(store);
     })
-    // 店舗をセルフサーブで新規作成する（店名＋導入承認の同意。作成者＝所有者・adoption_agreed_at 記録）
+    // 自分が管理する店の一覧を返す（GET /store/mine・§11.4）。中央ナビの切替（1件直行/複数一覧）に使う。
+    // 管理する店が無ければ items は空配列（純店員）。金額・残高・件数は一切含めない。
+    .get("/mine", async (c) => {
+      const authUser = c.get("authUser");
+      const managed = await deps.listMyManagedStores(authUser.id);
+      return c.json(managed);
+    })
+    // 店舗をセルフサーブで新規作成する（店名＋導入承認の同意。作成者＝所有者・adoption_agreed_at 記録）。
+    // 複数店舗（§11.4）: 1アカウントで何店でも作成できる（既に管理していても許可）。
     .post("/", zValidator("json", CreateStoreInputSchema), async (c) => {
       const authUser = c.get("authUser");
       const input = c.req.valid("json");
-      try {
-        const store = await deps.createStore(authUser.id, input);
-        return c.json(store, 201);
-      } catch (err) {
-        // 1アカウント1店舗（既に作成済み）は 409 で返す
-        if (err instanceof StoreAlreadyExistsError) {
-          return c.json({ error: "store_already_exists" }, 409);
-        }
-        throw err;
-      }
+      const store = await deps.createStore(authUser.id, input);
+      return c.json(store, 201);
     })
     // 自店プロフィールの取得（店スコープ）
     .get("/:storeId", async (c) => {

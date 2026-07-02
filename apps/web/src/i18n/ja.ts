@@ -182,6 +182,8 @@ export const ja = {
       // ホーム
       homeQr: "QRを表示",
       homeProfile: "プロフィール",
+      // ホームの「店舗作成」タイル（§11.4・管理店の有無に関わらず常に表示）
+      homeCreateStore: "店舗作成",
       homeWelcome: "ようこそ",
       // 所属店一覧（複数可・掛け持ち）。各店ごとにQRへ導く
       homeStoresLabel: "所属しているお店",
@@ -583,6 +585,23 @@ export const ja = {
       logoTooLarge: "画像サイズが大きすぎます（5MB まで）。",
       // 共通
       back: "戻る",
+    },
+    // ボトムナビ中央の「店舗管理 ⇄ 店員」切替（§11.4・店員側/店側の両ナビ共通）
+    mode: {
+      // 店員モードのラベル・aria（押すと店の管理へ）
+      toStore: "店舗管理",
+      // 管理モードのラベル・aria（押すと店員モードへ戻る）
+      toStaff: "店員",
+      // 管理店が複数のときの選択シート見出し
+      selectStoreTitle: "管理するお店を選ぶ",
+      // 選択シートで自分がオーナーの店に付けるバッジ
+      ownerBadge: "オーナー",
+      // シートを閉じる（スクリムの aria）
+      close: "閉じる",
+      // 初回のみのチュートリアル（コーチマーク）
+      tutorialTitle: "ここで切り替え",
+      tutorialBody: "この中央のボタンで、店員モードとお店の管理モードを切り替えられます。",
+      tutorialGotIt: "わかりました",
     },
   },
 } as const;
