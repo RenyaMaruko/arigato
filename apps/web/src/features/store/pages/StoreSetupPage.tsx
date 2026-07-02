@@ -2,9 +2,10 @@ import { useState } from "react";
 import { useTranslation } from "react-i18next";
 import { useNavigate } from "@tanstack/react-router";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
-import { signOut } from "../../../lib/auth.js";
 import { useStoreSwitcher } from "../../../lib/store-switcher.js";
 import { useCreateStore } from "../hooks/useStore.js";
+// 店舗作成は店員ホームからの導線（店員モードの操作）なので、下部は店員のボトムナビを出す
+import { StaffBottomNav } from "../../staff/components/StaffBottomNav.js";
 
 /**
  * 店舗作成画面。ホームの「店舗作成」導線（/store/new）や、管理店が無いときの /store 入口から表示する。
@@ -49,31 +50,24 @@ export function StoreSetupPage() {
     );
   };
 
-  // ログアウト（別アカウントでやり直す導線）
-  const handleLogout = async () => {
-    await signOut();
-    navigate({ to: "/store" });
-  };
-
   return (
     <PhoneFrame>
-      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-6 pb-7 pt-2">
-        {/* 上部: ログアウト */}
-        <div className="flex justify-end">
-          <button
-            type="button"
-            onClick={handleLogout}
-            className="text-token-sm text-ink-sub underline-offset-2 hover:underline"
-          >
-            {t("store.logout")}
-          </button>
-        </div>
+      {/* ヘッダー（戻る・タイトル）。他画面と同様に左上へ戻る導線を置き、下にボトムナビを出す */}
+      <div className="flex flex-none items-center justify-between bg-page px-[22px] pb-3.5 pt-2">
+        <button
+          type="button"
+          onClick={() => navigate({ to: "/staff" })}
+          aria-label={t("staff.back")}
+          className="flex h-6 w-6 items-center justify-center text-ink"
+        >
+          <BackIcon />
+        </button>
+        <span className="text-token-2xl font-bold text-ink">{t("store.createTitle")}</span>
+        {/* レイアウト対称用のスペーサー */}
+        <span className="h-6 w-6" />
+      </div>
 
-        {/* 見出し */}
-        <div className="mt-6 text-center">
-          <div className="text-token-3xl font-bold text-ink">{t("store.createTitle")}</div>
-        </div>
-
+      <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-6 pb-7 pt-4">
         {/* 店舗作成フォーム（店名＋導入承認の同意） */}
         <form onSubmit={handleSubmit} className="mt-8 flex flex-col">
           <label className="text-token-sm text-ink-sub" htmlFor="store-name">
@@ -117,6 +111,28 @@ export function StoreSetupPage() {
           </button>
         </form>
       </div>
+
+      {/* 下部ボトムナビ（店員モード。タブには該当しないため active 未指定） */}
+      <StaffBottomNav />
     </PhoneFrame>
+  );
+}
+
+// ヘッダー左上の戻る（山括弧）アイコン。他画面と同じ体裁
+function BackIcon() {
+  return (
+    <svg
+      width="24"
+      height="24"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M15 18l-6-6 6-6" />
+    </svg>
   );
 }
