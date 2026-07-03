@@ -11,20 +11,23 @@ import { StaffBottomNav } from "../../staff/components/StaffBottomNav.js";
  * 店舗作成画面。ホームの「店舗作成」導線（/store/new）や、管理店が無いときの /store 入口から表示する。
  * 店名を入力し、導入承認（「うちで投げ銭OK」＝就業規則との整合の一手間）に同意して、
  * セルフサーブで自分の店舗を作成する（POST /store）。何店でも作れる（§11.4）。
- * 作成が完了したら店員ホーム（/staff）へ戻り、ボトムナビ中央の切替ボタンから管理モードに入れる。
+ * 作成が完了したらチェック演出の完了画面を出し、「はじめる」で店舗管理（/store）へ入る。
+ * 初回はボトムナビ中央の切替チュートリアルがそこで案内される。
  * 運営の事前発行・店舗ID入力（claim）は廃止した。
  */
 export function StoreSetupPage() {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const createMutation = useCreateStore();
-  // 作成した店を「選択中の店」にして、中央ナビ切替でそのまま管理モードに入れるようにする
+  // 作成した店を「選択中の店」にして、完了画面の「はじめる」でそのまま管理モードに入れるようにする
   const { setSelectedStoreId } = useStoreSwitcher();
 
   // 入力（店名）と導入承認の同意チェック
   const [name, setName] = useState("");
   const [agreed, setAgreed] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // 作成が完了した店（完了画面の表示用。null の間は入力フォームを出す）
+  const [createdName, setCreatedName] = useState<string | null>(null);
 
   // 店名が入力され、導入承認に同意したときだけ作成できる
   const canSubmit = name.trim() !== "" && agreed && !createMutation.isPending;
@@ -37,11 +40,10 @@ export function StoreSetupPage() {
     createMutation.mutate(
       { name: name.trim(), adoptionAgreed: true },
       {
-        // 成功したら作成した店を選択中にして店員ホーム（/staff）へ戻す（§11.4）。
-        // 店員ホーム＋中央ナビ切替ボタンが出現し、初回のみ切替チュートリアルが案内される。
+        // 成功したら作成した店を選択中にして、完了画面（チェック演出＋はじめる）へ切り替える（§11.4）
         onSuccess: (store) => {
           setSelectedStoreId(store.id);
-          navigate({ to: "/staff" });
+          setCreatedName(store.name);
         },
         onError: () => {
           setError(t("store.createError"));
@@ -49,6 +51,56 @@ export function StoreSetupPage() {
       },
     );
   };
+
+  // 作成完了後: チェック演出の完了画面（投げ銭完了と同じトーン）。「はじめる」で店舗管理へ
+  if (createdName !== null) {
+    return (
+      <PhoneFrame>
+        <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-[26px] pb-[30px] pt-2">
+          {/* 成功チェック（pop アニメ + 周囲の輝き spark） */}
+          <div className="mt-20 flex justify-center">
+            <div className="relative h-[108px] w-[108px] animate-pop">
+              <div className="flex h-[108px] w-[108px] items-center justify-center rounded-full bg-rose text-token-display font-bold text-page">
+                ✓
+              </div>
+              {/* 周囲の輝き（装飾・順に現れる） */}
+              <span className="absolute -left-1 -top-1.5 animate-spark text-token-2xl text-rose-spark [animation-delay:.35s]">
+                ＼
+              </span>
+              <span className="absolute -right-1 -top-1.5 animate-spark text-token-2xl text-rose-spark [animation-delay:.42s]">
+                ／
+              </span>
+              <span className="absolute -left-5 top-3.5 animate-spark text-token-base text-rose-spark [animation-delay:.5s]">
+                ·
+              </span>
+              <span className="absolute -right-5 top-3.5 animate-spark text-token-base text-rose-spark [animation-delay:.55s]">
+                ·
+              </span>
+            </div>
+          </div>
+
+          {/* 作成した店名＋案内 */}
+          <div className="mt-[30px] text-center text-token-2xl font-bold leading-[1.8] text-ink">
+            {t("store.createdTitle", { name: createdName })}
+          </div>
+          <div className="mt-2 text-center text-token-md leading-relaxed text-ink-sub">
+            {t("store.createdLead")}
+          </div>
+
+          {/* はじめる（店舗管理画面へ） */}
+          <div className="mt-auto pt-[30px]">
+            <button
+              type="button"
+              onClick={() => navigate({ to: "/store" })}
+              className="w-full rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
+            >
+              {t("store.createdStart")}
+            </button>
+          </div>
+        </div>
+      </PhoneFrame>
+    );
+  }
 
   return (
     <PhoneFrame>

@@ -73,8 +73,9 @@ export function StoreModeSwitch({ mode }: { mode: "staff" | "store" }) {
     }
   };
 
-  // 初回のみのチュートリアル（コーチマーク）。店員モードのボタンにだけ出す（店作成後の着地＝店員ホーム）。
-  const showTutorial = mode === "staff" && !switchTutorialSeen && !sheetOpen;
+  // 初回のみのチュートリアル（コーチマーク）。中央ボタンが初めて見えたモードで1回だけ出す
+  // （店作成後の着地は店舗管理＝store モードなので、モードを限定しない。文言もモード中立）。
+  const showTutorial = !switchTutorialSeen && !sheetOpen;
 
   return (
     <>

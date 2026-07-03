@@ -396,6 +396,10 @@ export const ja = {
       createAgreeLabel:
         "このお店で、スタッフがお客さまからチップを受け取ることに同意します。",
       createSubmit: "このお店を作成する",
+      // 店舗作成の完了画面（チェック演出）。{{name}} に店名。「はじめる」で店舗管理へ入る
+      createdTitle: "{{name}} を作成しました！",
+      createdLead: "お店の管理をはじめましょう",
+      createdStart: "はじめる",
       createError: "お店を作成できませんでした。もう一度お試しください。",
       createAlreadyExists: "このアカウントには既にお店があります。",
       // ホーム（01）
