@@ -200,6 +200,13 @@ export const ja = {
       homeBalanceSendableNote: "いま送金できる額 {{amount}}（残りは準備中です）",
       // 残高のすぐ下のアクション（未確認＝本人確認へ／確認済＝残高の詳細へ）
       homeVerifyCta: "本人確認をする",
+      // 本人確認の申請中（審査待ち）。状態表示＋審査期間の一言＋再開用の小リンク
+      homeIdentityPendingCta: "ただいま申請中",
+      homeIdentityPendingNote: "本人確認を審査中です（1〜2営業日ほどかかります）",
+      homeIdentityPendingLink: "手続きを確認する",
+      // 本人確認の要対応（審査NG・追加書類）。一言＋押せるボタン（/staff/identity で修正・再提出できる）
+      homeIdentityActionRequiredNote: "本人確認で追加の確認が必要です",
+      homeIdentityActionRequiredCta: "追加の確認が必要です",
       homeBalanceDetailCta: "残高の詳細を見る",
       // 確認済みのホームの主アクション（送金画面へ）
       homePayoutCta: "送金する",
@@ -338,14 +345,17 @@ export const ja = {
       identityStart: "手続きをはじめる",
       identityStarting: "リンクを準備中…",
       identityError: "手続きを開始できませんでした。もう一度お試しください。",
-      // 本人確認完了（07）
-      identityCompleteTitle: "本人確認が完了しました！",
-      identityCompleteSub: "保留残高が着金可能になりました",
-      identityCompleteAmountLabel: "着金可能額として利用できます",
-      identityCompletePending: "本人確認の手続きを確認しています…",
-      identityCompletePendingNote: "完了が反映されると、この画面が切り替わります。",
-      identityCompleteSeeBalance: "残高を確認する",
-      identityCompleteSeeHistory: "履歴を見る",
+      // 本人確認の申請完了（07）。提出の反映（Webhook・数秒）を待ってから申請完了を出す
+      identityApplying: "申請中…",
+      identityApplyingNote: "申請の完了を確認しています。数秒お待ちください。",
+      identityAppliedTitle: "本人確認の申請が完了しました",
+      identityAppliedNote:
+        "審査には1〜2営業日かかります。\n完了すると送金できるようになります。",
+      // 反映が長引いたとき（断定しない。裏で確認は続けており、届き次第 申請完了へ自動で切り替わる）
+      identityApplyTimeoutTitle: "確認に時間がかかっています",
+      identityApplyTimeoutNote:
+        "このままお待ちいただくと、確認でき次第この画面が切り替わります。手続きが途中の場合は、本人確認の画面から続きを行ってください。",
+      identityApplyTimeoutResume: "手続きを再開する",
       identityCompleteGoHome: "ホームに戻る",
       // 申告データ出力（08）
       exportTitle: "データ出力",

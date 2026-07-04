@@ -46,6 +46,14 @@ export type VerifiedWebhookEvent = {
   accountId: string | null;
   // Connected Account の payouts_enabled（着金可否の起点。account.updated 以外は null）
   payoutsEnabled: boolean | null;
+  // Connected Account の details_submitted（オンボーディング提出済みか。account.updated 以外は null）
+  detailsSubmitted: boolean | null;
+  // requirements.errors の件数（審査NG・書類不備の明示エラー。account.updated 以外は null）
+  requirementsErrorCount: number | null;
+  // requirements.past_due の件数（期限切れの未提出項目。account.updated 以外は null）
+  requirementsPastDueCount: number | null;
+  // requirements.currently_due の件数（今求められている未提出項目。account.updated 以外は null）
+  requirementsCurrentlyDueCount: number | null;
   // payout.* 系の Stripe Payout ID（該当しないイベントは null。送金の着金/失敗の照合に使う）
   payoutId: string | null;
   // payout.* の metadata.payout_id（自前 payout 行の id。stripe_payout_id 未更新時の照合バックアップ。対象外は null）

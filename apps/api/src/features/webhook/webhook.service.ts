@@ -21,6 +21,14 @@ export type VerifiedEvent = {
   accountId: string | null;
   // Connected Account の payouts_enabled（着金可否の起点。account.updated 以外は null）
   payoutsEnabled: boolean | null;
+  // Connected Account の details_submitted（オンボーディング提出済みか。account.updated 以外は null）
+  detailsSubmitted: boolean | null;
+  // requirements.errors の件数（審査NG・書類不備の明示エラー。account.updated 以外は null）
+  requirementsErrorCount: number | null;
+  // requirements.past_due の件数（期限切れの未提出項目。account.updated 以外は null）
+  requirementsPastDueCount: number | null;
+  // requirements.currently_due の件数（今求められている未提出項目。account.updated 以外は null）
+  requirementsCurrentlyDueCount: number | null;
   // payout.* 系の Stripe Payout ID（送金の着金/失敗の照合に使う。該当しないイベントは null）
   payoutId: string | null;
   // payout.* の metadata.payout_id（自前 payout 行の id・照合バックアップ。該当しないイベントは null）
@@ -146,13 +154,32 @@ export type ApplySettlementCorrection = (params: {
 }) => Promise<boolean>;
 
 /**
+ * account.updated から抽出した Connected Account の状態（ApplyAccountUpdate へ渡す入力）。
+ * webhook feature は staff feature を直接 import しないため、構造的に同じ型をここで定義する
+ * （staff Model の ConnectAccountState と互換。配線はコンポジションルートで行う）。
+ */
+export type AccountUpdateState = {
+  // 送金（payout）が有効になったか（本人確認完了の確定シグナル・最優先）
+  payoutsEnabled: boolean;
+  // オンボーディングの提出が済んだか
+  detailsSubmitted: boolean;
+  // requirements.errors の件数（審査NG・書類不備の明示エラー）
+  requirementsErrorCount: number;
+  // requirements.past_due の件数（期限切れの未提出項目）
+  pastDueCount: number;
+  // requirements.currently_due の件数（今求められている未提出項目）
+  currentlyDueCount: number;
+};
+
+/**
  * account.updated（Connected Account の状態変化）を本人確認・着金へ反映する関数（コンポジションルートで配線）。
  * webhook feature は staff feature を直接 import せず、この注入関数を通して遷移を行う。
  * payouts_enabled=true で identity_status を verified に確定し、held の tip を payable へ遷移する。
+ * requirements（errors / past_due / currently_due）から要対応（action_required）・審査中（pending）も反映する。
  */
 export type ApplyAccountUpdate = (
   stripeAccountId: string,
-  payoutsEnabled: boolean,
+  account: AccountUpdateState,
 ) => Promise<{ found: boolean; verified: boolean; promotedTips: number }>;
 
 // Stripe のイベント種別 → tip のステータスへの対応表
@@ -225,13 +252,21 @@ export async function handleStripeWebhook(
     return { ...NO_OP_RESULT, settlementMirrored: mirrored };
   }
 
-  // account.updated: 本人確認の遷移（verified）と held→payable の遷移を行う
+  // account.updated: 本人確認の遷移（verified / action_required / pending）と held→payable の遷移を行う。
+  // 審査NG・追加書類は requirements の中身（errors / past_due / currently_due）で届くため件数ごと渡す。
   if (event.type === "account.updated") {
     // Connected Account ID が無ければ対象なし（冪等記録だけ残す）
     if (!event.accountId) {
       return NO_OP_RESULT;
     }
-    const result = await applyAccountUpdate(event.accountId, event.payoutsEnabled === true);
+    const result = await applyAccountUpdate(event.accountId, {
+      payoutsEnabled: event.payoutsEnabled === true,
+      detailsSubmitted: event.detailsSubmitted === true,
+      // 抽出できなかった場合（null）は 0 扱い＝要対応へ誤遷移させない（安全側）
+      requirementsErrorCount: event.requirementsErrorCount ?? 0,
+      pastDueCount: event.requirementsPastDueCount ?? 0,
+      currentlyDueCount: event.requirementsCurrentlyDueCount ?? 0,
+    });
     return {
       ...NO_OP_RESULT,
       identityVerified: result.verified,

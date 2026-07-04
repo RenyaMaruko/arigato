@@ -20,7 +20,8 @@ export const staff = pgTable("staff", {
   avatarUrl: text("avatar_url"),
   // Stripe Connect の Connected Account（未連携は null）。人ごとに1つ。
   stripeAccountId: text("stripe_account_id"),
-  // 本人確認・着金可否の状態（none: 未着手 / pending: 審査中 / verified: 着金可能）。人ごと。
+  // 本人確認・着金可否の状態（none: 未着手 / pending: 審査中 / action_required: 要対応＝審査NG・追加書類 /
+  // verified: 着金可能）。人ごと。text のため値の追加にマイグレーションは不要（CHECK 制約なし）。
   identityStatus: text("identity_status").notNull().default("none"),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

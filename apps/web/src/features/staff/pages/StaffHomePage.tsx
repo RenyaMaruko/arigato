@@ -35,6 +35,12 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
   const sendableAmount = balance?.sendableAmount ?? 0;
   // 着金可能（本人確認済み）かどうかは残高API の canPayout を正とする（プロフィールの identityStatus と整合）
   const verified = balance?.canPayout ?? me.identityStatus === "verified";
+  // 本人確認の状態（残高API を正・未取得時はプロフィールで代替）
+  const identityStatus = balance?.identityStatus ?? me.identityStatus;
+  // 本人確認の申請中（オンボーディング提出済み・審査待ち）。ボタンを「ただいま申請中」表示に切り替える
+  const identityPending = !verified && identityStatus === "pending";
+  // 要対応（審査NG・追加書類）。押せるボタンで /staff/identity へ導き、不足の修正・再提出をしてもらう
+  const identityActionRequired = !verified && identityStatus === "action_required";
 
   return (
     <PhoneFrame>
@@ -72,10 +78,18 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
                       amount: `¥${sendableAmount.toLocaleString()}`,
                     })
                   : t("staff.homeBalanceVerifiedNote")
-                : t("staff.homeBalanceToSendNote")}
+                : identityActionRequired
+                  ? // 要対応（審査NG・追加書類）は気づけるよう一言で知らせる
+                    t("staff.homeIdentityActionRequiredNote")
+                  : identityPending
+                    ? // 申請中は審査期間の目安を一言で添える
+                      t("staff.homeIdentityPendingNote")
+                    : t("staff.homeBalanceToSendNote")}
           </div>
 
-          {/* 残高のすぐ下のアクション。未確認なら本人確認へ、確認済なら送金（送金画面）へ */}
+          {/* 残高のすぐ下のアクション。
+              確認済み → 送金へ／申請中 → 「ただいま申請中」（押せない状態表示）／未着手 → 本人確認へ。
+              申請中でも途中離脱（書類未提出）や追加書類の再開ができるよう、小さな確認リンクだけ残す。 */}
           {verified ? (
             <button
               type="button"
@@ -85,6 +99,32 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
               {t("staff.homePayoutCta")}
               <ChevronIcon />
             </button>
+          ) : identityActionRequired ? (
+            // 要対応（審査NG・追加書類）: 押せるボタンで本人確認画面へ。埋め込み画面が不足・エラー内容を
+            // 表示し、修正・再提出できる。注意が伝わるようローズ枠線＋ローズ文字（トークン準拠）にする
+            <button
+              type="button"
+              onClick={() => navigate({ to: "/staff/identity" })}
+              className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-rose bg-page py-3 text-token-md font-bold text-rose"
+            >
+              {t("staff.homeIdentityActionRequiredCta")}
+              <ChevronIcon />
+            </button>
+          ) : identityPending ? (
+            <>
+              {/* 申請中の状態表示（ボタンではない・押せない） */}
+              <div className="mt-3.5 flex w-full items-center justify-center rounded-xl bg-rose/40 py-3 text-token-md font-bold text-page">
+                {t("staff.homeIdentityPendingCta")}
+              </div>
+              {/* 途中離脱・追加書類の再開入口（申請中の唯一の本人確認導線） */}
+              <button
+                type="button"
+                onClick={() => navigate({ to: "/staff/identity" })}
+                className="mt-2.5 w-full text-center text-token-xs text-rose/80 underline underline-offset-2"
+              >
+                {t("staff.homeIdentityPendingLink")}
+              </button>
+            </>
           ) : (
             <button
               type="button"

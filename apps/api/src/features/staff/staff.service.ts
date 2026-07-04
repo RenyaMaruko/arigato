@@ -32,6 +32,7 @@ import {
   decodeTipCursor,
   encodeTipCursor,
   type IdentityStatus,
+  type ConnectAccountState,
 } from "./staff.model.js";
 import type {
   StaffRepository,
@@ -715,16 +716,20 @@ export async function createConnectAccountSession(
 
 /**
  * account.updated（Connected Account の状態変化）を反映する（Webhook 経由・本人確認の遷移）。
- * Connected Account ID で本人を引き、payouts_enabled=true なら identity_status を verified に確定し、
- * held の tip を payable へ遷移する。二重遷移はしない（Repository のトランザクションで担保）。
+ * Connected Account ID で本人を引き、payouts_enabled・details_submitted・requirements の各件数から
+ * Model の deriveIdentityStatus で次の状態を導いて反映する:
+ *  - payouts_enabled=true → verified に確定し、held の tip を payable へ遷移（従来どおり）
+ *  - requirements.errors / past_due / （提出済みで currently_due）あり → action_required（要対応）
+ *  - それ以外 → pending（審査中。再提出で errors が消えれば要対応から戻る）
+ * 二重遷移はしない（Repository のトランザクションで担保）。
  * webhook feature から直接 import せず、コンポジションルートでこの関数を注入して使う。
  */
 export async function applyConnectAccountUpdate(
   repo: StaffRepository,
   stripeAccountId: string,
-  payoutsEnabled: boolean,
+  account: ConnectAccountState,
 ): Promise<ApplyAccountUpdateResult> {
-  return repo.applyAccountUpdate(stripeAccountId, payoutsEnabled);
+  return repo.applyAccountUpdate(stripeAccountId, account);
 }
 
 // Stripe payout を実行する infrastructure 関数の型（コンポジションルートで注入）。

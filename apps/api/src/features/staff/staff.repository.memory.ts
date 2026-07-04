@@ -7,7 +7,7 @@ import type {
   StaffReceiptStoreRow,
   StaffConnectRow,
 } from "./staff.repository.js";
-import type { IdentityStatus } from "./staff.model.js";
+import { deriveIdentityStatus, type IdentityStatus } from "./staff.model.js";
 
 /**
  * staff feature の Repository インメモリ実装。
@@ -354,9 +354,10 @@ export function createInMemoryStaffRepository(): StaffRepository {
       return [];
     },
 
-    // account.updated を反映する。Connect ストアから対象を引き、payouts_enabled=true なら verified へ。
+    // account.updated を反映する。Connect ストアから対象を引き、Model の deriveIdentityStatus で
+    // 次の本人確認状態（verified / action_required / pending / 据え置き）を導いて書き込む（実 DB 実装と同じ契約）。
     // 既に verified なら二重遷移しない。tip を持たないため promotedTips は 0。
-    async applyAccountUpdate(stripeAccountId, payoutsEnabled) {
+    async applyAccountUpdate(stripeAccountId, account) {
       // Stripe Account ID で本人を逆引きする
       let foundAuth: string | null = null;
       for (const [authUserId, connect] of connectByAuth) {
@@ -368,16 +369,27 @@ export function createInMemoryStaffRepository(): StaffRepository {
       if (!foundAuth) return { found: false, verified: false, promotedTips: 0 };
 
       const connect = connectByAuth.get(foundAuth)!;
-      if (!payoutsEnabled) {
-        return { found: true, verified: connect.identityStatus === "verified", promotedTips: 0 };
+      // 次の状態を Model の純粋関数で導く（要対応・審査中の判定を実 DB 実装と共有する）
+      const nextStatus = deriveIdentityStatus(connect.identityStatus, account);
+
+      // 本人確認の状態を書き込む内部ヘルパ（Connect とプロフィールの両方を同期する）
+      const writeStatus = (status: IdentityStatus) => {
+        connectByAuth.set(foundAuth!, { ...connect, identityStatus: status });
+        const profile = profileByAuth.get(foundAuth!);
+        if (profile) profileByAuth.set(foundAuth!, { ...profile, identityStatus: status });
+      };
+
+      // verified 以外（pending / action_required / none 据え置き）は状態の書き込みだけ行う
+      if (nextStatus !== "verified") {
+        if (nextStatus !== connect.identityStatus) writeStatus(nextStatus);
+        return { found: true, verified: false, promotedTips: 0 };
       }
+      // 既に verified なら二重遷移しない（冪等）
       if (connect.identityStatus === "verified") {
         return { found: true, verified: true, promotedTips: 0 };
       }
       // verified へ確定し、プロフィールの identity_status も同期する
-      connectByAuth.set(foundAuth, { ...connect, identityStatus: "verified" });
-      const profile = profileByAuth.get(foundAuth);
-      if (profile) profileByAuth.set(foundAuth, { ...profile, identityStatus: "verified" });
+      writeStatus("verified");
       return { found: true, verified: true, promotedTips: 0 };
     },
 

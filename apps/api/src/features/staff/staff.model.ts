@@ -20,8 +20,9 @@ export function calculateStaffTakeAmount(faceAmount: number): number {
   return Math.floor(faceAmount * STAFF_TAKE_RATE);
 }
 
-// 本人確認の状態（none: 未着手 / pending: 審査中 / verified: 着金可能）
-export type IdentityStatus = "none" | "pending" | "verified";
+// 本人確認の状態
+// （none: 未着手 / pending: 審査中 / action_required: 要対応＝審査NG・追加書類 / verified: 着金可能）
+export type IdentityStatus = "none" | "pending" | "action_required" | "verified";
 
 // 招待のステータス（pending: 未消費 / accepted: 消費済み / revoked: 失効）
 export type InviteStatus = "pending" | "accepted" | "revoked";
@@ -38,21 +39,52 @@ export function canPayout(status: IdentityStatus): boolean {
   return status === "verified";
 }
 
+// account.updated から抽出した Connected Account の状態（deriveIdentityStatus の入力）。
+// Stripe は審査NG・追加書類を専用イベントではなく requirements の中身で返すため、
+// payouts_enabled に加えて提出済みフラグと requirements の各件数を渡す。
+export type ConnectAccountState = {
+  // 送金（payout）が有効になったか（本人確認完了の確定シグナル・最優先）
+  payoutsEnabled: boolean;
+  // オンボーディングの提出が済んだか（一度 true になったら Stripe 側で false に戻らない）
+  detailsSubmitted: boolean;
+  // requirements.errors の件数（審査NG・書類不備の明示エラー）
+  requirementsErrorCount: number;
+  // requirements.past_due の件数（期限切れの未提出項目）
+  pastDueCount: number;
+  // requirements.currently_due の件数（今求められている未提出項目）
+  currentlyDueCount: number;
+};
+
 /**
  * Stripe の account.updated（Connected Account の状態）から本人確認の状態を導く純粋関数。
- * payouts_enabled が true になったら verified（着金可能）。
- * まだなら、まだ未着手（none）でなければ審査中（pending）として扱う。
+ *  - payouts_enabled=true → verified（着金可能・最優先）
+ *  - 一度 verified になったら後退させない（取りこぼし再送対策）
+ *  - requirements.errors が1件以上 or past_due が1件以上 or（提出済みなのに currently_due が1件以上）
+ *    → action_required（要対応＝審査NG・追加書類。/staff/identity で修正・再提出できる）
+ *  - それ以外 → pending（審査中）。要対応でも再提出で errors が消えれば pending に戻る。
+ *    ただし未提出（details_submitted=false）のうちは none（未着手）を pending へ繰り上げない
+ *    （連結アカウント作成直後にも account.updated が届くため。「本人確認をする」導線を保つ）。
  * 本人確認は「後ろ倒し」のため、none のまま投げ銭は受け付けており、verified への遷移だけを着金の起点にする。
  */
 export function deriveIdentityStatus(
   current: IdentityStatus,
-  payoutsEnabled: boolean,
+  account: ConnectAccountState,
 ): IdentityStatus {
-  // 着金可能になった瞬間に verified へ確定する
-  if (payoutsEnabled) return "verified";
+  // 着金可能になった瞬間に verified へ確定する（要対応の残骸があっても verified を優先）
+  if (account.payoutsEnabled) return "verified";
   // 一度 verified になったら（取りこぼし再送などで）後退させない
   if (current === "verified") return "verified";
-  // オンボーディング進行中は審査中として扱う
+  // 審査NG・追加書類（要対応）: 明示エラー／期限切れ／提出済みなのに未提出項目が残っている
+  if (
+    account.requirementsErrorCount > 0 ||
+    account.pastDueCount > 0 ||
+    (account.detailsSubmitted && account.currentlyDueCount > 0)
+  ) {
+    return "action_required";
+  }
+  // 未提出（details_submitted=false）のうちは未着手（none）を申請中に見せない（据え置き）
+  if (current === "none" && !account.detailsSubmitted) return "none";
+  // 提出済みで問題が無ければ審査中。要対応（action_required）も再提出で問題が消えればここで pending に戻る
   return "pending";
 }
 

@@ -26,22 +26,111 @@ describe("staff.model", () => {
     expect(canPayout("verified")).toBe(true);
     expect(canPayout("pending")).toBe(false);
     expect(canPayout("none")).toBe(false);
+    // 要対応（審査NG・追加書類）も着金不可
+    expect(canPayout("action_required")).toBe(false);
   });
 
-  it("deriveIdentityStatus: payouts_enabled=true で verified に遷移する", () => {
-    expect(deriveIdentityStatus("none", true)).toBe("verified");
-    expect(deriveIdentityStatus("pending", true)).toBe("verified");
-    // まだ着金可能でなければ審査中（pending）扱い
-    expect(deriveIdentityStatus("none", false)).toBe("pending");
-    expect(deriveIdentityStatus("pending", false)).toBe("pending");
-    // 一度 verified になったら後退させない（取りこぼし再送対策）
-    expect(deriveIdentityStatus("verified", false)).toBe("verified");
+  // account.updated の抽出結果を模して作るヘルパ（既定は「未提出・問題なし」）
+  const accountState = (
+    over: Partial<Parameters<typeof deriveIdentityStatus>[1]> = {},
+  ): Parameters<typeof deriveIdentityStatus>[1] => ({
+    payoutsEnabled: false,
+    detailsSubmitted: false,
+    requirementsErrorCount: 0,
+    pastDueCount: 0,
+    currentlyDueCount: 0,
+    ...over,
+  });
+
+  it("deriveIdentityStatus: payouts_enabled=true で verified に遷移する（最優先）", () => {
+    expect(deriveIdentityStatus("none", accountState({ payoutsEnabled: true }))).toBe("verified");
+    expect(deriveIdentityStatus("pending", accountState({ payoutsEnabled: true }))).toBe("verified");
+    expect(deriveIdentityStatus("action_required", accountState({ payoutsEnabled: true }))).toBe(
+      "verified",
+    );
+    // requirements にエラーの残骸があっても payouts_enabled=true なら verified を優先する
+    expect(
+      deriveIdentityStatus(
+        "pending",
+        accountState({ payoutsEnabled: true, requirementsErrorCount: 1, currentlyDueCount: 2 }),
+      ),
+    ).toBe("verified");
+  });
+
+  it("deriveIdentityStatus: 一度 verified になったら後退させない（取りこぼし再送・審査NG通知でも）", () => {
+    expect(deriveIdentityStatus("verified", accountState())).toBe("verified");
+    // 審査NG相当の requirements が届いても verified は維持する
+    expect(
+      deriveIdentityStatus(
+        "verified",
+        accountState({ requirementsErrorCount: 2, pastDueCount: 1 }),
+      ),
+    ).toBe("verified");
+  });
+
+  it("deriveIdentityStatus: requirements.errors が1件以上で action_required（審査NG）", () => {
+    expect(
+      deriveIdentityStatus("pending", accountState({ requirementsErrorCount: 1 })),
+    ).toBe("action_required");
+    // 未提出でも明示エラーがあれば要対応（none からも遷移する）
+    expect(
+      deriveIdentityStatus("none", accountState({ requirementsErrorCount: 2 })),
+    ).toBe("action_required");
+  });
+
+  it("deriveIdentityStatus: past_due が1件以上で action_required（期限切れの未提出）", () => {
+    expect(deriveIdentityStatus("pending", accountState({ pastDueCount: 1 }))).toBe(
+      "action_required",
+    );
+    expect(deriveIdentityStatus("none", accountState({ pastDueCount: 3 }))).toBe(
+      "action_required",
+    );
+  });
+
+  it("deriveIdentityStatus: 提出済み（details_submitted）かつ currently_due が1件以上で action_required（追加書類）", () => {
+    expect(
+      deriveIdentityStatus(
+        "pending",
+        accountState({ detailsSubmitted: true, currentlyDueCount: 1 }),
+      ),
+    ).toBe("action_required");
+    // 未提出の currently_due は通常のオンボーディング進行中＝要対応にしない
+    expect(
+      deriveIdentityStatus("none", accountState({ currentlyDueCount: 5 })),
+    ).toBe("none");
+    expect(
+      deriveIdentityStatus("pending", accountState({ currentlyDueCount: 5 })),
+    ).toBe("pending");
+  });
+
+  it("deriveIdentityStatus: 要対応から再提出で問題が消えたら pending に戻る", () => {
+    // errors が消え pending_verification 相当（提出済み・不足なし）に戻ったら審査中へ
+    expect(
+      deriveIdentityStatus("action_required", accountState({ detailsSubmitted: true })),
+    ).toBe("pending");
+  });
+
+  it("deriveIdentityStatus: 提出済みで問題が無ければ pending（従来どおり）", () => {
+    // 提出直後（申請完了）＝ none → pending
+    expect(deriveIdentityStatus("none", accountState({ detailsSubmitted: true }))).toBe("pending");
+    // 審査中は pending のまま
+    expect(deriveIdentityStatus("pending", accountState({ detailsSubmitted: true }))).toBe(
+      "pending",
+    );
+    expect(deriveIdentityStatus("pending", accountState())).toBe("pending");
+  });
+
+  it("deriveIdentityStatus: 未提出（details_submitted=false）のうちは none を据え置く（未着手のまま）", () => {
+    // 連結アカウント作成直後の account.updated で「申請中」に見せない
+    expect(deriveIdentityStatus("none", accountState())).toBe("none");
   });
 
   it("evaluatePayoutEligibility: verified必須・最低送金額（全額）の判定", () => {
     // verified でなければ送金不可（本人確認・口座登録が必要）
     expect(evaluatePayoutEligibility("none", 10000)).toBe("not_verified");
     expect(evaluatePayoutEligibility("pending", 10000)).toBe("not_verified");
+    // 要対応（審査NG・追加書類）も送金不可
+    expect(evaluatePayoutEligibility("action_required", 10000)).toBe("not_verified");
     // verified でも着金可能額が最低送金額未満なら不可（残高0を含む）
     expect(evaluatePayoutEligibility("verified", 0)).toBe("below_minimum");
     expect(evaluatePayoutEligibility("verified", MIN_PAYOUT_AMOUNT - 1)).toBe("below_minimum");

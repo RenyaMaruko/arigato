@@ -63,7 +63,8 @@ function makeStore() {
     },
     // webhook Service に注入する applyAccountUpdate 相当。
     // payouts_enabled=true で verified に確定し、その店員の held を payable へ昇格する。
-    applyAccountUpdate(stripeAccountId: string, payoutsEnabled: boolean) {
+    // 第2引数は account 状態（payouts_enabled・提出状態・requirements 件数）のオブジェクト。
+    applyAccountUpdate(stripeAccountId: string, account: { payoutsEnabled: boolean }) {
       let target: TestStaff | undefined;
       for (const s of staff.values()) {
         if (s.stripeAccountId === stripeAccountId) {
@@ -72,7 +73,7 @@ function makeStore() {
         }
       }
       if (!target) return { found: false, verified: false, promotedTips: 0 };
-      if (!payoutsEnabled) {
+      if (!account.payoutsEnabled) {
         return { found: true, verified: target.identityStatus === "verified", promotedTips: 0 };
       }
       if (target.identityStatus === "verified") {
@@ -98,8 +99,8 @@ function wire(store: ReturnType<typeof makeStore>) {
     byTipId: async (tipId: string, status: TipStatus) => store.byTipId(tipId, status),
     byPaymentIntentId: async () => 0,
   };
-  const applyAccountUpdate = async (accountId: string, payoutsEnabled: boolean) =>
-    store.applyAccountUpdate(accountId, payoutsEnabled);
+  const applyAccountUpdate = async (accountId: string, account: { payoutsEnabled: boolean }) =>
+    store.applyAccountUpdate(accountId, account);
   // この settlement テストは payout を扱わないため no-op（反映なし）
   const applyPayoutUpdate = async () => false;
   // (c)(d)(f) は本テストでは扱わないため no-op
@@ -120,6 +121,10 @@ function succeeded(eventId: string, tipId: string): VerifiedEvent {
     tipId,
     accountId: null,
     payoutsEnabled: null,
+    detailsSubmitted: null,
+    requirementsErrorCount: null,
+    requirementsPastDueCount: null,
+    requirementsCurrentlyDueCount: null,
     payoutId: null,
     payoutMetadataId: null,
     payoutArrivedAt: null,
@@ -139,6 +144,11 @@ function accountUpdated(eventId: string, accountId: string): VerifiedEvent {
     tipId: null,
     accountId,
     payoutsEnabled: true,
+    // 本人確認完了（payouts_enabled=true）を表すイベント。提出済み・不足なしとして扱う
+    detailsSubmitted: true,
+    requirementsErrorCount: 0,
+    requirementsPastDueCount: 0,
+    requirementsCurrentlyDueCount: 0,
     payoutId: null,
     payoutMetadataId: null,
     payoutArrivedAt: null,

@@ -1,9 +1,11 @@
 import { getDb, sql } from "@arigato/db";
-import type {
-  IdentityStatus,
-  InviteStatus,
-  SettlementStatus,
-  PayoutStatus,
+import {
+  deriveIdentityStatus,
+  type ConnectAccountState,
+  type IdentityStatus,
+  type InviteStatus,
+  type SettlementStatus,
+  type PayoutStatus,
 } from "./staff.model.js";
 
 /**
@@ -249,12 +251,13 @@ export type StaffRepository = {
   listSettlementsByAuthUserId: (authUserId: string) => Promise<SettlementRow[]>;
   // 本人の申告データ（受取記録）を年で絞って取得する（本人のみ）。year は西暦
   listTaxRecordsByAuthUserId: (authUserId: string, year: number) => Promise<TaxReportRecord[]>;
-  // account.updated を反映する。Connected Account ID で本人を引き、
+  // account.updated を反映する。Connected Account ID で本人を引き、Model の deriveIdentityStatus で
+  // 次の本人確認状態（verified / action_required / pending / 据え置き）を導いて書き込む。
   // payouts_enabled=true なら identity_status を verified に確定し、held の tip を payable へ遷移する。
   // 1トランザクションで原子的に行い、二重遷移しない（既に verified なら tip も再遷移しない）。
   applyAccountUpdate: (
     stripeAccountId: string,
-    payoutsEnabled: boolean,
+    account: ConnectAccountState,
   ) => Promise<ApplyAccountUpdateResult>;
   // 送金（payout）の本人・Connect 連携状態を取得（送金可否判定・Stripe payout の実行先）。未作成は null
   findPayoutContext: (authUserId: string) => Promise<PayoutContextRow | null>;
@@ -949,10 +952,10 @@ export function createStaffRepository(): StaffRepository {
       return rows;
     },
 
-    // account.updated を反映する。Connected Account ID で本人を引き、payouts_enabled=true なら
-    // identity_status を verified に確定し、held の tip を payable へ遷移する。
+    // account.updated を反映する。Connected Account ID で本人を引き、Model の deriveIdentityStatus で
+    // 次の本人確認状態を導いて書き込む。verified 確定時のみ held の tip を payable へ遷移する（従来どおり不変）。
     // 既に verified なら tip も再遷移しない（二重遷移の防止）。1トランザクションで原子的に行う。
-    async applyAccountUpdate(stripeAccountId, payoutsEnabled) {
+    async applyAccountUpdate(stripeAccountId, account) {
       const db = getDb();
       return await db.transaction(async (tx) => {
         // 対象 staff を取得（行ロックで競合を避ける）
@@ -968,9 +971,20 @@ export function createStaffRepository(): StaffRepository {
           return { found: false, verified: false, promotedTips: 0 };
         }
 
-        // まだ着金可能でなければ verified への遷移はしない（pending へは寄せず据え置く）。
-        if (!payoutsEnabled) {
-          return { found: true, verified: staffRow.identityStatus === "verified", promotedTips: 0 };
+        // 次の本人確認状態を Model の純粋関数で導く（verified 優先・後退しない・要対応の判定を1か所に集約）
+        const nextStatus = deriveIdentityStatus(staffRow.identityStatus, account);
+
+        // verified 以外（pending / action_required / none 据え置き）は状態の書き込みだけ行う
+        // （held→payable の昇格は verified 確定時のみ＝従来どおり）。
+        if (nextStatus !== "verified") {
+          if (nextStatus !== staffRow.identityStatus) {
+            await tx.execute(sql`
+              UPDATE staff
+              SET identity_status = ${nextStatus}
+              WHERE id = ${staffRow.id}
+            `);
+          }
+          return { found: true, verified: false, promotedTips: 0 };
         }
 
         // 既に verified なら二重遷移しない（冪等。tip も再遷移させない）

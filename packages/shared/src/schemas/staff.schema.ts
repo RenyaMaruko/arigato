@@ -8,8 +8,10 @@ import { StoreInviteTypeSchema } from "./store.schema.js";
  * Schema First の起点で、フロントのフォーム検証とバックのリクエスト検証に同じ定義を使う。
  */
 
-// 本人確認・着金可否の状態（none: 未着手 / pending: 審査中 / verified: 着金可能）
-export const IdentityStatusSchema = z.enum(["none", "pending", "verified"]);
+// 本人確認・着金可否の状態
+// （none: 未着手 / pending: 審査中 / action_required: 要対応＝審査NG・追加書類 / verified: 着金可能）。
+// action_required は Stripe の account.updated（requirements.errors / past_due / currently_due）から導く。
+export const IdentityStatusSchema = z.enum(["none", "pending", "action_required", "verified"]);
 export type IdentityStatus = z.infer<typeof IdentityStatusSchema>;
 
 // 表示名・一言の文字数上限（フォームの体験上の上限）

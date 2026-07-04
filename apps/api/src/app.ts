@@ -275,10 +275,11 @@ export function createApp() {
           byPaymentIntentId: (paymentIntentId, status) =>
             tipRepo.updateTipStatusByPaymentIntentId(paymentIntentId, status),
         },
-        // account.updated の反映（identity_status verified・held→payable）は staff Service を配線
-        // （webhook feature は staff feature を直接 import せず、ここで接続する）。
-        (stripeAccountId, payoutsEnabled) =>
-          applyConnectAccountUpdate(staffRepo, stripeAccountId, payoutsEnabled),
+        // account.updated の反映（identity_status verified/action_required/pending・held→payable）は
+        // staff Service を配線（webhook feature は staff feature を直接 import せず、ここで接続する）。
+        // requirements（errors / past_due / currently_due）由来の要対応判定も account 状態ごと渡す。
+        (stripeAccountId, accountState) =>
+          applyConnectAccountUpdate(staffRepo, stripeAccountId, accountState),
         // payout.paid / payout.failed の反映（着金確定・失敗で tip を payable へ戻す）も staff Service を配線
         (params) => applyPayoutWebhookUpdate(staffRepo, params),
         // (c)(d)(f) の追加ユースケースを配線（webhook feature は tip / staff feature を直接 import せず、ここで接続する）。
