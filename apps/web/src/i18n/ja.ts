@@ -200,10 +200,9 @@ export const ja = {
       homeBalanceSendableNote: "いま送金できる額 {{amount}}（残りは準備中です）",
       // 残高のすぐ下のアクション（未確認＝本人確認へ／確認済＝残高の詳細へ）
       homeVerifyCta: "本人確認をする",
-      // 本人確認の申請中（審査待ち）。状態表示＋審査期間の一言＋再開用の小リンク
+      // 本人確認の申請中（審査待ち）。状態表示＋審査期間の一言（やることは無いため導線は出さない）
       homeIdentityPendingCta: "ただいま申請中",
       homeIdentityPendingNote: "本人確認を審査中です（1〜2営業日ほどかかります）",
-      homeIdentityPendingLink: "手続きを確認する",
       // 本人確認の要対応（審査NG・追加書類）。一言＋押せるボタン（/staff/identity で修正・再提出できる）
       homeIdentityActionRequiredNote: "本人確認で追加の確認が必要です",
       homeIdentityActionRequiredCta: "追加の確認が必要です",

@@ -111,20 +111,11 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
               <ChevronIcon />
             </button>
           ) : identityPending ? (
-            <>
-              {/* 申請中の状態表示（ボタンではない・押せない） */}
-              <div className="mt-3.5 flex w-full items-center justify-center rounded-xl bg-rose/40 py-3 text-token-md font-bold text-page">
-                {t("staff.homeIdentityPendingCta")}
-              </div>
-              {/* 途中離脱・追加書類の再開入口（申請中の唯一の本人確認導線） */}
-              <button
-                type="button"
-                onClick={() => navigate({ to: "/staff/identity" })}
-                className="mt-2.5 w-full text-center text-token-xs text-rose/80 underline underline-offset-2"
-              >
-                {t("staff.homeIdentityPendingLink")}
-              </button>
-            </>
+            // 申請中の状態表示（ボタンではない・押せない）。申請中＝提出済みの審査待ちで、
+            // ユーザーがやることは無い（未提出は none のまま・審査NGは action_required になるため導線不要）
+            <div className="mt-3.5 flex w-full items-center justify-center rounded-xl bg-rose/40 py-3 text-token-md font-bold text-page">
+              {t("staff.homeIdentityPendingCta")}
+            </div>
           ) : (
             <button
               type="button"
