@@ -258,6 +258,81 @@ export function selectPayoutTipsWithinAvailable(
   return { tipIds, amount };
 }
 
+// 送金 claim（payable→paid の実確保）が選定内容と食い違ったときに投げる業務エラー。
+// 並行送金・返金レースで「選んだはずの tip を実際には確保できなかった」ことを表す終了シグナルで、
+// Repository がトランザクション内で投げて全ロールバックさせる（Stripe 未呼出＝資金は動かない）。
+// Route では 409（payout_conflict）に変換する。
+export class PayoutConflictError extends Error {
+  constructor(reason: PayoutClaimFailureReason) {
+    super(`payout_conflict:${reason}`);
+    this.name = "PayoutConflictError";
+  }
+}
+
+// 送金 claim の検証が失敗した理由（count_mismatch: 選定と実確保の件数不一致 / below_minimum: 実確保合計が最低送金額未満）
+export type PayoutClaimFailureReason = "count_mismatch" | "below_minimum";
+
+// 送金 claim の検証結果。ok のとき amount は「実際に確保できた tip の手取り合計」＝Stripe へ送る額。
+export type PayoutClaimVerification =
+  | { ok: true; amount: number }
+  | { ok: false; reason: PayoutClaimFailureReason };
+
+/**
+ * 送金 claim（UPDATE ... RETURNING で実際に payable→paid へ確保できた tip）を検証する純粋関数。
+ * 「事前選定した額をそのまま送金する」のではなく「実際に確保できた分だけを送金する」ための整合ルール:
+ *  - 実確保の件数が選定件数と一致しない（間に別送金・返金が割り込んだ）→ count_mismatch。
+ *  - 実確保した tip の手取り合計が最低送金額（¥100）未満 → below_minimum。
+ *  - どちらも満たせば ok。amount（手取り合計）を payout 行の額・Stripe 送金額に使う。
+ * claimedFaceAmounts は実際に更新できた tip の「額面」一覧を渡す（手取り換算はここで行う）。
+ */
+export function verifyPayoutClaim(
+  selectedCount: number,
+  claimedFaceAmounts: number[],
+): PayoutClaimVerification {
+  // 選定と実確保の件数が食い違えば競合（並行送金・返金レース）
+  if (claimedFaceAmounts.length !== selectedCount) {
+    return { ok: false, reason: "count_mismatch" };
+  }
+  // 実確保した tip の手取り合計（表示・選定と同じ換算で整合させる）
+  const amount = claimedFaceAmounts.reduce(
+    (sum, face) => sum + calculateStaffTakeAmount(face),
+    0,
+  );
+  // 実確保合計が最低送金額未満なら送金しない（0件＝0円を含む）
+  if (amount < MIN_PAYOUT_AMOUNT) {
+    return { ok: false, reason: "below_minimum" };
+  }
+  return { ok: true, amount };
+}
+
+// Stripe payout 実行エラーの分類
+// （definite_failure: Stripe 側で payout 未作成が確実 / ambiguous: 成立したか不明＝revert してはいけない）
+export type StripePayoutErrorClass = "definite_failure" | "ambiguous";
+
+// 「成立したか不明」な Stripe エラー型（stripe-node の err.type）。
+//  - StripeConnectionError: 接続断・タイムアウト（リクエストが届いたか／レスポンスが落ちたか不明）
+//  - StripeAPIError: Stripe 側の 5xx（処理されたか不明）
+const AMBIGUOUS_STRIPE_ERROR_TYPES = new Set(["StripeConnectionError", "StripeAPIError"]);
+
+/**
+ * Stripe payout 実行時のエラーを「確定失敗」か「曖昧」かに分類する純粋関数。
+ * 曖昧（接続断・タイムアウト・5xx）は payout が実は成立している可能性があるため revert してはいけない
+ * （revert→再送金で二重払いになる）。それ以外（StripeInvalidRequestError / StripeCardError 等の
+ * リクエスト拒否や、SDK 到達前の一般エラー）は Stripe 側で payout 未作成が確実なので従来どおり revert する。
+ * stripe-node のエラーは err.type にクラス名（例: "StripeConnectionError"）を持つため、それで判定する。
+ */
+export function classifyStripePayoutError(err: unknown): StripePayoutErrorClass {
+  // stripe-node のエラーは type プロパティにエラー型名を持つ（SDK を import せず純粋に判定する）
+  const type =
+    typeof err === "object" && err !== null && "type" in err
+      ? (err as { type: unknown }).type
+      : null;
+  if (typeof type === "string" && AMBIGUOUS_STRIPE_ERROR_TYPES.has(type)) {
+    return "ambiguous";
+  }
+  return "definite_failure";
+}
+
 // 受取履歴のキーセットページングで使うカーソル（最後に取得した行の位置）。
 // 並び順は COALESCE(succeeded_at, created_at) DESC, id DESC のため、
 // 「最後の行の受取日時(receivedAt・ISO)」と「id」の2要素で次ページの基点を表す。

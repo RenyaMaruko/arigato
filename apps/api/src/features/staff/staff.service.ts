@@ -29,11 +29,15 @@ import {
   calculateStaffTakeAmount,
   evaluatePayoutEligibility,
   selectPayoutTipsWithinAvailable,
+  classifyStripePayoutError,
   decodeTipCursor,
   encodeTipCursor,
   type IdentityStatus,
   type ConnectAccountState,
 } from "./staff.model.js";
+// 送金 claim の競合エラー（Repository が投げ、Route で 409 に変換する）。
+// Route が service 経由でエラー型を参照できるよう再公開する（既存の Payout*Error と同じ入口に揃える）
+export { PayoutConflictError } from "./staff.model.js";
 import type {
   StaffRepository,
   StaffProfileRow,
@@ -777,15 +781,22 @@ export class PayoutBelowMinimumError extends Error {
  *  3. payable な tip を古い順（FIFO）に取得し、手取り換算の累計が available を超えない範囲だけを
  *     送金対象に選ぶ（Model の純粋関数 selectPayoutTipsWithinAvailable）。送金額＝選んだ tip の手取り合計。
  *     可否判定（verified必須・最低¥100）。選べる額が最低額未満／0 なら below_minimum。
- *  4. ★先に DB トランザクションで★ payout 行を pending（stripe_payout_id は NULL）で作成し、
- *     選んだ payable tip を paid＋payout_id 紐付けに更新する。ここで失敗したら Stripe を呼ばない
- *     （お金は動かない＝安全）。payout 行の id を取得する。
- *  5. Stripe payout を実行する。amount は available 以下に収めた送金額。idempotency_key と
- *     metadata.payout_id に payout 行の id を使う（再試行で二重送金しない／Webhook 照合のバックアップ）。
+ *  4. ★先に DB トランザクションで★ 選んだ payable tip を claim（payable→paid の実確保）し、
+ *     「実際に確保できた手取り合計」で payout 行を pending（stripe_payout_id は NULL）で作成する。
+ *     staff 単位の advisory lock で直列化し、claim が選定と食い違えば（並行送金・返金レース）
+ *     PayoutConflictError で全ロールバックする。ここで失敗したら Stripe を呼ばない（お金は動かない＝安全）。
+ *  5. Stripe payout を実行する。amount は「実際に claim できた手取り合計」（payout 行の額と必ず一致）。
+ *     idempotency_key と metadata.payout_id に payout 行の id を使う
+ *     （再試行で二重送金しない／Webhook 照合のバックアップ）。
  *  6. Stripe 成功 → payout 行に stripe_payout_id を更新する（status は pending のまま。
  *     確定は payout.paid Webhook を正とする）。
- *  7. Stripe 失敗（例外）→ DB を revert する（payout 行を status=failed＋failure_reason、
- *     対象 tip を payable へ戻す・payout_id=NULL）。エラーは呼び出し元へ再送出する。
+ *  7. Stripe 失敗（例外）→ エラーを分類する（Model の classifyStripePayoutError）。
+ *     - 確定失敗（StripeInvalidRequestError 等＝Stripe 側で payout 未作成が確実）: DB を revert する
+ *       （payout 行を status=failed＋failure_reason、対象 tip を payable へ戻す・payout_id=NULL）。
+ *     - 曖昧（接続断・タイムアウト・5xx＝成立したか不明）: revert しない。payout 行は pending のまま残す
+ *       （tips は paid のままなので再送金は「送れる額なし」で自然にブロックされる。実成立していれば
+ *       payout.paid Webhook（metadata.payout_id）で確定し、未成立なら日次照合が stuck pending を検知する）。
+ *     いずれもエラーは呼び出し元へ再送出する。
  *
  * 着金の確定は payout.paid / payout.failed Webhook を正とする（ここでは pending で記録するだけ）。
  * available に収まらなかった payable 分（pending 由来）は payable のまま残り、available になってから次回送金できる。
@@ -830,7 +841,8 @@ export async function createStaffPayout(
     throw new PayoutBelowMinimumError();
   }
 
-  // 【手順4】先に DB へ pending で記録し、選んだ payable tip を paid＋紐付けへ（トランザクション）。
+  // 【手順4】先に DB で選んだ payable tip を claim（実確保）し、実確保合計で pending の payout 行を作る
+  // （staff 単位の advisory lock で直列化・claim が選定と食い違えば PayoutConflictError で全ロールバック）。
   // ここで失敗すれば例外が伝播して Stripe は呼ばれない（お金は動かない＝安全）。
   const payout = await repo.createPendingPayoutAndMarkTipsPaid({
     staffId: ctx.staffId,
@@ -839,21 +851,28 @@ export async function createStaffPayout(
   });
 
   // 【手順5】Stripe payout を実行（Connected Account の available 残高→銀行。送金手数料は店員から取らない）。
-  // amount は available 以下に収めた送金額（残高不足にならない）。
+  // amount は「実際に claim できた手取り合計」＝payout.amount を使う（DB に記録した額と送金額を必ず一致させる）。
   // idempotency_key・metadata.payout_id に自前 payout 行の id を使う（二重送金防止／Webhook 照合のバックアップ）。
   let stripeResult: StripeCreatePayoutResult;
   try {
     stripeResult = await createPayout({
       connectedAccountId: ctx.stripeAccountId,
-      amount: payoutAmount,
+      amount: payout.amount,
       currency: CURRENCY,
       idempotencyKey: payout.id,
       payoutId: payout.id,
     });
   } catch (err) {
-    // 【手順7】Stripe 失敗 → DB を revert（payout=failed＋tip を payable へ戻す）。原因を記録して再送出する。
-    const reason = err instanceof Error ? err.message : "stripe_payout_failed";
-    await repo.revertPayoutByPayoutId(payout.id, reason);
+    // 【手順7】Stripe 失敗 → エラーを分類してから扱う（Model 純粋関数）。
+    // 確定失敗（Stripe 側で payout 未作成が確実）のみ revert する（payout=failed＋tip を payable へ戻す）。
+    if (classifyStripePayoutError(err) === "definite_failure") {
+      const reason = err instanceof Error ? err.message : "stripe_payout_failed";
+      await repo.revertPayoutByPayoutId(payout.id, reason);
+    }
+    // 曖昧（接続断・タイムアウト・5xx＝成立したか不明）は revert しない。
+    // payout 行は pending（stripe_payout_id 未設定）のまま残し、tips も paid のままにする
+    // （再送金は「送れる額なし」で自然にブロック。実成立なら payout.paid Webhook（metadata.payout_id）で
+    //  確定し、未成立なら日次照合が stuck pending を検知する）。revert→再送金による二重払いを防ぐ。
     throw err;
   }
 

@@ -13,6 +13,8 @@ import {
   evaluatePayoutEligibility,
   selectPayoutTipsWithinAvailable,
   calculateStaffTakeAmount,
+  verifyPayoutClaim,
+  classifyStripePayoutError,
   encodeTipCursor,
   decodeTipCursor,
 } from "./staff.model.js";
@@ -315,5 +317,69 @@ describe("staff.model", () => {
     // 具体値での確認（333 → 283.05 → 283 / 50000 → 42500）
     expect(calculateStaffTakeAmount(333)).toBe(283);
     expect(calculateStaffTakeAmount(50000)).toBe(42500);
+  });
+
+  it("verifyPayoutClaim: 選定件数と実確保が一致すれば ok・amount は実確保の手取り合計", () => {
+    // 額面 300/500 → 手取り 255/425 → 合計 680（選定と同じ換算で整合する）
+    const result = verifyPayoutClaim(2, [300, 500]);
+    expect(result).toEqual({ ok: true, amount: 680 });
+  });
+
+  it("verifyPayoutClaim: 実確保の件数が選定件数と不一致なら count_mismatch（並行送金・返金レース）", () => {
+    // 2件選んだのに1件しか確保できなかった（間に別送金・返金が割り込んだ）
+    expect(verifyPayoutClaim(2, [300])).toEqual({ ok: false, reason: "count_mismatch" });
+    // 実確保 0 件（全て他リクエストに取られた）も同様
+    expect(verifyPayoutClaim(2, [])).toEqual({ ok: false, reason: "count_mismatch" });
+    // 多い方向の不一致（理論上起きないが契約として弾く）
+    expect(verifyPayoutClaim(1, [300, 500])).toEqual({ ok: false, reason: "count_mismatch" });
+  });
+
+  it("verifyPayoutClaim: 実確保合計が最低送金額未満なら below_minimum（0件＝0円を含む）", () => {
+    // 額面100 → 手取り85 < MIN_PAYOUT_AMOUNT(100) → 送金しない
+    expect(verifyPayoutClaim(1, [100])).toEqual({ ok: false, reason: "below_minimum" });
+    // 選定0件（合計0円）も below_minimum
+    expect(verifyPayoutClaim(0, [])).toEqual({ ok: false, reason: "below_minimum" });
+    // ちょうど最低送金額（額面118 → 手取り100）は送金できる
+    expect(verifyPayoutClaim(1, [118])).toEqual({ ok: true, amount: MIN_PAYOUT_AMOUNT });
+  });
+
+  it("classifyStripePayoutError: 接続断・5xx（成立したか不明）は ambiguous", () => {
+    // stripe-node のエラーは err.type にエラー型名を持つ（接続断・タイムアウト）
+    const connectionError = Object.assign(new Error("ETIMEDOUT"), {
+      type: "StripeConnectionError",
+    });
+    expect(classifyStripePayoutError(connectionError)).toBe("ambiguous");
+    // Stripe 側 5xx（処理されたか不明）
+    const apiError = Object.assign(new Error("api_error"), { type: "StripeAPIError" });
+    expect(classifyStripePayoutError(apiError)).toBe("ambiguous");
+  });
+
+  it("classifyStripePayoutError: リクエスト拒否系（payout 未作成が確実）は definite_failure", () => {
+    // パラメータ不正（Stripe が処理せず拒否＝payout 未作成が確実）
+    const invalid = Object.assign(new Error("invalid amount"), {
+      type: "StripeInvalidRequestError",
+    });
+    expect(classifyStripePayoutError(invalid)).toBe("definite_failure");
+    // カード起因・認証・権限・レート制限も同様（リクエストが処理されていない）
+    for (const type of [
+      "StripeCardError",
+      "StripeAuthenticationError",
+      "StripePermissionError",
+      "StripeRateLimitError",
+      "StripeIdempotencyError",
+    ]) {
+      expect(classifyStripePayoutError(Object.assign(new Error("x"), { type }))).toBe(
+        "definite_failure",
+      );
+    }
+  });
+
+  it("classifyStripePayoutError: type を持たない一般エラー・非エラー値は definite_failure（従来どおり revert）", () => {
+    expect(classifyStripePayoutError(new Error("insufficient_funds"))).toBe("definite_failure");
+    expect(classifyStripePayoutError("string error")).toBe("definite_failure");
+    expect(classifyStripePayoutError(null)).toBe("definite_failure");
+    expect(classifyStripePayoutError(undefined)).toBe("definite_failure");
+    // type が文字列でない場合も既知の曖昧型ではない → definite_failure
+    expect(classifyStripePayoutError({ type: 123 })).toBe("definite_failure");
   });
 });

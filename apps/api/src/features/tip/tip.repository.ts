@@ -270,13 +270,15 @@ export function createTipRepository(): TipRepository {
         });
       }
 
-      // succeeded 以外（failed 等）は settlement_status を触らずステータスのみ更新する
+      // succeeded 以外（failed 等）は settlement_status を触らずステータスのみ更新する。
+      // 更新対象は pending の行に限定する（succeeded は終端状態）。Stripe はイベント順序を保証しないため、
+      // 遅延到着した payment_failed が succeeded 確定済みの行を巻き戻さないようにする（0行更新で無視）。
       const rows = await db.execute<{ id: string }>(sql`
         UPDATE tip
         SET status = ${status},
             stripe_payment_intent_id = COALESCE(${paymentIntentId}, stripe_payment_intent_id)
         WHERE id = ${tipId}
-          AND status <> ${status}
+          AND status = 'pending'
         RETURNING id
       `);
       return rows.length;
@@ -316,12 +318,14 @@ export function createTipRepository(): TipRepository {
         });
       }
 
-      // succeeded 以外（failed 等）は settlement_status を触らずステータスのみ更新する
+      // succeeded 以外（failed 等）は settlement_status を触らずステータスのみ更新する。
+      // 更新対象は pending の行に限定する（succeeded は終端状態）。Stripe はイベント順序を保証しないため、
+      // 遅延到着した payment_failed が succeeded 確定済みの行を巻き戻さないようにする（0行更新で無視）。
       const rows = await db.execute<{ id: string }>(sql`
         UPDATE tip
         SET status = ${status}
         WHERE stripe_payment_intent_id = ${paymentIntentId}
-          AND status <> ${status}
+          AND status = 'pending'
         RETURNING id
       `);
       return rows.length;

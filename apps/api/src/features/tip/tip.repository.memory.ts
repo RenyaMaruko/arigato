@@ -94,10 +94,13 @@ export function createInMemoryTipRepository(): TipRepository {
 
     // tip ID をキーに status を更新し、PaymentIntent ID も索引へ登録する（Webhook を正とする確定）。
     // 既に同じ status なら 0 件（冪等性の補助）。
+    // succeeded 以外（failed 等）への更新は pending の行に限定する（実 DB と同じ契約。
+    // 遅延到着した payment_failed が succeeded 確定済みの行を巻き戻さない）。
     async updateTipStatusByTipId(tipId, status, paymentIntentId) {
       const row = tips.get(tipId);
       if (!row) return 0;
       if (row.status === status) return 0;
+      if (status !== "succeeded" && row.status !== "pending") return 0;
       tips.set(tipId, { ...row, status });
       if (paymentIntentId) {
         piIndex.set(paymentIntentId, tipId);
@@ -105,12 +108,15 @@ export function createInMemoryTipRepository(): TipRepository {
       return 1;
     },
 
-    // PaymentIntent ID をキーに tip のステータスを更新する（Webhook 確定）
+    // PaymentIntent ID をキーに tip のステータスを更新する（Webhook 確定）。
+    // succeeded 以外への更新は pending の行に限定する（実 DB と同じ契約・succeeded は終端状態）。
     async updateTipStatusByPaymentIntentId(paymentIntentId, status) {
       const tipId = piIndex.get(paymentIntentId);
       if (!tipId) return 0;
       const row = tips.get(tipId);
       if (!row) return 0;
+      if (row.status === status) return 0;
+      if (status !== "succeeded" && row.status !== "pending") return 0;
       tips.set(tipId, { ...row, status });
       return 1;
     },

@@ -1,6 +1,8 @@
 import { getDb, sql } from "@arigato/db";
 import {
   deriveIdentityStatus,
+  verifyPayoutClaim,
+  PayoutConflictError,
   type ConnectAccountState,
   type IdentityStatus,
   type InviteStatus,
@@ -263,10 +265,12 @@ export type StaffRepository = {
   findPayoutContext: (authUserId: string) => Promise<PayoutContextRow | null>;
   // 本人の着金可能（payable）な成立済み tip の id・額面を取得する（送金額の算出・paid 化の対象特定）
   listPayableTipsByAuthUserId: (authUserId: string) => Promise<PayableTipRow[]>;
-  // 【DB 先行記録】送金記録を pending（stripe_payout_id は NULL）で1件作り、
-  // 対象の payable な tip を paid＋payout_id 紐付けに更新する。1トランザクションで原子的に行う。
-  // ここで失敗したら呼び出し側は Stripe を呼ばない（お金は動かない＝安全）。
-  // 対象 tip は引数の tipIds（事前に算出した payable 集合）かつ今なお payable のものに限定する。
+  // 【DB 先行記録】staff 単位の advisory lock で直列化した上で、対象の payable な tip を先に claim
+  // （payable→paid の実確保）し、「実際に確保できた tip の手取り合計」で送金記録
+  // （pending・stripe_payout_id は NULL）を1件作る。1トランザクションで原子的に行う。
+  // claim 件数が選定件数（tipIds）と不一致・実確保合計が最低送金額未満なら PayoutConflictError で
+  // 全ロールバックする（ここで失敗したら呼び出し側は Stripe を呼ばない＝お金は動かない・安全）。
+  // amount は選定時の見込み額（参考）。返す CreatePayoutRow.amount（実確保合計）を Stripe 送金額に使うこと。
   createPendingPayoutAndMarkTipsPaid: (params: {
     staffId: string;
     amount: number;
@@ -1056,26 +1060,26 @@ export function createStaffRepository(): StaffRepository {
       return rows;
     },
 
-    // 【DB 先行記録】送金記録を pending（stripe_payout_id は NULL）で作り、
-    // 対象の payable な tip を paid＋payout_id 紐付けへ更新する。1トランザクションで原子的に行う。
-    // tip は引数の tipIds かつ今なお payable のものに限定し、別リクエストとの競合
-    // （同じ payable を二重送金）を WHERE 条件で弾く。
-    // ここで失敗したら呼び出し側は Stripe を呼ばない（お金は動かない＝安全）。
+    // 【DB 先行記録】選定した payable な tip を先に claim（payable→paid の実確保）し、
+    // 「実際に確保できた tip の手取り合計」で送金記録（pending・stripe_payout_id は NULL）を作る。
+    // 1トランザクションで原子的に行う。ここで失敗したら呼び出し側は Stripe を呼ばない（お金は動かない＝安全）。
+    //
+    // 二重払いを構造的に防ぐ2つの仕掛け:
+    //  1. staff 単位の advisory lock で送金処理を直列化する（並行リクエストの片方はロック待ちになり、
+    //     先行が commit した後に走る＝同じ payable を二重に選べない）。tx 終了で自動解放。
+    //  2. UPDATE ... RETURNING の実更新行数を検証する（claim 件数が選定件数と不一致／実確保合計が
+    //     最低送金額未満なら PayoutConflictError で全ロールバック）。事前選定額は使わず、
+    //     実確保した分の合計を payout.amount（＝Stripe 送金額）にする。
     async createPendingPayoutAndMarkTipsPaid(params) {
       const db = getDb();
       return await db.transaction(async (tx) => {
-        // 送金記録（pending・stripe_payout_id は NULL）を作成する
-        const inserted = await tx.execute<CreatePayoutRow>(sql`
-          INSERT INTO payout (staff_id, amount, status, stripe_payout_id)
-          VALUES (${params.staffId}, ${params.amount}, 'pending', NULL)
-          RETURNING
-            id     AS "id",
-            amount AS "amount",
-            status AS "status"
+        // 【1】staff 単位の advisory lock で送金を直列化する（tx 終了＝commit/rollback で自動解放）。
+        // hashtext で staffId（uuid 文字列）を int にハッシュしてロックキーにする。
+        await tx.execute(sql`
+          SELECT pg_advisory_xact_lock(hashtext(${params.staffId}::text))
         `);
-        const payoutRow = inserted[0]!;
 
-        // 対象の payable な tip を paid＋この payout に紐付け（今なお payable のものだけを更新）。
+        // 【2】先に対象 tip を claim する（payable→paid の実確保。RETURNING で実際に取れた行を得る）。
         //
         // ★実 DB の落とし穴: drizzle(postgres-js) は sql`${jsArray}` を「行（record）」= ($1,$2,…) に
         //   展開するため、`= ANY(${tipIds})` は「op ANY requires array on right side」、
@@ -1085,12 +1089,43 @@ export function createStaffRepository(): StaffRepository {
         //   値は ${tipIdsLiteral} として束縛されるため安全（SQL インジェクションにならない）。
         //   空配列のときも '{}'::uuid[] となり「何も更新しない」正しい挙動になる。
         const tipIdsLiteral = `{${params.tipIds.join(",")}}`;
-        await tx.execute(sql`
+        const claimed = await tx.execute<{ id: string; amount: number }>(sql`
           UPDATE tip
-          SET settlement_status = 'paid',
-              payout_id = ${payoutRow.id}
+          SET settlement_status = 'paid'
           WHERE id = ANY(${tipIdsLiteral}::uuid[])
             AND settlement_status = 'payable'
+          RETURNING
+            id     AS "id",
+            amount AS "amount"
+        `);
+
+        // 【3】実確保を検証する（Model 純粋関数）。選定との件数不一致（並行送金・返金レース）や
+        // 実確保合計が最低送金額未満なら例外で全ロールバック（tip は payable のまま・Stripe 未呼出）。
+        const verification = verifyPayoutClaim(
+          params.tipIds.length,
+          claimed.map((c) => c.amount),
+        );
+        if (!verification.ok) {
+          throw new PayoutConflictError(verification.reason);
+        }
+
+        // 【4】実確保した手取り合計で送金記録（pending・stripe_payout_id は NULL）を作成する
+        const inserted = await tx.execute<CreatePayoutRow>(sql`
+          INSERT INTO payout (staff_id, amount, status, stripe_payout_id)
+          VALUES (${params.staffId}, ${verification.amount}, 'pending', NULL)
+          RETURNING
+            id     AS "id",
+            amount AS "amount",
+            status AS "status"
+        `);
+        const payoutRow = inserted[0]!;
+
+        // 【5】claim した tip をこの payout に紐付ける（実際に確保できた行だけを対象にする）
+        const claimedIdsLiteral = `{${claimed.map((c) => c.id).join(",")}}`;
+        await tx.execute(sql`
+          UPDATE tip
+          SET payout_id = ${payoutRow.id}
+          WHERE id = ANY(${claimedIdsLiteral}::uuid[])
         `);
 
         return payoutRow;
@@ -1172,7 +1207,10 @@ export function createStaffRepository(): StaffRepository {
             stripe_payout_id = COALESCE(stripe_payout_id, ${params.stripePayoutId})
         WHERE (
             stripe_payout_id = ${params.stripePayoutId}
-            OR id = ${params.payoutId}::uuid
+            -- 自前 id（metadata.payout_id）でのフォールバック照合は pending の行に限定する。
+            -- revert 済み（failed）の行を別 payout の paid Webhook が誤って paid に復活させない
+            -- （failed→tip は payable へ戻り再送金され得るため、復活すると台帳が矛盾する）。
+            OR (id = ${params.payoutId}::uuid AND status = 'pending')
           )
           AND status <> 'paid'
         RETURNING id
