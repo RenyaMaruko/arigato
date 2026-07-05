@@ -15,6 +15,9 @@ import type { WebhookRepository } from "./webhook.repository.js";
 export type VerifiedEvent = {
   id: string;
   type: string;
+  // イベントの発生元 Connected Account ID（Connect スコープのイベントで event.account に入る）。
+  // tip 更新・鏡保存・補正の「帰属口座検証」に使う（多層防御）。account が無いイベントは null
+  eventAccountId: string | null;
   paymentIntentId: string | null;
   tipId: string | null;
   // account.updated 系の Connected Account ID（該当しないイベントは null）
@@ -53,13 +56,21 @@ export type VerifiedEvent = {
  */
 export type UpdateTipStatusDeps = {
   // tip ID で確定し、判明した PaymentIntent ID も記録する（主経路）。更新件数を返す。
+  // eventAccountId（イベントの発生元 Connected Account）が非 null のときは
+  // 「tip の店員の口座と一致する場合だけ」更新する（帰属口座検証・多層防御）。
   byTipId: (
     tipId: string,
     status: TipStatus,
     paymentIntentId: string | null,
+    eventAccountId: string | null,
   ) => Promise<number>;
   // PaymentIntent ID で確定する（tipId が無いイベント向けの従経路）。更新件数を返す。
-  byPaymentIntentId: (paymentIntentId: string, status: TipStatus) => Promise<number>;
+  // eventAccountId の帰属口座検証は byTipId と同じ。
+  byPaymentIntentId: (
+    paymentIntentId: string,
+    status: TipStatus,
+    eventAccountId: string | null,
+  ) => Promise<number>;
 };
 
 // Webhook 処理の結果（テスト・ログ・レスポンスで利用）
@@ -151,6 +162,8 @@ export type ApplySettlementCorrection = (params: {
   chargeId: string | null;
   // tip 特定の従キー（PaymentIntent ID）
   paymentIntentId: string | null;
+  // イベントの発生元 Connected Account（帰属口座検証。非 null なら tip の店員の口座と一致必須）
+  connectedAccountId: string | null;
 }) => Promise<boolean>;
 
 /**
@@ -203,11 +216,16 @@ const NO_OP_RESULT: HandleWebhookResult = {
 
 /**
  * 署名検証済みの Webhook イベントを処理する。
- * 冪等性を最初に判定し、新規のときだけ状態更新を行う:
+ * 冪等性を最初に判定し、処理対象（新規 or 前回失敗で未処理の既存）のときだけ状態更新を行う:
  *  - payment_intent.* → tip.status を更新
  *  - account.updated   → 注入された applyAccountUpdate で identity_status / settlement_status を遷移
  *  - payout.paid / payout.failed → 注入された applyPayoutUpdate で送金の着金確定・失敗を反映
- * 同一イベント ID の再送は冪等にスキップし、二重遷移しない。
+ * 「処理済み（processed_at）」の再送は冪等にスキップし、二重遷移しない。
+ *
+ * 受信記録と業務処理は同一トランザクションにできないため、業務処理の成功後に
+ * markEventProcessed で処理済みを刻む。業務処理が失敗（throw）した場合は処理済みにせず
+ * 例外を伝播させる（Route が 500 を返し、Stripe の再送で再処理される＝イベントの恒久ロスト防止）。
+ * 各業務処理は再実行に耐える冪等ガード（pending 限定更新・ON CONFLICT・NOT EXISTS 等）を持つ。
  */
 // (c)(d)(f) の追加ユースケースを注入する束（既存4引数は維持しつつ、新規はこの1引数に集約）。
 // webhook feature は tip / staff feature を直接 import せず、すべて app.ts でこれらを配線する。
@@ -228,19 +246,48 @@ export async function handleStripeWebhook(
   settlementDeps: SettlementDeps,
   event: VerifiedEvent,
 ): Promise<HandleWebhookResult> {
-  // 冪等性: 同一イベント ID を2回受けても2回目は記録できず false → 何もせずスキップ
-  const isNew = await repo.recordEventIfNew(event.id, event.type);
-  if (!isNew) {
+  // 冪等性: 処理済み（processed_at あり）の再送は何もせずスキップする。
+  // 「新規」または「受信済みだが前回の業務処理が失敗した未処理の残骸」なら処理を続行する。
+  const shouldProcess = await repo.recordEventIfNew(event.id, event.type);
+  if (!shouldProcess) {
     return { ...NO_OP_RESULT, duplicate: true };
   }
 
+  // 業務処理を実行する。失敗（throw）した場合は processed_at を刻まずに例外を伝播させる
+  // （Route が 500 を返し、Stripe の再送で再処理される。部分書き込みも再処理側の冪等ガードで埋まる）。
+  const result = await processVerifiedEvent(
+    updateTip,
+    applyAccountUpdate,
+    applyPayoutUpdate,
+    settlementDeps,
+    event,
+  );
+
+  // 業務処理まで成功したので処理済みを刻む（以降の再送は冪等にスキップされる）
+  await repo.markEventProcessed(event.id);
+  return result;
+}
+
+/**
+ * イベント種別ごとの業務処理の本体（冪等判定・処理済みマークは handleStripeWebhook 側で行う）。
+ * ここで throw した場合は「未処理」のまま残り、Stripe の再送で再処理される。
+ */
+async function processVerifiedEvent(
+  updateTip: UpdateTipStatusDeps,
+  applyAccountUpdate: ApplyAccountUpdate,
+  applyPayoutUpdate: ApplyPayoutUpdate,
+  settlementDeps: SettlementDeps,
+  event: VerifiedEvent,
+): Promise<HandleWebhookResult> {
   // (f) charge.refunded / charge.dispute.* : 返金・チャージバックを反映する（残高・履歴・送金候補から除外）。
   //   settlementCorrection が立っているイベントはここで処理する（決済確定の写像より優先）。
+  //   イベントの発生元口座（eventAccountId）も渡し、tip の帰属口座と一致する場合だけ遷移させる（多層防御）。
   if (event.settlementCorrection) {
     const corrected = await settlementDeps.applySettlementCorrection({
       kind: event.settlementCorrection,
       chargeId: event.chargeId,
       paymentIntentId: event.paymentIntentId,
+      connectedAccountId: event.eventAccountId,
     });
     return { ...NO_OP_RESULT, settlementCorrected: corrected };
   }
@@ -318,11 +365,29 @@ export async function handleStripeWebhook(
 
   // tip の確定: metadata.tipId があれば tipId で確定（主経路。判明した PaymentIntent ID も記録する）。
   // tipId が無いイベントは PaymentIntent ID で確定（従経路）。どちらも無ければ更新対象なし。
+  // イベントの発生元口座（eventAccountId）も渡し、tip の帰属口座と一致する場合だけ更新する（多層防御）。
   let updated = 0;
   if (event.tipId) {
-    updated = await updateTip.byTipId(event.tipId, nextStatus, event.paymentIntentId);
+    updated = await updateTip.byTipId(
+      event.tipId,
+      nextStatus,
+      event.paymentIntentId,
+      event.eventAccountId,
+    );
   } else if (event.paymentIntentId) {
-    updated = await updateTip.byPaymentIntentId(event.paymentIntentId, nextStatus);
+    updated = await updateTip.byPaymentIntentId(
+      event.paymentIntentId,
+      nextStatus,
+      event.eventAccountId,
+    );
+  }
+
+  // 帰属口座の不一致（別口座のイベントが他人の tip を指した）は 0 行更新＝無視される。
+  // 「該当なし・確定済み」でも 0 行になるため断定はできないが、追跡できるようログを1行残す。
+  if (updated === 0 && (event.tipId || event.paymentIntentId) && event.eventAccountId) {
+    console.warn(
+      `[webhook.service] tip 更新0行（該当なし・確定済み・または帰属口座不一致）: event=${event.id} type=${event.type} account=${event.eventAccountId}`,
+    );
   }
 
   // (c) payment_intent.succeeded のとき、charge があれば確定見込み（balance_transaction）を tip へ鏡保存する。

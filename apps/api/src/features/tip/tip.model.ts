@@ -23,6 +23,38 @@ import type { IdentityStatus, SettlementStatus } from "@arigato/shared";
  */
 
 /**
+ * 決済未確定（pending）の tip を「期限切れ」とみなすまでの時間（時間単位）。
+ * QR を開いたが決済 UI に到達しなかった・カード入力を途中でやめた等の孤児 pending は
+ * この時間を超えたら failed へ確定して掃除する（お金は一切動いていないため安全。
+ * 万一決済が遅延確定しても failed→succeeded の救済遷移で復活できる）。
+ */
+export const PENDING_TIP_EXPIRY_HOURS = 24;
+
+/**
+ * pending の tip が期限切れ（作成から PENDING_TIP_EXPIRY_HOURS 時間超）かを判定する純粋関数。
+ * 突合ジョブが「古い pending の掃除（failed 化）」の対象を判定するのに使う。
+ */
+export function isPendingTipExpired(createdAt: Date, now: Date): boolean {
+  const expiryMs = PENDING_TIP_EXPIRY_HOURS * 60 * 60 * 1000;
+  return now.getTime() - createdAt.getTime() > expiryMs;
+}
+
+/**
+ * Stripe の PaymentIntent ステータスが「期限切れなら failed へ確定してよい状態」かを判定する純粋関数。
+ * requires_payment_method / requires_confirmation / requires_action は「お客さまの操作待ちのまま
+ * 放置された」状態で、お金は動いていない（期限切れなら安全に failed 化できる）。
+ * processing（銀行系の処理中など）は資金が動いている可能性があるため対象にしない。
+ * succeeded / canceled は突合ループの写像（succeeded / failed）側で確定する。
+ */
+export function shouldExpirePendingIntentStatus(stripeStatus: string): boolean {
+  return (
+    stripeStatus === "requires_payment_method" ||
+    stripeStatus === "requires_confirmation" ||
+    stripeStatus === "requires_action"
+  );
+}
+
+/**
  * 決済が succeeded（成立）した時点での、投げ銭の初期 settlement_status を判定する純粋関数。
  *
  * spec §7「本人確認済の状態で成立した分は succeeded 時に payable から開始」を表す。

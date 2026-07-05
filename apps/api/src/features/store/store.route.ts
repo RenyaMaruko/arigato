@@ -186,7 +186,7 @@ export function createStoreRoute(deps: StoreDeps) {
         throw err;
       }
     })
-    // 店ロゴ画像のアップロード（multipart/form-data・画像1枚。オーナーのみ）。
+    // 店ロゴ画像のアップロード（multipart/form-data・画像1枚。owner / admin＝店情報編集の権限者・§3.1）。
     // field 名 "file" の画像を受け取り、検証 → Storage 保存 → logo_url 更新 → { logoUrl } を返す。
     // 検証違反（非画像・過大）・ファイル欠落は 400、他店アクセス・店なしは 404。
     .post("/:storeId/logo", async (c) => {

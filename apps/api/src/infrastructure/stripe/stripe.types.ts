@@ -38,6 +38,9 @@ export type VerifiedWebhookEvent = {
   id: string;
   // イベント種別（payment_intent.succeeded / account.updated など）
   type: string;
+  // イベントの発生元 Connected Account ID（Connect スコープのイベントで event.account に入る）。
+  // tip 更新・鏡保存・補正の帰属口座検証（多層防御）に使う。platform スコープのイベントは null
+  eventAccountId: string | null;
   // 対象 PaymentIntent の ID（tip との突合に使う。該当しないイベントは null）
   paymentIntentId: string | null;
   // PaymentIntent の metadata に載せた tip ID（あれば tip 特定に優先利用）

@@ -96,6 +96,7 @@ export function createInMemoryTipRepository(): TipRepository {
     // 既に同じ status なら 0 件（冪等性の補助）。
     // succeeded 以外（failed 等）への更新は pending の行に限定する（実 DB と同じ契約。
     // 遅延到着した payment_failed が succeeded 確定済みの行を巻き戻さない）。
+    // 帰属口座検証（第4引数）はインメモリでは行わない（staff の口座情報を持たないため。実 DB 接続時に検証）。
     async updateTipStatusByTipId(tipId, status, paymentIntentId) {
       const row = tips.get(tipId);
       if (!row) return 0;
@@ -125,6 +126,12 @@ export function createInMemoryTipRepository(): TipRepository {
     // インメモリ実装は Connected Account を持たないため、突合対象は基本的に空になる。
     async listPendingTipsForReconcile() {
       return [];
+    },
+
+    // PaymentIntent 無しの期限切れ pending を failed へ確定する（孤児 pending の掃除）。
+    // インメモリ実装は作成日時を保持しないため掃除対象なし（0 件。実 DB 接続時に検証する）。
+    async failStalePendingTipsWithoutIntent() {
+      return 0;
     },
 
     // (c) 確定見込み（charge / balance_transaction）をメモリ上の tip 行へ鏡保存する。

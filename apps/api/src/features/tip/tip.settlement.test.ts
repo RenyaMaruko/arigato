@@ -117,6 +117,7 @@ function succeeded(eventId: string, tipId: string): VerifiedEvent {
   return {
     id: eventId,
     type: "payment_intent.succeeded",
+    eventAccountId: null,
     paymentIntentId: `pi_${tipId}`,
     tipId,
     accountId: null,
@@ -140,6 +141,7 @@ function accountUpdated(eventId: string, accountId: string): VerifiedEvent {
   return {
     id: eventId,
     type: "account.updated",
+    eventAccountId: null,
     paymentIntentId: null,
     tipId: null,
     accountId,

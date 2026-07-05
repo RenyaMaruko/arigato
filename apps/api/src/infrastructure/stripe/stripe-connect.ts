@@ -74,8 +74,10 @@ export async function createDirectChargePaymentIntent(
       // Webhook で自前 tip を特定するための metadata（PaymentIntent 側に載せる）
       metadata: { tipId: params.tipId },
     },
-    // ★ Connected Account のコンテキストで実行 ＝ Direct charge（課金先が店員さんの口座）
-    { stripeAccount: params.connectedAccountId },
+    // ★ Connected Account のコンテキストで実行 ＝ Direct charge（課金先が店員さんの口座）。
+    //   idempotencyKey に自前 tip の ID を使い、リトライ・二重リクエストでも同一 tip に対する
+    //   PaymentIntent を Stripe 側で二重作成しない（孤児 PaymentIntent の累積防止）。
+    { stripeAccount: params.connectedAccountId, idempotencyKey: `tip-intent-${params.tipId}` },
   );
 
   // client_secret が無い場合はフロントで決済 UI を初期化できないためエラーにする
@@ -233,9 +235,9 @@ export async function createPayout(params: CreatePayoutParams): Promise<CreatePa
  *    DB の権利（payable）と実際に払い出せる残高（Stripe settlement）は別物。available を超える送金はしない。
  *  - balance.retrieve を Connected Account のコンテキスト（stripeAccount）で呼び、その口座の残高を読む。
  *  - JPY（通貨は1つ）の available / pending を整数（円）で取り出す。
- *  - 準備中（pending）がある場合は、balance_transactions を「1回だけ」リスト取得し、
+ *  - 準備中（pending）がある場合は、balance_transactions を auto-pagination で全件リスト取得し、
  *    available_on を暦日（Asia/Tokyo 基準）ごとにバケット集計する（pendingBuckets・日付昇順）。
- *    日付ごとにAPIを叩かないことでレート負荷を抑える（レート対策）。
+ *    日付ごとにAPIを叩かないことでレート負荷を抑えつつ、100件超でも内訳を取りこぼさない。
  *    最も早い日付を nextAvailableOn（「◯月◯日から送金できます」）に使い、
  *    バケット合計は pendingAmount と必ず一致させる（差が出る場合は最早バケットへ寄せる）。
  *
@@ -258,13 +260,22 @@ export async function retrieveConnectBalance(
   let pendingBuckets: PendingBucket[] = [];
   let nextAvailableOn: string | null = null;
   if (pendingAmount > 0) {
-    // balance_transactions を1リストで取得（日付ごとにAPIを叩かない＝レート安全）。
-    const txns = await stripe.balanceTransactions.list(
+    // balance_transactions を auto-pagination で全件走査する（100件超でも取りこぼさない）。
+    // 日付ごとに API を叩かず1リスト（＋ページ送り）で済ませる＝レート負荷は従来どおり低い。
+    const txns: PendingTransactionLike[] = [];
+    for await (const txn of stripe.balanceTransactions.list(
       { limit: 100 },
       { stripeAccount: connectedAccountId },
-    );
+    )) {
+      txns.push({
+        status: txn.status,
+        currency: txn.currency,
+        amount: txn.amount,
+        available_on: txn.available_on,
+      });
+    }
     // pending かつ available_on が未来のものを暦日（Asia/Tokyo）ごとに集計（純粋関数）。
-    const buckets = groupPendingByAvailableDate(txns.data, Math.floor(Date.now() / 1000));
+    const buckets = groupPendingByAvailableDate(txns, Math.floor(Date.now() / 1000));
     // バケット合計が pendingAmount と必ず一致するよう、残差を最早バケットに寄せて整合させる。
     pendingBuckets = reconcilePendingBuckets(buckets, pendingAmount);
     // 最初（最早）のバケットの日付を nextAvailableOn とする（無ければ null）。
@@ -341,8 +352,9 @@ function toJstDayStartSeconds(epochSeconds: number): number {
 /**
  * バケット合計を pendingAmount（Stripe の pending 合計）に必ず一致させる純粋関数。
  *
- * balance_transactions のページング（最大100件）で取りこぼしが出ると、バケット合計が
- * pendingAmount を下回り得る。その場合は残差（pendingAmount − バケット合計）を
+ * balance_transactions は auto-pagination で全件走査するため通常は一致するが、
+ * 取得タイミングのズレ等でバケット合計が pendingAmount を下回り得る（保険）。
+ * その場合は残差（pendingAmount − バケット合計）を
  * 最も早いバケットに寄せて、合計を pendingAmount に揃える（整合性の担保）。
  *  - バケットが空なのに pendingAmount>0 のときは、日付不明の合算1件として扱えるよう空配列を返し、
  *    呼び出し側（service / UI）が pendingStripeAmount の保険表示にフォールバックできるようにする。

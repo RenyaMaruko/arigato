@@ -59,6 +59,8 @@ export type PendingTipForReconcile = {
   checkoutSessionId: string | null;
   // 課金先の Connected Account（PaymentIntent / Session は口座コンテキストにある）
   connectedAccountId: string;
+  // tip の作成日時（古い pending の掃除＝期限切れ failed 化の判定に使う）
+  createdAt: Date;
 };
 
 // 保存後・完了画面表示に使う tip の行
@@ -96,25 +98,36 @@ export type TipRepository = {
   findTipByPaymentIntentId: (paymentIntentId: string) => Promise<TipRow | null>;
   // tip ID をキーに status を更新する（Webhook を正とする確定。ホスト型 Checkout は metadata.tipId で突合）。
   // 同時に確定した PaymentIntent ID も記録する（突合・監査用）。succeeded のときは succeeded_at も now()。
-  // 更新できた件数を返す。
+  // expectedAccountId（イベントの発生元 Connected Account）が非 null のときは
+  // 「tip の店員の stripe_account_id と一致する場合だけ」更新する（帰属口座検証・多層防御）。
+  // 更新できた件数を返す（不一致は 0 行更新＝無視）。
   updateTipStatusByTipId: (
     tipId: string,
     status: TipStatus,
     paymentIntentId: string | null,
+    expectedAccountId?: string | null,
   ) => Promise<number>;
   // PaymentIntent ID をキーに tip のステータスを更新する（Webhook / 突合の確定。tipId が無い場合の経路）。
-  // succeeded のときは succeeded_at も now() で記録する。更新できた件数を返す。
+  // succeeded のときは succeeded_at も now() で記録する。expectedAccountId の帰属口座検証は
+  // updateTipStatusByTipId と同じ。更新できた件数を返す。
   updateTipStatusByPaymentIntentId: (
     paymentIntentId: string,
     status: TipStatus,
+    expectedAccountId?: string | null,
   ) => Promise<number>;
   // 突合ジョブ用: 決済未確定（pending）かつ PaymentIntent 作成済みの tip を列挙する。
   // Webhook 取りこぼし対策で、Stripe の実ステータスと突合するための入口。
   listPendingTipsForReconcile: () => Promise<PendingTipForReconcile[]>;
+  // 突合ジョブ用: PaymentIntent を持たないまま期限（expiryHours 時間）を超えた pending tip を
+  // failed へ確定する（孤児 pending の掃除。お金は動いていないため安全）。
+  // PaymentIntent 付きの pending は Stripe 実ステータスを見て個別に判定するためここでは触らない。
+  // failed 化した件数を返す。万一決済が遅延確定しても failed→succeeded の救済遷移で復活できる。
+  failStalePendingTipsWithoutIntent: (expiryHours: number) => Promise<number>;
   // (c) 確定見込み（charge / balance_transaction）を tip に鏡保存する（Stripe を正・自前は鏡）。
   //   tipId か PaymentIntent ID で対象 tip を特定し、stripe_charge_id / balance_transaction_id /
   //   available_on / bt_status を更新する。null の項目は既存値を維持する（COALESCE。後続イベントで埋め直せる）。
   //   更新できた件数を返す。
+  //   connectedAccountId（イベントの発生元口座）が非 null のときは tip の店員の口座と一致する場合だけ保存する（多層防御）。
   saveTipChargeSettlement: (params: {
     tipId: string | null;
     paymentIntentId: string | null;
@@ -122,14 +135,17 @@ export type TipRepository = {
     balanceTransactionId: string | null;
     availableOn: Date | null;
     btStatus: "pending" | "available" | null;
+    connectedAccountId?: string | null;
   }) => Promise<number>;
   // (f) 返金・チャージバックで tip を refunded / disputed へ遷移する（残高・履歴・送金候補から除外）。
   //   charge ID（主）または PaymentIntent ID（従）で対象 tip を特定する。
+  //   connectedAccountId（イベントの発生元口座）が非 null のときは tip の店員の口座と一致する場合だけ遷移する（多層防御）。
   //   既に同じ終端状態なら 0 件（冪等）。遷移できた tip の id・staff_id・amount を返す（台帳補正・逆引き用）。
   applySettlementCorrectionToTip: (params: {
     settlementStatus: "refunded" | "disputed";
     chargeId: string | null;
     paymentIntentId: string | null;
+    connectedAccountId?: string | null;
   }) => Promise<{ tipId: string; staffId: string; amount: number } | null>;
 };
 
@@ -236,18 +252,22 @@ export function createTipRepository(): TipRepository {
     //
     // succeeded 確定時は、送り先店員さんの本人確認状態（identity_status）から settlement_status を確定する
     // （spec §7「本人確認済の状態で成立した分は succeeded 時に payable から開始」）。判定は Model 純粋関数に委ねる。
-    async updateTipStatusByTipId(tipId, status, paymentIntentId) {
+    //
+    // expectedAccountId（イベントの発生元 Connected Account）が非 null のときは、
+    // tip の店員の stripe_account_id と一致する場合だけ更新する（帰属口座検証・多層防御。不一致は 0 行）。
+    async updateTipStatusByTipId(tipId, status, paymentIntentId, expectedAccountId = null) {
       const db = getDb();
       // succeeded への確定は、staff の identity_status を見て settlement_status を決める（1トランザクション）
       if (status === "succeeded") {
         return await db.transaction(async (tx) => {
-          // 対象 tip と送り先店員さんの本人確認状態を取得（未確定の tip のみ）
+          // 対象 tip と送り先店員さんの本人確認状態を取得（未確定の tip のみ・帰属口座が一致するもののみ）
           const found = await tx.execute<{ identityStatus: IdentityStatus }>(sql`
             SELECT s.identity_status AS "identityStatus"
             FROM tip t
             JOIN staff s ON s.id = t.staff_id
             WHERE t.id = ${tipId}
               AND t.status <> 'succeeded'
+              AND (${expectedAccountId}::text IS NULL OR s.stripe_account_id = ${expectedAccountId})
             LIMIT 1
             FOR UPDATE OF t
           `);
@@ -273,12 +293,17 @@ export function createTipRepository(): TipRepository {
       // succeeded 以外（failed 等）は settlement_status を触らずステータスのみ更新する。
       // 更新対象は pending の行に限定する（succeeded は終端状態）。Stripe はイベント順序を保証しないため、
       // 遅延到着した payment_failed が succeeded 確定済みの行を巻き戻さないようにする（0行更新で無視）。
+      // 帰属口座（expectedAccountId）が一致しない場合も 0 行更新＝無視（多層防御）。
       const rows = await db.execute<{ id: string }>(sql`
         UPDATE tip
         SET status = ${status},
             stripe_payment_intent_id = COALESCE(${paymentIntentId}, stripe_payment_intent_id)
         WHERE id = ${tipId}
           AND status = 'pending'
+          AND (${expectedAccountId}::text IS NULL OR EXISTS (
+            SELECT 1 FROM staff s
+            WHERE s.id = tip.staff_id AND s.stripe_account_id = ${expectedAccountId}
+          ))
         RETURNING id
       `);
       return rows.length;
@@ -286,18 +311,20 @@ export function createTipRepository(): TipRepository {
 
     // PaymentIntent ID をキーに tip のステータスを更新する（Webhook 確定。tipId が無い場合の従経路）。
     // succeeded のときは staff の identity_status から settlement_status を確定する（Model 純粋関数で判定）。
-    // succeeded 以外は settlement_status を触らない。更新できた行数を返す。
-    async updateTipStatusByPaymentIntentId(paymentIntentId, status) {
+    // succeeded 以外は settlement_status を触らない。帰属口座（expectedAccountId）の検証は
+    // updateTipStatusByTipId と同じ（不一致は 0 行更新＝無視）。更新できた行数を返す。
+    async updateTipStatusByPaymentIntentId(paymentIntentId, status, expectedAccountId = null) {
       const db = getDb();
       if (status === "succeeded") {
         return await db.transaction(async (tx) => {
-          // PaymentIntent ID で未確定の tip と送り先店員さんの本人確認状態を取得
+          // PaymentIntent ID で未確定の tip と送り先店員さんの本人確認状態を取得（帰属口座が一致するもののみ）
           const found = await tx.execute<{ id: string; identityStatus: IdentityStatus }>(sql`
             SELECT t.id AS "id", s.identity_status AS "identityStatus"
             FROM tip t
             JOIN staff s ON s.id = t.staff_id
             WHERE t.stripe_payment_intent_id = ${paymentIntentId}
               AND t.status <> 'succeeded'
+              AND (${expectedAccountId}::text IS NULL OR s.stripe_account_id = ${expectedAccountId})
             LIMIT 1
             FOR UPDATE OF t
           `);
@@ -321,11 +348,16 @@ export function createTipRepository(): TipRepository {
       // succeeded 以外（failed 等）は settlement_status を触らずステータスのみ更新する。
       // 更新対象は pending の行に限定する（succeeded は終端状態）。Stripe はイベント順序を保証しないため、
       // 遅延到着した payment_failed が succeeded 確定済みの行を巻き戻さないようにする（0行更新で無視）。
+      // 帰属口座（expectedAccountId）が一致しない場合も 0 行更新＝無視（多層防御）。
       const rows = await db.execute<{ id: string }>(sql`
         UPDATE tip
         SET status = ${status}
         WHERE stripe_payment_intent_id = ${paymentIntentId}
           AND status = 'pending'
+          AND (${expectedAccountId}::text IS NULL OR EXISTS (
+            SELECT 1 FROM staff s
+            WHERE s.id = tip.staff_id AND s.stripe_account_id = ${expectedAccountId}
+          ))
         RETURNING id
       `);
       return rows.length;
@@ -340,7 +372,8 @@ export function createTipRepository(): TipRepository {
           t.id                       AS "tipId",
           t.stripe_payment_intent_id AS "paymentIntentId",
           t.stripe_checkout_session_id AS "checkoutSessionId",
-          s.stripe_account_id        AS "connectedAccountId"
+          s.stripe_account_id        AS "connectedAccountId",
+          t.created_at               AS "createdAt"
         FROM tip t
         JOIN staff s ON s.id = t.staff_id
         WHERE t.status = 'pending'
@@ -351,13 +384,32 @@ export function createTipRepository(): TipRepository {
       return rows;
     },
 
+    // PaymentIntent を持たないまま期限（expiryHours 時間）を超えた pending tip を failed へ確定する
+    // （孤児 pending の掃除）。決済 UI に到達しないまま放置された tip はお金が一切動いていないため安全。
+    // PaymentIntent 付きの pending は Stripe 実ステータスを見て突合ループ側で個別に判定する。
+    // 万一決済が遅延確定しても、failed→succeeded の救済遷移（status <> 'succeeded' 条件）で復活できる。
+    async failStalePendingTipsWithoutIntent(expiryHours) {
+      const db = getDb();
+      const rows = await db.execute<{ id: string }>(sql`
+        UPDATE tip
+        SET status = 'failed'
+        WHERE status = 'pending'
+          AND stripe_payment_intent_id IS NULL
+          AND created_at < now() - make_interval(hours => ${expiryHours})
+        RETURNING id
+      `);
+      return rows.length;
+    },
+
     // (c) 確定見込み（charge / balance_transaction）を tip へ鏡保存する。
     //   tipId（主）か PaymentIntent ID（従）で対象を特定。null の項目は既存値を維持（COALESCE）し、
     //   後続イベントで埋め直せるようにする（PI 直後は balance_transaction 未付与のことがある）。
     //   availableOn は postgres-js が Date を直接束縛できないため ISO 文字列＋timestamptz キャストで渡す。
+    //   connectedAccountId が非 null のときは tip の店員の口座と一致する場合だけ保存する（帰属口座検証・多層防御）。
     async saveTipChargeSettlement(params) {
       const db = getDb();
       const availableOnIso = params.availableOn ? params.availableOn.toISOString() : null;
+      const expectedAccountId = params.connectedAccountId ?? null;
       // tipId があれば tipId で、無ければ PaymentIntent ID で対象 tip を特定する
       if (params.tipId) {
         const rows = await db.execute<{ id: string }>(sql`
@@ -367,6 +419,10 @@ export function createTipRepository(): TipRepository {
               available_on = COALESCE(${availableOnIso}::timestamptz, available_on),
               bt_status = COALESCE(${params.btStatus}, bt_status)
           WHERE id = ${params.tipId}::uuid
+            AND (${expectedAccountId}::text IS NULL OR EXISTS (
+              SELECT 1 FROM staff s
+              WHERE s.id = tip.staff_id AND s.stripe_account_id = ${expectedAccountId}
+            ))
           RETURNING id
         `);
         return rows.length;
@@ -379,6 +435,10 @@ export function createTipRepository(): TipRepository {
               available_on = COALESCE(${availableOnIso}::timestamptz, available_on),
               bt_status = COALESCE(${params.btStatus}, bt_status)
           WHERE stripe_payment_intent_id = ${params.paymentIntentId}
+            AND (${expectedAccountId}::text IS NULL OR EXISTS (
+              SELECT 1 FROM staff s
+              WHERE s.id = tip.staff_id AND s.stripe_account_id = ${expectedAccountId}
+            ))
           RETURNING id
         `);
         return rows.length;
@@ -395,7 +455,8 @@ export function createTipRepository(): TipRepository {
       if (!params.chargeId && !params.paymentIntentId) {
         return null;
       }
-      // 番兵: null だと = で一致しないため、照合に使わない側は影響しない（COALESCE で番兵化）
+      const expectedAccountId = params.connectedAccountId ?? null;
+      // 帰属口座（connectedAccountId）が非 null のときは tip の店員の口座と一致する場合だけ遷移する（多層防御）
       const rows = await db.execute<{ tipId: string; staffId: string; amount: number }>(sql`
         UPDATE tip
         SET settlement_status = ${params.settlementStatus}
@@ -404,6 +465,10 @@ export function createTipRepository(): TipRepository {
             OR stripe_payment_intent_id = ${params.paymentIntentId}
           )
           AND settlement_status NOT IN ('refunded', 'disputed')
+          AND (${expectedAccountId}::text IS NULL OR EXISTS (
+            SELECT 1 FROM staff s
+            WHERE s.id = tip.staff_id AND s.stripe_account_id = ${expectedAccountId}
+          ))
         RETURNING id AS "tipId", staff_id AS "staffId", amount AS "amount"
       `);
       return rows[0] ?? null;

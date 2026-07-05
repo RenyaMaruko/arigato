@@ -60,6 +60,10 @@ export function verifyWebhookEvent(
     throw new WebhookVerificationError(message);
   }
 
+  // イベントの発生元 Connected Account ID（Connect スコープのイベントは event.account に入る）。
+  // tip 更新・鏡保存・補正の帰属口座検証（多層防御）に使うため、全イベント共通で抽出する。
+  const eventAccountId = extractAccountFromEvent(event);
+
   // 対象 PaymentIntent ID と metadata.tipId を抽出する（payment_intent.* 系イベント）
   let paymentIntentId: string | null = null;
   let tipId: string | null = null;
@@ -147,6 +151,7 @@ export function verifyWebhookEvent(
   return {
     id: event.id,
     type: event.type,
+    eventAccountId,
     paymentIntentId,
     tipId,
     accountId,

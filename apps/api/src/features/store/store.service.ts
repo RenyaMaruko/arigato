@@ -236,7 +236,7 @@ export class InvalidImageError extends Error {
  * 店ロゴ画像をアップロードして自店の logo_url を更新する（POST /store/:storeId/logo・店スコープ）。
  *
  * 流れ:
- *  1. 自店のオーナーであることを確認する（他店のロゴは変えられない）。
+ *  1. 自店の管理者（owner / admin＝店情報編集の権限者・§3.1）であることを確認する（他店のロゴは変えられない）。
  *  2. サーバ側で検証する（MIME が許可画像か・サイズ上限内か）。違反は InvalidImageError（400）。
  *  3. Storage（公開バケット）へ logos/<storeId>/<uuid>.<ext> で保存し、公開URLを得る（infrastructure 経由）。
  *  4. 自店の store.logo_url を公開URLへ更新する（生 SQL は Repository）。
@@ -249,7 +249,7 @@ export async function uploadStoreLogo(
   storeId: string,
   file: { body: ArrayBuffer; contentType: string },
 ): Promise<LogoUploadResult> {
-  // 【1】自店のオーナー確認（他店は触れない）。違反は StoreForbiddenError → Route で 404。
+  // 【1】自店の管理者確認（owner / admin。他店は触れない）。違反は StoreForbiddenError → Route で 404。
   await requireStoreAdmin(repo, authUserId, storeId);
 
   // 【2】サーバ側検証（MIME・サイズ）。違反は 400（InvalidImageError）。

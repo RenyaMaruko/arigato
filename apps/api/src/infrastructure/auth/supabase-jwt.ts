@@ -16,32 +16,39 @@ export type AuthUser = {
   email: string | null;
 };
 
-// JWKS の RemoteKeySet を遅延生成してプロセス内でキャッシュする（鍵取得を毎回しない）
-let _jwks: ReturnType<typeof createRemoteJWKSet> | null = null;
+// JWKS の RemoteKeySet と発行者（issuer）を遅延生成してプロセス内でキャッシュする（鍵取得を毎回しない）
+let _verifier: { jwks: ReturnType<typeof createRemoteJWKSet>; issuer: string } | null = null;
 
-// SUPABASE_URL から JWKS エンドポイントの RemoteKeySet を組み立てる
-function getJwks(): ReturnType<typeof createRemoteJWKSet> {
-  if (_jwks) return _jwks;
+// SUPABASE_URL から JWKS エンドポイントの RemoteKeySet と期待する issuer を組み立てる
+function getVerifier(): { jwks: ReturnType<typeof createRemoteJWKSet>; issuer: string } {
+  if (_verifier) return _verifier;
   const supabaseUrl = process.env.SUPABASE_URL;
   if (!supabaseUrl) {
     throw new Error("SUPABASE_URL が未設定です。JWKS で JWT を検証できません。");
   }
-  // 末尾スラッシュを除いて JWKS の URL を組み立てる
+  // 末尾スラッシュを除いて JWKS の URL と issuer を組み立てる
   const base = supabaseUrl.replace(/\/$/, "");
   const jwksUrl = new URL(`${base}/auth/v1/.well-known/jwks.json`);
-  _jwks = createRemoteJWKSet(jwksUrl);
-  return _jwks;
+  _verifier = {
+    jwks: createRemoteJWKSet(jwksUrl),
+    // Supabase の access token の iss は `${SUPABASE_URL}/auth/v1`
+    issuer: `${base}/auth/v1`,
+  };
+  return _verifier;
 }
 
 /**
  * Bearer トークン文字列を JWKS で検証し、検証済みユーザー情報を返す。
- * 署名・有効期限が無効な場合は jose が例外を投げる（呼び出し側で 401 に変換する）。
+ * 署名・有効期限に加え、発行者（issuer）が自分の Supabase プロジェクトであることも検証する
+ * （他プロジェクト発行の正規署名トークンの持ち込みを弾く）。
+ * 無効な場合は jose が例外を投げる（呼び出し側で 401 に変換する）。
  */
 export async function verifySupabaseJwt(token: string): Promise<AuthUser> {
-  const jwks = getJwks();
-  // Supabase の access token は audience に "authenticated" を持つ
+  const { jwks, issuer } = getVerifier();
+  // Supabase の access token は audience に "authenticated"、iss に自プロジェクトの auth URL を持つ
   const { payload } = await jwtVerify(token, jwks, {
     audience: "authenticated",
+    issuer,
   });
 
   // sub（auth.users の UUID）は必須。無ければ無効トークン扱い

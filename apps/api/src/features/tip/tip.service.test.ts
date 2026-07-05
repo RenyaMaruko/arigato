@@ -88,6 +88,7 @@ function makeRepo(overrides: Partial<TipRepository> = {}): {
     updateTipStatusByTipId: vi.fn(async () => 0),
     updateTipStatusByPaymentIntentId: vi.fn(async () => 0),
     listPendingTipsForReconcile: vi.fn(async () => []),
+    failStalePendingTipsWithoutIntent: vi.fn(async () => 0),
     // (c)(f) 鏡保存・返金補正は本テストでは検証対象外（投げ銭作成・表示のテスト）。最小実装で契約を満たす。
     saveTipChargeSettlement: vi.fn(async () => 0),
     applySettlementCorrectionToTip: vi.fn(async () => null),
@@ -329,6 +330,8 @@ describe("recordTipChargeSettlement（c: 確定見込みの鏡保存）", () => 
       balanceTransactionId: "txn_1",
       availableOn,
       btStatus: "pending",
+      // charge の発生元口座も渡す（帰属口座検証・多層防御）
+      connectedAccountId: "acct_1",
     });
     expect(ok).toBe(true);
   });
@@ -357,6 +360,7 @@ describe("recordTipChargeSettlement（c: 確定見込みの鏡保存）", () => 
       balanceTransactionId: null,
       availableOn: null,
       btStatus: null,
+      connectedAccountId: "acct_2",
     });
   });
 });
