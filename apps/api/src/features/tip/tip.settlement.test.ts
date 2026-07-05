@@ -121,8 +121,8 @@ function succeeded(eventId: string, tipId: string): VerifiedEvent {
     tipId,
     accountId: null,
     payoutsEnabled: null,
-    detailsSubmitted: null,
     requirementsErrorCount: null,
+    requirementsPendingVerificationCount: null,
     requirementsPastDueCount: null,
     requirementsCurrentlyDueCount: null,
     payoutId: null,
@@ -144,9 +144,9 @@ function accountUpdated(eventId: string, accountId: string): VerifiedEvent {
     tipId: null,
     accountId,
     payoutsEnabled: true,
-    // 本人確認完了（payouts_enabled=true）を表すイベント。提出済み・不足なしとして扱う
-    detailsSubmitted: true,
+    // 本人確認完了（payouts_enabled=true）を表すイベント。エラー・審査中項目・不足なしとして扱う
     requirementsErrorCount: 0,
+    requirementsPendingVerificationCount: 0,
     requirementsPastDueCount: 0,
     requirementsCurrentlyDueCount: 0,
     payoutId: null,

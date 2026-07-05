@@ -63,11 +63,11 @@ export function verifyWebhookEvent(
   // 対象 PaymentIntent ID と metadata.tipId を抽出する（payment_intent.* 系イベント）
   let paymentIntentId: string | null = null;
   let tipId: string | null = null;
-  // account.updated 系の Connected Account ID と着金可否・提出状態・requirements の各件数
+  // account.updated 系の Connected Account ID と着金可否・requirements の各件数
   let accountId: string | null = null;
   let payoutsEnabled: boolean | null = null;
-  let detailsSubmitted: boolean | null = null;
   let requirementsErrorCount: number | null = null;
+  let requirementsPendingVerificationCount: number | null = null;
   let requirementsPastDueCount: number | null = null;
   let requirementsCurrentlyDueCount: number | null = null;
   // payout.* 系の Stripe Payout ID・metadata.payout_id・着金日時・失敗理由
@@ -120,13 +120,14 @@ export function verifyWebhookEvent(
     settlementCorrection = "disputed";
   } else if (event.type === "account.updated") {
     // Connected Account のオンボーディング状態変化。payouts_enabled が着金可否の起点。
-    // 審査NG・追加書類は専用イベントではなく requirements の中身で届くため、
-    // details_submitted と requirements.errors / past_due / currently_due の件数も抽出する。
+    // 審査NG・追加書類・審査中は専用イベントではなく requirements の中身で届くため、
+    // errors / pending_verification / past_due / currently_due の件数を抽出する。
+    // details_submitted は抽出しない（作成時の事前入力で最初から true になり、提出シグナルにならない）。
     const account = event.data.object as Stripe.Account;
     accountId = account.id;
     payoutsEnabled = account.payouts_enabled === true;
-    detailsSubmitted = account.details_submitted === true;
     requirementsErrorCount = account.requirements?.errors?.length ?? 0;
+    requirementsPendingVerificationCount = account.requirements?.pending_verification?.length ?? 0;
     requirementsPastDueCount = account.requirements?.past_due?.length ?? 0;
     requirementsCurrentlyDueCount = account.requirements?.currently_due?.length ?? 0;
   } else if (event.type === "payout.paid" || event.type === "payout.failed") {
@@ -150,8 +151,8 @@ export function verifyWebhookEvent(
     tipId,
     accountId,
     payoutsEnabled,
-    detailsSubmitted,
     requirementsErrorCount,
+    requirementsPendingVerificationCount,
     requirementsPastDueCount,
     requirementsCurrentlyDueCount,
     payoutId,

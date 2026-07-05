@@ -716,11 +716,13 @@ export async function createConnectAccountSession(
 
 /**
  * account.updated（Connected Account の状態変化）を反映する（Webhook 経由・本人確認の遷移）。
- * Connected Account ID で本人を引き、payouts_enabled・details_submitted・requirements の各件数から
+ * Connected Account ID で本人を引き、payouts_enabled・requirements の各件数から
  * Model の deriveIdentityStatus で次の状態を導いて反映する:
  *  - payouts_enabled=true → verified に確定し、held の tip を payable へ遷移（従来どおり）
- *  - requirements.errors / past_due / （提出済みで currently_due）あり → action_required（要対応）
- *  - それ以外 → pending（審査中。再提出で errors が消えれば要対応から戻る）
+ *  - requirements.errors あり → action_required（要対応・審査NG）
+ *  - pending_verification あり → pending（提出済み・Stripe が審査中）
+ *  - currently_due / past_due だけ残っている → none は据え置き（新規口座）・それ以外は action_required
+ *  - それ以外 → none は据え置き・それ以外は pending（再提出で errors が消えれば要対応から戻る）
  * 二重遷移はしない（Repository のトランザクションで担保）。
  * webhook feature から直接 import せず、コンポジションルートでこの関数を注入して使う。
  */

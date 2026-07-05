@@ -46,10 +46,10 @@ export type VerifiedWebhookEvent = {
   accountId: string | null;
   // Connected Account の payouts_enabled（着金可否の起点。account.updated 以外は null）
   payoutsEnabled: boolean | null;
-  // Connected Account の details_submitted（オンボーディング提出済みか。account.updated 以外は null）
-  detailsSubmitted: boolean | null;
   // requirements.errors の件数（審査NG・書類不備の明示エラー。account.updated 以外は null）
   requirementsErrorCount: number | null;
+  // requirements.pending_verification の件数（提出済み・Stripe が審査中の項目。account.updated 以外は null）
+  requirementsPendingVerificationCount: number | null;
   // requirements.past_due の件数（期限切れの未提出項目。account.updated 以外は null）
   requirementsPastDueCount: number | null;
   // requirements.currently_due の件数（今求められている未提出項目。account.updated 以外は null）

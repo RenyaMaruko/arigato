@@ -41,15 +41,17 @@ export function canPayout(status: IdentityStatus): boolean {
 
 // account.updated から抽出した Connected Account の状態（deriveIdentityStatus の入力）。
 // Stripe は審査NG・追加書類を専用イベントではなく requirements の中身で返すため、
-// payouts_enabled に加えて提出済みフラグと requirements の各件数を渡す。
+// payouts_enabled に加えて requirements の各件数を渡す。
+// 注意: details_submitted はシグナルとして使わない。うちは受け取りを先に有効化するため作成時に
+// 情報を事前入力しており、連結アカウント作成直後から true になる＝「提出したか」を表せない。
 export type ConnectAccountState = {
   // 送金（payout）が有効になったか（本人確認完了の確定シグナル・最優先）
   payoutsEnabled: boolean;
-  // オンボーディングの提出が済んだか（一度 true になったら Stripe 側で false に戻らない）
-  detailsSubmitted: boolean;
   // requirements.errors の件数（審査NG・書類不備の明示エラー）
   requirementsErrorCount: number;
-  // requirements.past_due の件数（期限切れの未提出項目）
+  // requirements.pending_verification の件数（提出済み・Stripe が審査中の項目）
+  pendingVerificationCount: number;
+  // requirements.past_due の件数（期限切れの未提出項目。事前入力の都合で新規口座でも立つ）
   pastDueCount: number;
   // requirements.currently_due の件数（今求められている未提出項目）
   currentlyDueCount: number;
@@ -57,34 +59,39 @@ export type ConnectAccountState = {
 
 /**
  * Stripe の account.updated（Connected Account の状態）から本人確認の状態を導く純粋関数。
- *  - payouts_enabled=true → verified（着金可能・最優先）
- *  - 一度 verified になったら後退させない（取りこぼし再送対策）
- *  - requirements.errors が1件以上 or past_due が1件以上 or（提出済みなのに currently_due が1件以上）
- *    → action_required（要対応＝審査NG・追加書類。/staff/identity で修正・再提出できる）
- *  - それ以外 → pending（審査中）。要対応でも再提出で errors が消えれば pending に戻る。
- *    ただし未提出（details_submitted=false）のうちは none（未着手）を pending へ繰り上げない
- *    （連結アカウント作成直後にも account.updated が届くため。「本人確認をする」導線を保つ）。
+ *  1. payouts_enabled=true → verified（着金可能・最優先）
+ *  2. 一度 verified になったら後退させない（取りこぼし再送対策）
+ *  3. requirements.errors が1件以上 → action_required（審査NG・書類不備の明示エラー）
+ *  4. pending_verification が1件以上 → pending（提出済み・Stripe が審査中）
+ *  5. currently_due / past_due が残っているだけなら:
+ *      - none（未着手）は none 据え置き（作成直後の新規口座にも要求＋past_due が立つため。
+ *        「本人確認をする」導線を保ち、誤って要対応に見せない）
+ *      - それ以外は action_required（提出後の人への追加要求＝要対応）
+ *  6. それ以外（要求なし・審査項目なし・未承認の狭間）:
+ *      - none は none 据え置き、それ以外は pending（要対応も問題が消えれば pending に戻る）
  * 本人確認は「後ろ倒し」のため、none のまま投げ銭は受け付けており、verified への遷移だけを着金の起点にする。
  */
 export function deriveIdentityStatus(
   current: IdentityStatus,
   account: ConnectAccountState,
 ): IdentityStatus {
-  // 着金可能になった瞬間に verified へ確定する（要対応の残骸があっても verified を優先）
+  // 【1】着金可能になった瞬間に verified へ確定する（要対応の残骸があっても verified を優先）
   if (account.payoutsEnabled) return "verified";
-  // 一度 verified になったら（取りこぼし再送などで）後退させない
+  // 【2】一度 verified になったら（取りこぼし再送などで）後退させない
   if (current === "verified") return "verified";
-  // 審査NG・追加書類（要対応）: 明示エラー／期限切れ／提出済みなのに未提出項目が残っている
-  if (
-    account.requirementsErrorCount > 0 ||
-    account.pastDueCount > 0 ||
-    (account.detailsSubmitted && account.currentlyDueCount > 0)
-  ) {
+  // 【3】審査NG・書類不備の明示エラー → 要対応（/staff/identity で修正・再提出できる）
+  if (account.requirementsErrorCount > 0) return "action_required";
+  // 【4】提出済みで Stripe が審査中 → 申請中（全提出直後の applied 検知もここで拾う）
+  if (account.pendingVerificationCount > 0) return "pending";
+  // 【5】未提出の要求が残っている（エラーなし・審査中項目なし）
+  if (account.currentlyDueCount > 0 || account.pastDueCount > 0) {
+    // 未着手の人に要求が残っているだけ＝新規口座（事前入力で past_due も立つ）。据え置き
+    if (current === "none") return "none";
+    // 提出後の人への追加要求 → 要対応
     return "action_required";
   }
-  // 未提出（details_submitted=false）のうちは未着手（none）を申請中に見せない（据え置き）
-  if (current === "none" && !account.detailsSubmitted) return "none";
-  // 提出済みで問題が無ければ審査中。要対応（action_required）も再提出で問題が消えればここで pending に戻る
+  // 【6】要求なし・審査項目なし（未承認の狭間）。未着手は据え置き、それ以外は審査中扱いに戻す
+  if (current === "none") return "none";
   return "pending";
 }
 

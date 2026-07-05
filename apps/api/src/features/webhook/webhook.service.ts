@@ -21,10 +21,10 @@ export type VerifiedEvent = {
   accountId: string | null;
   // Connected Account の payouts_enabled（着金可否の起点。account.updated 以外は null）
   payoutsEnabled: boolean | null;
-  // Connected Account の details_submitted（オンボーディング提出済みか。account.updated 以外は null）
-  detailsSubmitted: boolean | null;
   // requirements.errors の件数（審査NG・書類不備の明示エラー。account.updated 以外は null）
   requirementsErrorCount: number | null;
+  // requirements.pending_verification の件数（提出済み・Stripe が審査中の項目。account.updated 以外は null）
+  requirementsPendingVerificationCount: number | null;
   // requirements.past_due の件数（期限切れの未提出項目。account.updated 以外は null）
   requirementsPastDueCount: number | null;
   // requirements.currently_due の件数（今求められている未提出項目。account.updated 以外は null）
@@ -161,10 +161,10 @@ export type ApplySettlementCorrection = (params: {
 export type AccountUpdateState = {
   // 送金（payout）が有効になったか（本人確認完了の確定シグナル・最優先）
   payoutsEnabled: boolean;
-  // オンボーディングの提出が済んだか
-  detailsSubmitted: boolean;
   // requirements.errors の件数（審査NG・書類不備の明示エラー）
   requirementsErrorCount: number;
+  // requirements.pending_verification の件数（提出済み・Stripe が審査中の項目）
+  pendingVerificationCount: number;
   // requirements.past_due の件数（期限切れの未提出項目）
   pastDueCount: number;
   // requirements.currently_due の件数（今求められている未提出項目）
@@ -253,7 +253,7 @@ export async function handleStripeWebhook(
   }
 
   // account.updated: 本人確認の遷移（verified / action_required / pending）と held→payable の遷移を行う。
-  // 審査NG・追加書類は requirements の中身（errors / past_due / currently_due）で届くため件数ごと渡す。
+  // 審査NG・追加書類・審査中は requirements の中身（errors / pending_verification / past_due / currently_due）で届くため件数ごと渡す。
   if (event.type === "account.updated") {
     // Connected Account ID が無ければ対象なし（冪等記録だけ残す）
     if (!event.accountId) {
@@ -261,9 +261,9 @@ export async function handleStripeWebhook(
     }
     const result = await applyAccountUpdate(event.accountId, {
       payoutsEnabled: event.payoutsEnabled === true,
-      detailsSubmitted: event.detailsSubmitted === true,
       // 抽出できなかった場合（null）は 0 扱い＝要対応へ誤遷移させない（安全側）
       requirementsErrorCount: event.requirementsErrorCount ?? 0,
+      pendingVerificationCount: event.requirementsPendingVerificationCount ?? 0,
       pastDueCount: event.requirementsPastDueCount ?? 0,
       currentlyDueCount: event.requirementsCurrentlyDueCount ?? 0,
     });

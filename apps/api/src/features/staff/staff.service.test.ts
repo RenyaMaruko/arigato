@@ -1347,12 +1347,12 @@ describe("staff.service", () => {
 
   // --- account.updated 反映（本人確認→着金の遷移・冪等性） ---
 
-  // account.updated から抽出した account 状態を模して作るヘルパ（既定は「未提出・問題なし」）
+  // account.updated から抽出した account 状態を模して作るヘルパ（既定は「要求なし・審査項目なし・未承認」）
   function accountState(over: Partial<ConnectAccountState> = {}): ConnectAccountState {
     return {
       payoutsEnabled: false,
-      detailsSubmitted: false,
       requirementsErrorCount: 0,
+      pendingVerificationCount: 0,
       pastDueCount: 0,
       currentlyDueCount: 0,
       ...over,
@@ -1423,11 +1423,11 @@ describe("staff.service", () => {
     const connect = await mock.repo.findStaffConnect("auth-A");
     const acctA = connect!.stripeAccountId!;
 
-    // 審査NG相当（提出済み・errors 1件）の account.updated を模す
+    // 審査NG相当（errors 1件）の account.updated を模す
     const result = await applyConnectAccountUpdate(
       mock.repo,
       acctA,
-      accountState({ detailsSubmitted: true, requirementsErrorCount: 1 }),
+      accountState({ requirementsErrorCount: 1 }),
     );
     expect(result.found).toBe(true);
     expect(result.verified).toBe(false);
@@ -1443,37 +1443,81 @@ describe("staff.service", () => {
     expect(balance!.heldAmount).toBe(255 + 425);
   });
 
-  it("applyConnectAccountUpdate: past_due ありでも action_required（要対応）になる", async () => {
+  it("applyConnectAccountUpdate: 新規口座（未操作・past_due あり errors なし）は none 据え置き（誤発火バグの本丸）", async () => {
     await seedTwoStaffWithTips();
     const connect = await mock.repo.findStaffConnect("auth-A");
     const acctA = connect!.stripeAccountId!;
 
-    // 期限切れの未提出項目がある account.updated を模す
+    // 連結アカウント作成直後の実データを模す:
+    // payouts_enabled=false / errors=0 / currently_due=1(document) / past_due=1(document) / pending_verification=0
+    const result = await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ pastDueCount: 1, currentlyDueCount: 1 }),
+    );
+    expect(result.found).toBe(true);
+    expect(result.verified).toBe(false);
+    // 誤って要対応に見せない・held も昇格しない
+    expect(result.promotedTips).toBe(0);
+    const me = await mock.repo.findStaffByAuthUserId("auth-A");
+    expect(me!.identityStatus).toBe("none");
+    // 残高上も held のまま・着金不可（「本人確認をする」導線が保たれる）
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
+    expect(balance!.identityStatus).toBe("none");
+    expect(balance!.canPayout).toBe(false);
+    expect(balance!.heldAmount).toBe(255 + 425);
+  });
+
+  it("applyConnectAccountUpdate: 全提出（pending_verification あり）で pending（申請中）になる", async () => {
+    await seedTwoStaffWithTips();
+    const connect = await mock.repo.findStaffConnect("auth-A");
+    const acctA = connect!.stripeAccountId!;
+
+    // 全提出 → Stripe が審査中（pending_verification が立つ）
+    const result = await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ pendingVerificationCount: 1 }),
+    );
+    expect(result.verified).toBe(false);
+    // 申請中では held→payable は昇格しない（昇格は verified 確定時のみ）
+    expect(result.promotedTips).toBe(0);
+    expect((await mock.repo.findStaffByAuthUserId("auth-A"))!.identityStatus).toBe("pending");
+  });
+
+  it("applyConnectAccountUpdate: 申請中の人への追加要求（errors なし・due あり）は action_required になる", async () => {
+    await seedTwoStaffWithTips();
+    const connect = await mock.repo.findStaffConnect("auth-A");
+    const acctA = connect!.stripeAccountId!;
+
+    // 【1】全提出で申請中（pending）へ
+    await applyConnectAccountUpdate(mock.repo, acctA, accountState({ pendingVerificationCount: 1 }));
+    // 【2】審査後に追加要求（期限切れの未提出項目）が届く → 要対応
     await applyConnectAccountUpdate(mock.repo, acctA, accountState({ pastDueCount: 2 }));
     const me = await mock.repo.findStaffByAuthUserId("auth-A");
     expect(me!.identityStatus).toBe("action_required");
   });
 
-  it("applyConnectAccountUpdate: 要対応から再提出（errors が消え提出済み）で pending に戻る", async () => {
+  it("applyConnectAccountUpdate: 要対応から修正・再提出（errors が消え審査中）で pending に戻る", async () => {
     await seedTwoStaffWithTips();
     const connect = await mock.repo.findStaffConnect("auth-A");
     const acctA = connect!.stripeAccountId!;
 
-    // 【1】審査NG → action_required
+    // 【1】審査NG（例 verification_document_failed_test_mode）→ action_required
     await applyConnectAccountUpdate(
       mock.repo,
       acctA,
-      accountState({ detailsSubmitted: true, requirementsErrorCount: 1 }),
+      accountState({ requirementsErrorCount: 1 }),
     );
     expect((await mock.repo.findStaffByAuthUserId("auth-A"))!.identityStatus).toBe(
       "action_required",
     );
 
-    // 【2】再提出で errors が消え pending_verification 相当に戻る → pending
+    // 【2】修正・再提出で errors が消え pending_verification（審査中）に戻る → pending
     await applyConnectAccountUpdate(
       mock.repo,
       acctA,
-      accountState({ detailsSubmitted: true }),
+      accountState({ pendingVerificationCount: 1 }),
     );
     expect((await mock.repo.findStaffByAuthUserId("auth-A"))!.identityStatus).toBe("pending");
 
@@ -1481,7 +1525,7 @@ describe("staff.service", () => {
     const result = await applyConnectAccountUpdate(
       mock.repo,
       acctA,
-      accountState({ payoutsEnabled: true, detailsSubmitted: true }),
+      accountState({ payoutsEnabled: true }),
     );
     expect(result.verified).toBe(true);
     expect(result.promotedTips).toBe(2);
@@ -1498,7 +1542,7 @@ describe("staff.service", () => {
     const after = await applyConnectAccountUpdate(
       mock.repo,
       acctA,
-      accountState({ detailsSubmitted: true, requirementsErrorCount: 1 }),
+      accountState({ requirementsErrorCount: 1 }),
     );
     // 既に verified のため二重遷移も後退もしない
     expect(after.verified).toBe(true);

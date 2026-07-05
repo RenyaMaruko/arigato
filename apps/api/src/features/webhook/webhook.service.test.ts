@@ -49,7 +49,7 @@ function succeededEvent(
     tipId: "tipId" in opts ? (opts.tipId ?? null) : "tip_1",
     accountId: null,
     payoutsEnabled: null,
-    detailsSubmitted: null,
+    requirementsPendingVerificationCount: null,
     requirementsErrorCount: null,
     requirementsPastDueCount: null,
     requirementsCurrentlyDueCount: null,
@@ -64,14 +64,14 @@ function succeededEvent(
 }
 
 // account.updated の検証済みイベントを作る（Connected Account ID・payouts_enabled に加え、
-// 審査NG・追加書類の判定材料（details_submitted・requirements の各件数）も指定できる）
+// 審査NG・審査中・追加書類の判定材料（requirements の各件数）も指定できる）
 function accountUpdatedEvent(
   eventId: string,
   accountId: string,
   payoutsEnabled: boolean,
   opts: {
-    detailsSubmitted?: boolean;
     errorCount?: number;
+    pendingVerificationCount?: number;
     pastDueCount?: number;
     currentlyDueCount?: number;
   } = {},
@@ -83,8 +83,8 @@ function accountUpdatedEvent(
     tipId: null,
     accountId,
     payoutsEnabled,
-    detailsSubmitted: opts.detailsSubmitted ?? false,
     requirementsErrorCount: opts.errorCount ?? 0,
+    requirementsPendingVerificationCount: opts.pendingVerificationCount ?? 0,
     requirementsPastDueCount: opts.pastDueCount ?? 0,
     requirementsCurrentlyDueCount: opts.currentlyDueCount ?? 0,
     payoutId: null,
@@ -111,7 +111,7 @@ function payoutEvent(
     tipId: null,
     accountId: null,
     payoutsEnabled: null,
-    detailsSubmitted: null,
+    requirementsPendingVerificationCount: null,
     requirementsErrorCount: null,
     requirementsPastDueCount: null,
     requirementsCurrentlyDueCount: null,
@@ -155,7 +155,7 @@ function makeUpdateDeps(returns = 1) {
 
 // account.updated 反映関数のモック。verified へ遷移し held→payable へ promote した件数を返す。
 // 既に verified の場合（2回目）は二重遷移しないよう promotedTips=0 を返すようにできる。
-// 第2引数は account 状態（payouts_enabled・提出状態・requirements の各件数）のオブジェクト。
+// 第2引数は account 状態（payouts_enabled・requirements の各件数）のオブジェクト。
 function makeApplyAccountUpdate(promoted = 0) {
   const seenVerified = new Set<string>();
   return vi.fn(
@@ -163,8 +163,8 @@ function makeApplyAccountUpdate(promoted = 0) {
       accountId: string,
       account: {
         payoutsEnabled: boolean;
-        detailsSubmitted: boolean;
         requirementsErrorCount: number;
+        pendingVerificationCount: number;
         pastDueCount: number;
         currentlyDueCount: number;
       },
@@ -228,7 +228,7 @@ describe("webhook.service handleStripeWebhook", () => {
       tipId: "tip_2",
       accountId: null,
       payoutsEnabled: null,
-      detailsSubmitted: null,
+      requirementsPendingVerificationCount: null,
       requirementsErrorCount: null,
       requirementsPastDueCount: null,
       requirementsCurrentlyDueCount: null,
@@ -306,7 +306,7 @@ describe("webhook.service handleStripeWebhook", () => {
       tipId: "tip_x",
       accountId: null,
       payoutsEnabled: null,
-      detailsSubmitted: null,
+      requirementsPendingVerificationCount: null,
       requirementsErrorCount: null,
       requirementsPastDueCount: null,
       requirementsCurrentlyDueCount: null,
@@ -360,11 +360,11 @@ describe("webhook.service handleStripeWebhook", () => {
       accountUpdatedEvent("evt_acct_1", "acct_123", true),
     );
 
-    // account 状態（payouts_enabled・提出状態・requirements の各件数）がオブジェクトで渡る
+    // account 状態（payouts_enabled・requirements の各件数）がオブジェクトで渡る
     expect(applyAccountUpdate).toHaveBeenCalledWith("acct_123", {
       payoutsEnabled: true,
-      detailsSubmitted: false,
       requirementsErrorCount: 0,
+      pendingVerificationCount: 0,
       pastDueCount: 0,
       currentlyDueCount: 0,
     });
@@ -461,8 +461,8 @@ describe("webhook.service handleStripeWebhook", () => {
 
     expect(applyAccountUpdate).toHaveBeenCalledWith("acct_999", {
       payoutsEnabled: false,
-      detailsSubmitted: false,
       requirementsErrorCount: 0,
+      pendingVerificationCount: 0,
       pastDueCount: 0,
       currentlyDueCount: 0,
     });
@@ -470,12 +470,12 @@ describe("webhook.service handleStripeWebhook", () => {
     expect(result.promotedTips).toBe(0);
   });
 
-  it("account.updated の requirements（errors / past_due / currently_due）と details_submitted を反映関数へ渡す", async () => {
+  it("account.updated の requirements（errors / pending_verification / past_due / currently_due）を反映関数へ渡す", async () => {
     const repo = makeWebhookRepo();
     const update = makeUpdateDeps(0);
     const applyAccountUpdate = makeApplyAccountUpdate(0);
 
-    // 審査NG相当（提出済み・errors 1件・past_due 2件・currently_due 3件）の account.updated
+    // 審査NG相当（errors 1件・審査中 4件・past_due 2件・currently_due 3件）の account.updated
     const result = await handleStripeWebhook(
       repo,
       update,
@@ -483,24 +483,55 @@ describe("webhook.service handleStripeWebhook", () => {
       noopApplyPayoutUpdate,
       noopSettlementDeps,
       accountUpdatedEvent("evt_acct_req", "acct_req", false, {
-        detailsSubmitted: true,
         errorCount: 1,
+        pendingVerificationCount: 4,
         pastDueCount: 2,
         currentlyDueCount: 3,
       }),
     );
 
-    // 抽出した requirements の件数がそのまま反映関数へ渡る（要対応の判定は staff 側で行う）
+    // 抽出した requirements の件数がそのまま反映関数へ渡る（状態遷移の判定は staff 側で行う）
     expect(applyAccountUpdate).toHaveBeenCalledWith("acct_req", {
       payoutsEnabled: false,
-      detailsSubmitted: true,
       requirementsErrorCount: 1,
+      pendingVerificationCount: 4,
       pastDueCount: 2,
       currentlyDueCount: 3,
     });
     // payouts_enabled=false のため verified にはならない（要対応でも held→payable は昇格しない）
     expect(result.identityVerified).toBe(false);
     expect(result.promotedTips).toBe(0);
+  });
+
+  it("account.updated で requirements が抽出できなかった場合（null）は 0 扱いで渡す（安全側フォールバック）", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(0);
+    const applyAccountUpdate = makeApplyAccountUpdate(0);
+
+    // 件数がすべて null のイベント（抽出不能）を模す → ?? 0 で要対応へ誤遷移させない
+    const evt: VerifiedEvent = {
+      ...accountUpdatedEvent("evt_acct_null", "acct_null", false),
+      requirementsErrorCount: null,
+      requirementsPendingVerificationCount: null,
+      requirementsPastDueCount: null,
+      requirementsCurrentlyDueCount: null,
+    };
+    await handleStripeWebhook(
+      repo,
+      update,
+      applyAccountUpdate,
+      noopApplyPayoutUpdate,
+      noopSettlementDeps,
+      evt,
+    );
+
+    expect(applyAccountUpdate).toHaveBeenCalledWith("acct_null", {
+      payoutsEnabled: false,
+      requirementsErrorCount: 0,
+      pendingVerificationCount: 0,
+      pastDueCount: 0,
+      currentlyDueCount: 0,
+    });
   });
 
   // --- payout.paid / payout.failed（送金の着金確定・失敗） ---
@@ -665,7 +696,7 @@ describe("webhook.service handleStripeWebhook", () => {
       tipId: "tip_x",
       accountId: null,
       payoutsEnabled: null,
-      detailsSubmitted: null,
+      requirementsPendingVerificationCount: null,
       requirementsErrorCount: null,
       requirementsPastDueCount: null,
       requirementsCurrentlyDueCount: null,
@@ -805,7 +836,7 @@ describe("webhook.service handleStripeWebhook", () => {
       tipId: null,
       accountId: null,
       payoutsEnabled: null,
-      detailsSubmitted: null,
+      requirementsPendingVerificationCount: null,
       requirementsErrorCount: null,
       requirementsPastDueCount: null,
       requirementsCurrentlyDueCount: null,
@@ -849,7 +880,7 @@ describe("webhook.service handleStripeWebhook", () => {
       tipId: null,
       accountId: null,
       payoutsEnabled: null,
-      detailsSubmitted: null,
+      requirementsPendingVerificationCount: null,
       requirementsErrorCount: null,
       requirementsPastDueCount: null,
       requirementsCurrentlyDueCount: null,
@@ -891,7 +922,7 @@ describe("webhook.service handleStripeWebhook", () => {
       tipId: null,
       accountId: null,
       payoutsEnabled: null,
-      detailsSubmitted: null,
+      requirementsPendingVerificationCount: null,
       requirementsErrorCount: null,
       requirementsPastDueCount: null,
       requirementsCurrentlyDueCount: null,
