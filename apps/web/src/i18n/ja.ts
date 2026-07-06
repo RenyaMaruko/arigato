@@ -223,6 +223,8 @@ export const ja = {
       qrStoreSub: "{{store}} 用のQR",
       qrNote: "このQRをお客さまに見せてください",
       qrPrint: "印刷する",
+      // QRを画像（PNG）として保存する（写真保存・コンビニ印刷・共有用）
+      qrSaveImage: "画像として保存",
       qrUrlLabel: "QRが指すURL",
       // この店を脱退する（所属店舗の詳細＝QR画面）＋確認ダイアログ
       leaveStoreCta: "この店を脱退する",
@@ -475,6 +477,7 @@ export const ja = {
       staffQrSub: "{{name}} さん用のQR",
       staffQrNote: "このQRをお客さまに見せてください",
       staffQrPrint: "印刷する",
+      staffQrSaveImage: "画像として保存",
       staffQrUrlLabel: "QRが指すURL",
       // スタッフ招待（04）
       inviteTitle: "招待",

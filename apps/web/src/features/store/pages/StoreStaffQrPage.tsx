@@ -6,6 +6,7 @@ import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StoreBottomNav } from "../components/StoreBottomNav.js";
 import { StoreGuard } from "../components/StoreGuard.js";
 import { useStoreStaffDetail } from "../hooks/useStore.js";
+import { downloadQrAsImage } from "../../../lib/qr-image.js";
 
 /**
  * スタッフのQR表示画面（/store/staff/:staffId/qr・店スコープ）。
@@ -130,14 +131,33 @@ function StoreStaffQrContent({ store }: { store: StoreProfile }) {
               <div className="mt-1 text-token-sm text-ink">{detail.tipUrl}</div>
             </div>
 
-            {/* 印刷ボタン（画面のみ。店が印刷して置く用途） */}
-            <div className="mt-auto flex flex-col pt-8 print:hidden">
+            {/* 印刷・画像保存ボタン（画面のみ。店が印刷して置く／画像で共有する用途） */}
+            <div className="mt-auto flex flex-col gap-3 pt-8 print:hidden">
               <button
                 type="button"
                 onClick={handlePrint}
                 className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
               >
                 {t("store.staffQrPrint")}
+              </button>
+              {/* 画像として保存（PNGダウンロード。写真保存・コンビニ印刷・共有用） */}
+              <button
+                type="button"
+                onClick={async () => {
+                  const svg = document.querySelector<SVGSVGElement>(
+                    '[data-testid="store-staff-qr"] svg',
+                  );
+                  if (!svg) return;
+                  await downloadQrAsImage(
+                    svg,
+                    `${detail.displayName} ${t("store.san")}`,
+                    store.name,
+                    `qr-${store.name}-${detail.displayName}`,
+                  );
+                }}
+                className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
+              >
+                {t("store.staffQrSaveImage")}
               </button>
             </div>
           </>
