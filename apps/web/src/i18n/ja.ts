@@ -313,7 +313,10 @@ export const ja = {
       payoutCancel: "キャンセル",
       payoutSending: "送金中…",
       // {{amount}} に送金額
-      payoutDone: "{{amount}} を送金しました。数営業日で着金します。",
+      // 送金完了画面（チェック演出）。{{amount}} に送金額。「閉じる」で送金画面へ戻る
+      payoutDoneTitle: "{{amount}} の送金が完了しました",
+      payoutDoneNote: "申請から数営業日で登録口座に着金します。",
+      payoutDoneClose: "閉じる",
       // 送金できない理由
       payoutNoBalance: "送金できる残高がありません。",
       // {{min}} に最低送金額（例: ¥100）
