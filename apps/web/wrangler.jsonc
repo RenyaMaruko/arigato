@@ -1,0 +1,12 @@
+// Cloudflare Workers（静的アセット配信）の設定。
+// ビルド済みの dist/ をそのまま配信し、SPA のためどのパスでも index.html にフォールバックする。
+// デプロイ: apps/web で `pnpm build` → `npx wrangler deploy`
+{
+  "name": "arigato-web",
+  "compatibility_date": "2026-07-01",
+  "assets": {
+    "directory": "./dist",
+    // SPA フォールバック（/staff や /tip/xxx など全ルートで index.html を返す）
+    "not_found_handling": "single-page-application"
+  }
+}
