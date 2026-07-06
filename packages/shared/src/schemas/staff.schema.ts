@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { SettlementStatusSchema } from "./tip.schema.js";
+import { StoreInviteTypeSchema } from "./store.schema.js";
 
 /**
  * staff feature の共有 Zod スキーマ（フロント・バック共有）。
@@ -7,8 +8,10 @@ import { SettlementStatusSchema } from "./tip.schema.js";
  * Schema First の起点で、フロントのフォーム検証とバックのリクエスト検証に同じ定義を使う。
  */
 
-// 本人確認・着金可否の状態（none: 未着手 / pending: 審査中 / verified: 着金可能）
-export const IdentityStatusSchema = z.enum(["none", "pending", "verified"]);
+// 本人確認・着金可否の状態
+// （none: 未着手 / pending: 審査中 / action_required: 要対応＝審査NG・追加書類 / verified: 着金可能）。
+// action_required は Stripe の account.updated（requirements.errors / past_due / currently_due）から導く。
+export const IdentityStatusSchema = z.enum(["none", "pending", "action_required", "verified"]);
 export type IdentityStatus = z.infer<typeof IdentityStatusSchema>;
 
 // 表示名・一言の文字数上限（フォームの体験上の上限）
@@ -54,12 +57,16 @@ export type JoinResultStatus = z.infer<typeof JoinResultStatusSchema>;
  */
 export const JoinStoreResultSchema = z.object({
   status: JoinResultStatusSchema,
-  // 参加した（または既存の）所属（membership）ID。QR用URL の組み立てにも使える
-  membershipId: z.string().uuid(),
+  // 招待の種類（staff: 在籍・QR / admin: 店の管理者として参加）。受け入れ時に type で分岐した結果を返す。
+  // フロントは type で遷移先を出し分ける（staff→参加完了 / admin→店の管理モード）。
+  type: StoreInviteTypeSchema,
+  // 参加した（または既存の）所属（membership）ID。QR用URL の組み立てにも使える。
+  // 管理者招待（type=admin）では所属（staff_store）を作らないため null。
+  membershipId: z.string().uuid().nullable(),
   storeId: z.string().uuid(),
   storeName: z.string(),
-  // この membership の QR が指す固定 URL（/tip/:membershipId）
-  tipUrl: z.string(),
+  // この membership の QR が指す固定 URL（/tip/:membershipId）。管理者招待では null。
+  tipUrl: z.string().nullable(),
 });
 export type JoinStoreResult = z.infer<typeof JoinStoreResultSchema>;
 
@@ -121,6 +128,10 @@ export const StaffMeSchema = z.object({
   memberships: z.array(StaffMembershipSchema),
   // 受取履歴の店舗フィルタの選択肢（在籍中＋脱退済み）。脱退店の過去収益も見られるようにする
   receiptStores: z.array(StaffReceiptStoreSchema),
+  // 自分が管理する店（active な store_admin を持つ営業中の店）が1つ以上あるか。
+  // 兼任者（店員かつ管理者）だけにモード切替導線「店の管理へ」を出すための判定に使う。
+  // false のときは店員側に「店を開設する」導線を出す（全員デフォルトは店員ホーム）。
+  managesStore: z.boolean(),
 });
 export type StaffMe = z.infer<typeof StaffMeSchema>;
 
@@ -133,6 +144,8 @@ export const InviteInfoSchema = z.object({
   code: z.string(),
   storeId: z.string().uuid(),
   storeName: z.string(),
+  // 招待の種類（staff: 店員として参加 / admin: 店の管理者として参加）。受け入れ画面の表示を出し分ける
+  type: StoreInviteTypeSchema,
   // 招待が今すぐ使えるか（pending かつ店が承認済み）
   valid: z.boolean(),
 });
@@ -256,6 +269,15 @@ export const StaffBalanceSchema = z.object({
   // 準備中の資金が最も早く available になる日時（ISO 文字列・「◯月◯日から送金できます」表示用）。
   // 準備中が無い／available_on を拾えない場合は null
   nextAvailableOn: z.string().nullable(),
+  // 【準備中の内訳】準備中（pending）を available_on の暦日ごと（Asia/Tokyo 基準）にまとめた配列（日付昇順）。
+  // 各要素は「その日（availableOn・ISO 文字列）」と「その日に送金できるようになる額（amount・円・整数）」。
+  // UI は「M月D日から ¥金額」を日付ごとに並べる。合計は pendingStripeAmount と一致する。
+  pendingBuckets: z.array(
+    z.object({
+      availableOn: z.string(),
+      amount: z.number().int(),
+    }),
+  ),
 });
 export type StaffBalance = z.infer<typeof StaffBalanceSchema>;
 

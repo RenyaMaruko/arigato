@@ -49,6 +49,7 @@ import { createInMemoryStaffRepository } from "./features/staff/staff.repository
 import { buildTipUrl } from "./features/staff/staff.model.js";
 import {
   getMyStore,
+  listMyManagedStores,
   createStore,
   getStore,
   updateStore,
@@ -60,6 +61,12 @@ import {
   removeStoreStaff,
   getStoreGratitude,
   uploadStoreLogo,
+  closeStore,
+  transferStoreOwner,
+  createStoreAdminInvite,
+  listStoreAdmins,
+  removeStoreAdmin,
+  leaveStoreAsOwner,
 } from "./features/store/store.service.js";
 import { createStoreRepository } from "./features/store/store.repository.js";
 import { createInMemoryStoreRepository } from "./features/store/store.repository.memory.js";
@@ -212,6 +219,8 @@ export function createApp() {
   const storeRoute = createStoreRoute({
     authMiddleware,
     getMyStore: (authUserId) => getMyStore(storeRepo, authUserId),
+    // 自分が管理する店の一覧（GET /store/mine・§11.4）。中央ナビの切替に使う。金額なし
+    listMyManagedStores: (authUserId) => listMyManagedStores(storeRepo, authUserId),
     createStore: (authUserId, input) => createStore(storeRepo, authUserId, input),
     getStore: (authUserId, storeId) => getStore(storeRepo, authUserId, storeId),
     updateStore: (authUserId, storeId, input) =>
@@ -235,6 +244,21 @@ export function createApp() {
     // 感謝の集計の基準時刻はサーバーの現在時刻（now）を渡す。period（from/to）は記録画面の期間セレクタ由来
     getStoreGratitude: (authUserId, storeId, period) =>
       getStoreGratitude(storeRepo, authUserId, storeId, new Date(), period),
+    // 店を論理削除（閉店）する（owner のみ）。QR・所属を無効化し履歴・資金は保全する
+    closeStore: (authUserId, storeId) => closeStore(storeRepo, authUserId, storeId),
+    // owner を譲渡する（owner のみ）。active な admin へ引き継ぐ
+    transferStoreOwner: (authUserId, storeId, targetAuthUserId) =>
+      transferStoreOwner(storeRepo, authUserId, storeId, targetAuthUserId),
+    // 管理者一覧（owner/admin・店の管理モード。金額なし）。閲覧者のロールも返す
+    listStoreAdmins: (authUserId, storeId) => listStoreAdmins(storeRepo, authUserId, storeId),
+    // 管理者招待の発行（owner のみ・リンク発行）。受け入れで store_admin role=admin を作る
+    createStoreAdminInvite: (authUserId, storeId, input) =>
+      createStoreAdminInvite(storeRepo, buildStoreInviteUrl, authUserId, storeId, input),
+    // 管理者を外す（owner のみ・論理削除）。owner は外せない（譲渡か閉店を使う）
+    removeStoreAdmin: (authUserId, storeId, targetAuthUserId) =>
+      removeStoreAdmin(storeRepo, authUserId, storeId, targetAuthUserId),
+    // owner が店から抜ける（owner のみ）。残る管理者がいれば自動昇格・いなければ閉店
+    leaveStoreAsOwner: (authUserId, storeId) => leaveStoreAsOwner(storeRepo, authUserId, storeId),
   });
 
   // Webhook ルートを配線（署名検証＝infrastructure、処理＝webhook Service + tip 更新）。
@@ -245,16 +269,18 @@ export function createApp() {
         webhookRepo,
         // tip のステータス更新は tip Repository を配線（webhook feature は tip feature を直接 import しない）。
         // ホスト型 Checkout は metadata.tipId で確定（主）、tipId が無い場合は PaymentIntent ID で確定（従）。
+        // イベントの発生元口座（eventAccountId）も渡し、tip の帰属口座と一致する場合だけ更新する（多層防御）。
         {
-          byTipId: (tipId, status, paymentIntentId) =>
-            tipRepo.updateTipStatusByTipId(tipId, status, paymentIntentId),
-          byPaymentIntentId: (paymentIntentId, status) =>
-            tipRepo.updateTipStatusByPaymentIntentId(paymentIntentId, status),
+          byTipId: (tipId, status, paymentIntentId, eventAccountId) =>
+            tipRepo.updateTipStatusByTipId(tipId, status, paymentIntentId, eventAccountId),
+          byPaymentIntentId: (paymentIntentId, status, eventAccountId) =>
+            tipRepo.updateTipStatusByPaymentIntentId(paymentIntentId, status, eventAccountId),
         },
-        // account.updated の反映（identity_status verified・held→payable）は staff Service を配線
-        // （webhook feature は staff feature を直接 import せず、ここで接続する）。
-        (stripeAccountId, payoutsEnabled) =>
-          applyConnectAccountUpdate(staffRepo, stripeAccountId, payoutsEnabled),
+        // account.updated の反映（identity_status verified/action_required/pending・held→payable）は
+        // staff Service を配線（webhook feature は staff feature を直接 import せず、ここで接続する）。
+        // requirements（errors / past_due / currently_due）由来の要対応判定も account 状態ごと渡す。
+        (stripeAccountId, accountState) =>
+          applyConnectAccountUpdate(staffRepo, stripeAccountId, accountState),
         // payout.paid / payout.failed の反映（着金確定・失敗で tip を payable へ戻す）も staff Service を配線
         (params) => applyPayoutWebhookUpdate(staffRepo, params),
         // (c)(d)(f) の追加ユースケースを配線（webhook feature は tip / staff feature を直接 import せず、ここで接続する）。
@@ -269,10 +295,12 @@ export function createApp() {
           //   tip 側の遷移（tip Repository）と台帳補正（staff Service）を、ここ（コンポジションルート）で束ねる。
           applySettlementCorrection: async (p) => {
             // まず tip を終端状態へ遷移（残高・履歴・送金候補から除外）。冪等（既に終端なら null）。
+            // イベントの発生元口座（connectedAccountId）も渡し、帰属口座が一致する場合だけ遷移する（多層防御）。
             const corrected = await tipRepo.applySettlementCorrectionToTip({
               settlementStatus: p.kind,
               chargeId: p.chargeId,
               paymentIntentId: p.paymentIntentId,
+              connectedAccountId: p.connectedAccountId,
             });
             if (!corrected) return false;
             // 遷移できたら補正エントリを不変台帳へ追記する（append-only）

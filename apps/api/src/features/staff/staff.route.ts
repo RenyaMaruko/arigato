@@ -27,6 +27,7 @@ import {
   MembershipNotFoundError,
   PayoutNotVerifiedError,
   PayoutBelowMinimumError,
+  PayoutConflictError,
   InvalidImageError,
 } from "./staff.service.js";
 
@@ -255,6 +256,10 @@ export function createStaffRoute(deps: StaffDeps) {
         // 着金可能額が最低送金額に満たない（残高0を含む）
         if (err instanceof PayoutBelowMinimumError) {
           return c.json({ error: "payout_below_minimum" }, 422);
+        }
+        // 送金 claim の競合（並行送金・返金レースで対象 tip を確保できなかった。資金は動いていない）
+        if (err instanceof PayoutConflictError) {
+          return c.json({ error: "payout_conflict" }, 409);
         }
         throw err;
       }

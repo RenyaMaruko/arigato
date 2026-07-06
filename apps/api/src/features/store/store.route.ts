@@ -5,12 +5,16 @@ import {
   CreateStoreInputSchema,
   CreateStoreInviteInputSchema,
   StoreGratitudeQuerySchema,
+  TransferStoreOwnerInputSchema,
   type StoreProfile,
   type StoreInviteCreated,
   type StoreInvitesResponse,
   type StoreStaffResponse,
   type StoreStaffDetail,
   type StoreGratitude,
+  type StoreAdminsResponse,
+  type StoreManagedListResponse,
+  type StoreOwnerLeaveResult,
   type UpdateStoreProfileInput,
   type CreateStoreInput,
   type CreateStoreInviteInput,
@@ -21,9 +25,9 @@ import type { AuthVariables } from "../../middleware/auth.js";
 import {
   StoreNotFoundError,
   StoreForbiddenError,
-  StoreAlreadyExistsError,
   StoreInviteNotFoundError,
   StoreStaffNotFoundError,
+  StoreAdminNotFoundError,
   InvalidImageError,
 } from "./store.service.js";
 
@@ -42,6 +46,8 @@ type StoreDeps = {
   authMiddleware: MiddlewareHandler;
   // ログイン中の店アカウントが所有する店を取得（未作成なら null）
   getMyStore: (authUserId: string) => Promise<StoreProfile | null>;
+  // 自分が管理する店の一覧（GET /store/mine・§11.4）。中央ナビの切替（1件直行/複数一覧）に使う。金額なし
+  listMyManagedStores: (authUserId: string) => Promise<StoreManagedListResponse>;
   // 店舗をセルフサーブで新規作成（店名＋導入承認の同意。作成者＝所有者）
   createStore: (authUserId: string, input: CreateStoreInput) => Promise<StoreProfile>;
   // 自店プロフィールの取得（店スコープ）
@@ -87,6 +93,30 @@ type StoreDeps = {
     storeId: string,
     period: { from?: string; to?: string; staffId?: string },
   ) => Promise<StoreGratitude>;
+  // 店を論理削除（閉店）する（owner のみ）。QR・所属を無効化し、履歴・資金は保全する
+  closeStore: (authUserId: string, storeId: string) => Promise<void>;
+  // owner を譲渡する（owner のみ）。active な admin1人（targetAuthUserId）を指名して引き継ぐ
+  transferStoreOwner: (
+    authUserId: string,
+    storeId: string,
+    targetAuthUserId: string,
+  ) => Promise<void>;
+  // 管理者一覧（owner/admin・店の管理モード。金額なし・店スコープ）。閲覧者のロールも返す
+  listStoreAdmins: (authUserId: string, storeId: string) => Promise<StoreAdminsResponse>;
+  // 管理者招待の発行（owner のみ・リンク発行）。input.label は誰宛かの任意メモ
+  createStoreAdminInvite: (
+    authUserId: string,
+    storeId: string,
+    input: CreateStoreInviteInput,
+  ) => Promise<StoreInviteCreated>;
+  // 管理者を外す（owner のみ・論理削除）。対象は active な admin1人（targetAuthUserId）
+  removeStoreAdmin: (
+    authUserId: string,
+    storeId: string,
+    targetAuthUserId: string,
+  ) => Promise<void>;
+  // owner が店から抜ける（owner のみ）。残る管理者がいれば自動昇格・いなければ閉店（結果を返す）
+  leaveStoreAsOwner: (authUserId: string, storeId: string) => Promise<StoreOwnerLeaveResult>;
 };
 
 // 店スコープのアクセス制御エラーを HTTP ステータスに変換する共通ハンドラ。
@@ -114,20 +144,20 @@ export function createStoreRoute(deps: StoreDeps) {
       }
       return c.json(store);
     })
-    // 店舗をセルフサーブで新規作成する（店名＋導入承認の同意。作成者＝所有者・adoption_agreed_at 記録）
+    // 自分が管理する店の一覧を返す（GET /store/mine・§11.4）。中央ナビの切替（1件直行/複数一覧）に使う。
+    // 管理する店が無ければ items は空配列（純店員）。金額・残高・件数は一切含めない。
+    .get("/mine", async (c) => {
+      const authUser = c.get("authUser");
+      const managed = await deps.listMyManagedStores(authUser.id);
+      return c.json(managed);
+    })
+    // 店舗をセルフサーブで新規作成する（店名＋導入承認の同意。作成者＝所有者・adoption_agreed_at 記録）。
+    // 複数店舗（§11.4）: 1アカウントで何店でも作成できる（既に管理していても許可）。
     .post("/", zValidator("json", CreateStoreInputSchema), async (c) => {
       const authUser = c.get("authUser");
       const input = c.req.valid("json");
-      try {
-        const store = await deps.createStore(authUser.id, input);
-        return c.json(store, 201);
-      } catch (err) {
-        // 1アカウント1店舗（既に作成済み）は 409 で返す
-        if (err instanceof StoreAlreadyExistsError) {
-          return c.json({ error: "store_already_exists" }, 409);
-        }
-        throw err;
-      }
+      const store = await deps.createStore(authUser.id, input);
+      return c.json(store, 201);
     })
     // 自店プロフィールの取得（店スコープ）
     .get("/:storeId", async (c) => {
@@ -156,7 +186,7 @@ export function createStoreRoute(deps: StoreDeps) {
         throw err;
       }
     })
-    // 店ロゴ画像のアップロード（multipart/form-data・画像1枚。オーナーのみ）。
+    // 店ロゴ画像のアップロード（multipart/form-data・画像1枚。owner / admin＝店情報編集の権限者・§3.1）。
     // field 名 "file" の画像を受け取り、検証 → Storage 保存 → logo_url 更新 → { logoUrl } を返す。
     // 検証違反（非画像・過大）・ファイル欠落は 400、他店アクセス・店なしは 404。
     .post("/:storeId/logo", async (c) => {
@@ -289,6 +319,109 @@ export function createStoreRoute(deps: StoreDeps) {
       try {
         const gratitude = await deps.getStoreGratitude(authUser.id, storeId, { from, to, staffId });
         return c.json(gratitude);
+      } catch (err) {
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // 店を論理削除（閉店）する（owner のみ）。QR・所属を無効化し、履歴・資金は保全する。
+    // owner でない・他店・非管理者・閉店済みは 404（情報秘匿）。
+    .post("/:storeId/close", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      try {
+        await deps.closeStore(authUser.id, storeId);
+        return c.json({ ok: true });
+      } catch (err) {
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // owner を譲渡する（owner のみ）。body の targetAuthUserId（active な admin）へ引き継ぐ。
+    // owner でない・他店は 404、target が active な admin でなければ 404。
+    .post(
+      "/:storeId/transfer-owner",
+      zValidator("json", TransferStoreOwnerInputSchema),
+      async (c) => {
+        const authUser = c.get("authUser");
+        const storeId = c.req.param("storeId");
+        const { targetAuthUserId } = c.req.valid("json");
+        try {
+          await deps.transferStoreOwner(authUser.id, storeId, targetAuthUserId);
+          return c.json({ ok: true });
+        } catch (err) {
+          // 指名先が active な admin でない（存在しない・owner 自身・脱退済み）は 404
+          if (err instanceof StoreAdminNotFoundError) {
+            return c.json({ error: "store_admin_not_found" }, 404);
+          }
+          const mapped = handleStoreScopeError(err);
+          if (mapped) return c.json({ error: mapped.error }, mapped.status);
+          throw err;
+        }
+      },
+    )
+    // 管理者一覧（owner/admin・店の管理モード。金額なし・店スコープ）。閲覧者のロール（viewerRole）も返す。
+    // 他店・非管理者は 404（情報秘匿）。
+    .get("/:storeId/admins", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      try {
+        const admins = await deps.listStoreAdmins(authUser.id, storeId);
+        return c.json(admins);
+      } catch (err) {
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // 管理者招待の発行（owner のみ・リンク発行）。body の任意 label（誰宛かのメモ）を受ける。
+    // owner でない管理者(admin)・他店は 404（requireStoreOwner → StoreForbidden を 404 化）。
+    .post(
+      "/:storeId/admin-invites",
+      zValidator("json", CreateStoreInviteInputSchema),
+      async (c) => {
+        const authUser = c.get("authUser");
+        const storeId = c.req.param("storeId");
+        const input = c.req.valid("json");
+        try {
+          const invite = await deps.createStoreAdminInvite(authUser.id, storeId, input);
+          return c.json(invite, 201);
+        } catch (err) {
+          const mapped = handleStoreScopeError(err);
+          if (mapped) return c.json({ error: mapped.error }, mapped.status);
+          throw err;
+        }
+      },
+    )
+    // 管理者を外す（owner のみ・論理削除）。対象は active な admin1人（URL の authUserId）。
+    // owner でない・他店は 404、対象が active な admin でなければ 404（StoreAdminNotFound）。
+    .post("/:storeId/admins/:authUserId/remove", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      const targetAuthUserId = c.req.param("authUserId");
+      try {
+        await deps.removeStoreAdmin(authUser.id, storeId, targetAuthUserId);
+        return c.json({ ok: true });
+      } catch (err) {
+        // 対象が active な admin でない（存在しない・owner・脱退済み）は 404
+        if (err instanceof StoreAdminNotFoundError) {
+          return c.json({ error: "store_admin_not_found" }, 404);
+        }
+        const mapped = handleStoreScopeError(err);
+        if (mapped) return c.json({ error: mapped.error }, mapped.status);
+        throw err;
+      }
+    })
+    // owner が店から抜ける（owner のみ）。残る管理者がいれば自動昇格、いなければ閉店（結果を返す）。
+    // owner でない・他店・閉店済みは 404（情報秘匿）。
+    .post("/:storeId/owner/leave", async (c) => {
+      const authUser = c.get("authUser");
+      const storeId = c.req.param("storeId");
+      try {
+        const result = await deps.leaveStoreAsOwner(authUser.id, storeId);
+        return c.json(result);
       } catch (err) {
         const mapped = handleStoreScopeError(err);
         if (mapped) return c.json({ error: mapped.error }, mapped.status);

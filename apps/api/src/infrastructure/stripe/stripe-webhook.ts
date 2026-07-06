@@ -60,12 +60,20 @@ export function verifyWebhookEvent(
     throw new WebhookVerificationError(message);
   }
 
+  // イベントの発生元 Connected Account ID（Connect スコープのイベントは event.account に入る）。
+  // tip 更新・鏡保存・補正の帰属口座検証（多層防御）に使うため、全イベント共通で抽出する。
+  const eventAccountId = extractAccountFromEvent(event);
+
   // 対象 PaymentIntent ID と metadata.tipId を抽出する（payment_intent.* 系イベント）
   let paymentIntentId: string | null = null;
   let tipId: string | null = null;
-  // account.updated 系の Connected Account ID と着金可否
+  // account.updated 系の Connected Account ID と着金可否・requirements の各件数
   let accountId: string | null = null;
   let payoutsEnabled: boolean | null = null;
+  let requirementsErrorCount: number | null = null;
+  let requirementsPendingVerificationCount: number | null = null;
+  let requirementsPastDueCount: number | null = null;
+  let requirementsCurrentlyDueCount: number | null = null;
   // payout.* 系の Stripe Payout ID・metadata.payout_id・着金日時・失敗理由
   let payoutId: string | null = null;
   let payoutMetadataId: string | null = null;
@@ -116,9 +124,16 @@ export function verifyWebhookEvent(
     settlementCorrection = "disputed";
   } else if (event.type === "account.updated") {
     // Connected Account のオンボーディング状態変化。payouts_enabled が着金可否の起点。
+    // 審査NG・追加書類・審査中は専用イベントではなく requirements の中身で届くため、
+    // errors / pending_verification / past_due / currently_due の件数を抽出する。
+    // details_submitted は抽出しない（作成時の事前入力で最初から true になり、提出シグナルにならない）。
     const account = event.data.object as Stripe.Account;
     accountId = account.id;
     payoutsEnabled = account.payouts_enabled === true;
+    requirementsErrorCount = account.requirements?.errors?.length ?? 0;
+    requirementsPendingVerificationCount = account.requirements?.pending_verification?.length ?? 0;
+    requirementsPastDueCount = account.requirements?.past_due?.length ?? 0;
+    requirementsCurrentlyDueCount = account.requirements?.currently_due?.length ?? 0;
   } else if (event.type === "payout.paid" || event.type === "payout.failed") {
     // 送金（payout）の着金確定・失敗。stripe_payout_id を主に、metadata.payout_id を従に照合する。
     const po = event.data.object as Stripe.Payout;
@@ -136,10 +151,15 @@ export function verifyWebhookEvent(
   return {
     id: event.id,
     type: event.type,
+    eventAccountId,
     paymentIntentId,
     tipId,
     accountId,
     payoutsEnabled,
+    requirementsErrorCount,
+    requirementsPendingVerificationCount,
+    requirementsPastDueCount,
+    requirementsCurrentlyDueCount,
     payoutId,
     payoutMetadataId,
     payoutArrivedAt,

@@ -253,7 +253,8 @@ export async function recordTipChargeSettlement(
   // 【1】charge を expand して確定見込み（available_on / status）を取得する
   const snapshot = await retrieveChargeSettlement(params.chargeId, params.connectedAccountId);
 
-  // 【2】tip へ鏡保存する（tipId 主・PaymentIntent ID 従。null の項目は既存維持で後続イベントが埋める）
+  // 【2】tip へ鏡保存する（tipId 主・PaymentIntent ID 従。null の項目は既存維持で後続イベントが埋める）。
+  //     charge の発生元口座（connectedAccountId）も渡し、tip の帰属口座と一致する場合だけ保存する（多層防御）。
   const updated = await repo.saveTipChargeSettlement({
     tipId: params.tipId,
     paymentIntentId: params.paymentIntentId,
@@ -261,6 +262,7 @@ export async function recordTipChargeSettlement(
     balanceTransactionId: snapshot.balanceTransactionId,
     availableOn: snapshot.availableOn,
     btStatus: snapshot.btStatus,
+    connectedAccountId: params.connectedAccountId,
   });
   return updated > 0;
 }

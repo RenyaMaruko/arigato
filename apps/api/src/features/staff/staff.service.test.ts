@@ -24,7 +24,13 @@ import {
   PayoutBelowMinimumError,
   InvalidImageError,
 } from "./staff.service.js";
-import { buildTipUrl } from "./staff.model.js";
+import {
+  buildTipUrl,
+  deriveIdentityStatus,
+  verifyPayoutClaim,
+  PayoutConflictError,
+  type ConnectAccountState,
+} from "./staff.model.js";
 import type {
   StaffRepository,
   InviteRow,
@@ -82,6 +88,12 @@ function createMockRepo() {
   const payoutsByStaff = new Map<string, TestPayout>();
   // 脱退済み（論理削除）の membershipId 集合（leftAt 相当）。在籍中＝この集合に無い
   const leftMembershipIds = new Set<string>();
+  // 店の管理者（store_admin 相当）。キー `${storeId}::${authUserId}`。管理者招待の受け入れ・モード判定に使う
+  const storeAdmins = new Map<
+    string,
+    { storeId: string; authUserId: string; role: "owner" | "admin"; leftAt: number | null }
+  >();
+  const adminKey = (storeId: string, authUserId: string) => `${storeId}::${authUserId}`;
   // membership ID の採番カウンタ
   let membershipSeq = 0;
   // payout ID の採番カウンタ
@@ -279,7 +291,9 @@ function createMockRepo() {
         storeName: t.storeName,
       }));
     },
-    async applyAccountUpdate(stripeAccountId, payoutsEnabled) {
+    // account.updated の反映。実 DB 実装と同じく Model の deriveIdentityStatus で次の状態を導く
+    // （verified 確定時のみ held→payable を昇格＝従来どおり）。
+    async applyAccountUpdate(stripeAccountId, account) {
       // Stripe Account ID で本人を逆引きする
       let foundAuth: string | null = null;
       for (const [authUserId, acct] of accountByAuth) {
@@ -290,8 +304,13 @@ function createMockRepo() {
       }
       if (!foundAuth) return { found: false, verified: false, promotedTips: 0 };
       const profile = staffByAuth.get(foundAuth)!;
-      if (!payoutsEnabled) {
-        return { found: true, verified: profile.identityStatus === "verified", promotedTips: 0 };
+      const nextStatus = deriveIdentityStatus(profile.identityStatus, account);
+      // verified 以外（pending / action_required / 据え置き）は状態の書き込みだけ行う
+      if (nextStatus !== "verified") {
+        if (nextStatus !== profile.identityStatus) {
+          staffByAuth.set(foundAuth, { ...profile, identityStatus: nextStatus });
+        }
+        return { found: true, verified: false, promotedTips: 0 };
       }
       if (profile.identityStatus === "verified") {
         return { found: true, verified: true, promotedTips: 0 };
@@ -328,16 +347,34 @@ function createMockRepo() {
         .filter((t) => t.settlementStatus === "payable")
         .map((t) => ({ tipId: t.id, amount: t.amount }));
     },
-    // 【DB 先行記録】送金記録を pending（stripe_payout_id は NULL）で作り、
-    // 対象 tip を paid＋payout_id 紐付けへ更新する（Stripe 呼び出し前に DB を確定させる）
+    // 【DB 先行記録】対象 tip を先に claim（payable→paid の実確保）し、実確保できた手取り合計で
+    // 送金記録を pending（stripe_payout_id は NULL）で作る（実 DB 実装と同じ契約）。
+    // claim 件数が選定件数と不一致・実確保合計が最低送金額未満なら PayoutConflictError で全ロールバック
+    // （何も書き込まない＝Stripe 未呼出で資金は動かない）。
     async createPendingPayoutAndMarkTipsPaid(params) {
+      const auth = authByStaffId.get(params.staffId)!;
+      const tips = tipsByAuth.get(auth) ?? [];
+      // 先に「実際に確保できる tip」（今なお payable のもの）を特定する
+      const claimable = tips.filter(
+        (t) => params.tipIds.includes(t.id) && t.settlementStatus === "payable",
+      );
+      // 実確保を検証（実 DB 実装と同じ Model 純粋関数）。失敗なら書き込む前に例外＝全ロールバック相当
+      const verification = verifyPayoutClaim(
+        params.tipIds.length,
+        claimable.map((t) => t.amount),
+      );
+      if (!verification.ok) {
+        throw new PayoutConflictError(verification.reason);
+      }
+
       payoutSeq += 1;
       const id = `payout-${payoutSeq}`;
       payoutsByStaff.set(id, {
         id,
         staffId: params.staffId,
-        authUserId: authByStaffId.get(params.staffId)!,
-        amount: params.amount,
+        authUserId: auth,
+        // 実確保した手取り合計を payout の額にする（事前選定額ではない）
+        amount: verification.amount,
         status: "pending",
         // Stripe 成功後に attachStripePayoutId で補完するため、ここでは NULL
         stripePayoutId: null,
@@ -345,16 +382,13 @@ function createMockRepo() {
         arrivedAt: null,
         failureReason: null,
       });
-      // 対象の payable な tip を paid＋紐付けへ
-      const auth = authByStaffId.get(params.staffId)!;
-      const tips = tipsByAuth.get(auth) ?? [];
+      // claim した tip を paid＋紐付けへ
+      const claimedIds = new Set(claimable.map((t) => t.id));
       const next = tips.map((t) =>
-        params.tipIds.includes(t.id) && t.settlementStatus === "payable"
-          ? { ...t, settlementStatus: "paid" as const, payoutId: id }
-          : t,
+        claimedIds.has(t.id) ? { ...t, settlementStatus: "paid" as const, payoutId: id } : t,
       );
       tipsByAuth.set(auth, next);
-      return { id, amount: params.amount, status: "pending" as const };
+      return { id, amount: verification.amount, status: "pending" as const };
     },
     // 【Stripe 成功後】payout 行に stripe_payout_id を補完する（status は pending のまま）
     async attachStripePayoutId(payoutId, stripePayoutId) {
@@ -391,12 +425,14 @@ function createMockRepo() {
           failureReason: p.failureReason,
         }));
     },
-    // payout.paid を反映する（stripe_payout_id を主・自前 id を従に照合・冪等）
+    // payout.paid を反映する（stripe_payout_id を主・自前 id を従に照合・冪等）。
+    // 自前 id でのフォールバック照合は pending の行に限定する（実 DB 実装と同じ契約。
+    // revert 済み failed 行を paid に復活させない）
     async markPayoutPaid(match, arrivedAt) {
       for (const p of payoutsByStaff.values()) {
         const hit =
           (p.stripePayoutId !== null && p.stripePayoutId === match.stripePayoutId) ||
-          (match.payoutId !== null && p.id === match.payoutId);
+          (match.payoutId !== null && p.id === match.payoutId && p.status === "pending");
         if (hit && p.status !== "paid") {
           p.status = "paid";
           // stripe_payout_id 未補完なら今回の Stripe Payout ID で埋める（バックアップ経路）
@@ -463,9 +499,66 @@ function createMockRepo() {
     async listReconcileTotalsByStaff() {
       return [];
     },
+    // 管理者招待（type='admin'）の受け入れ。store_admin(role=admin) を作る/再有効化する。
+    // 二重付与防止（既に active なら already_member）・脱退再有効化（rejoined）を担保する。
+    async acceptAdminInvite(authUserId, code) {
+      const invite = invites.get(code);
+      if (
+        !invite ||
+        invite.inviteStatus !== "pending" ||
+        invite.inviteType !== "admin" ||
+        !invite.storeAdopted
+      ) {
+        throw new Error("invite_not_usable");
+      }
+      if (!staffByAuth.get(authUserId)) {
+        throw new Error("staff_not_found");
+      }
+      const key = adminKey(invite.storeId, authUserId);
+      const existing = storeAdmins.get(key);
+      if (existing && existing.leftAt === null) {
+        return {
+          outcome: "already_member" as const,
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      }
+      if (existing && existing.leftAt !== null) {
+        storeAdmins.set(key, { ...existing, role: "admin", leftAt: null });
+        invites.set(code, { ...invite, inviteStatus: "accepted" });
+        return {
+          outcome: "rejoined" as const,
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      }
+      storeAdmins.set(key, { storeId: invite.storeId, authUserId, role: "admin", leftAt: null });
+      invites.set(code, { ...invite, inviteStatus: "accepted" });
+      return {
+        outcome: "joined" as const,
+        storeId: invite.storeId,
+        storeName: invite.storeName,
+      };
+    },
+    // 自分が active な管理者である店が1つ以上あるか（モード切替の判定）
+    async hasManagedStore(authUserId) {
+      for (const a of storeAdmins.values()) {
+        if (a.authUserId === authUserId && a.leftAt === null) return true;
+      }
+      return false;
+    },
   };
 
-  return { repo, invites, staffByAuth, membershipsByAuth, tipsByAuth, accountByAuth, payoutsByStaff };
+  return {
+    repo,
+    invites,
+    staffByAuth,
+    membershipsByAuth,
+    tipsByAuth,
+    accountByAuth,
+    payoutsByStaff,
+    storeAdmins,
+  };
 }
 
 // QR用URL の組み立て（ローカルのベース URL を使う・membership 単位）
@@ -505,6 +598,7 @@ describe("staff.service", () => {
       storeId: "store-1",
       storeName: "カフェ Arigato",
       inviteStatus: "pending",
+      inviteType: "staff",
       storeAdopted: true,
     });
     // 別の承認済み店の pending 招待（掛け持ち検証用）
@@ -513,6 +607,7 @@ describe("staff.service", () => {
       storeId: "store-bar",
       storeName: "バー Arigato",
       inviteStatus: "pending",
+      inviteType: "staff",
       storeAdopted: true,
     });
     // 店が未承認の招待（使えないはず）
@@ -521,6 +616,7 @@ describe("staff.service", () => {
       storeId: "store-2",
       storeName: "未承認の店",
       inviteStatus: "pending",
+      inviteType: "staff",
       storeAdopted: false,
     });
   });
@@ -646,6 +742,7 @@ describe("staff.service", () => {
       storeId: "store-1",
       storeName: "カフェ Arigato",
       inviteStatus: "pending",
+      inviteType: "staff",
       storeAdopted: true,
     });
     const again = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-OK-2");
@@ -709,7 +806,7 @@ describe("staff.service", () => {
     expect(me!.memberships).toHaveLength(1);
 
     // 自分でその店を脱退する（本人スコープ）
-    const after = await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    const after = await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId!);
     // 脱退後は active な所属が0件（その店は消える）
     expect(after!.memberships).toHaveLength(0);
     me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
@@ -718,7 +815,7 @@ describe("staff.service", () => {
 
   it("leaveStoreMembership: receiptStores には脱退店が残る（過去の収益を確認できる）", async () => {
     const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
-    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId!);
     const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
     // active な所属は0だが、受取履歴の店フィルタには脱退店が残る
     expect(me!.memberships).toHaveLength(0);
@@ -734,7 +831,7 @@ describe("staff.service", () => {
     });
     // user-2 が user-1 の membership を脱退しようとしても作用しない（404）
     await expect(
-      leaveStoreMembership(mock.repo, buildUrl, "auth-user-2", joined.membershipId),
+      leaveStoreMembership(mock.repo, buildUrl, "auth-user-2", joined.membershipId!),
     ).rejects.toBeInstanceOf(MembershipNotFoundError);
     // user-1 の所属は健在（脱退されていない）
     const me1 = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
@@ -743,15 +840,15 @@ describe("staff.service", () => {
 
   it("leaveStoreMembership: 既に脱退済みの membership は 404（二重脱退不可）", async () => {
     const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
-    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId!);
     await expect(
-      leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId),
+      leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId!),
     ).rejects.toBeInstanceOf(MembershipNotFoundError);
   });
 
   it("joinStore: 脱退済みの店に再参加すると rejoined で再有効化し、同じ membershipId が復活する", async () => {
     const joined = await setupAndJoin(mock, "auth-user-1", "山田 さくら", "INV-OK");
-    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId);
+    await leaveStoreMembership(mock.repo, buildUrl, "auth-user-1", joined.membershipId!);
 
     // 同じ店の別の pending 招待を用意する（再参加用）
     mock.invites.set("INV-OK-REJOIN", {
@@ -759,18 +856,19 @@ describe("staff.service", () => {
       storeId: "store-1",
       storeName: "カフェ Arigato",
       inviteStatus: "pending",
+      inviteType: "staff",
       storeAdopted: true,
     });
     const rejoined = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-OK-REJOIN");
     // 再有効化（新規行は作らない＝同じ membershipId）
     expect(rejoined.status).toBe("rejoined");
-    expect(rejoined.membershipId).toBe(joined.membershipId);
+    expect(rejoined.membershipId!).toBe(joined.membershipId!);
     // 同じ QR（/tip/:membershipId）が再び有効
     expect(rejoined.tipUrl).toBe(`http://localhost:5173/tip/${joined.membershipId}`);
     // active な所属一覧に再び現れる
     const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
     expect(me!.memberships).toHaveLength(1);
-    expect(me!.memberships[0]!.membershipId).toBe(joined.membershipId);
+    expect(me!.memberships[0]!.membershipId).toBe(joined.membershipId!);
   });
 
   // --- プロフィール編集（所属は変わらない） ---
@@ -1272,13 +1370,29 @@ describe("staff.service", () => {
 
   // --- account.updated 反映（本人確認→着金の遷移・冪等性） ---
 
+  // account.updated から抽出した account 状態を模して作るヘルパ（既定は「要求なし・審査項目なし・未承認」）
+  function accountState(over: Partial<ConnectAccountState> = {}): ConnectAccountState {
+    return {
+      payoutsEnabled: false,
+      requirementsErrorCount: 0,
+      pendingVerificationCount: 0,
+      pastDueCount: 0,
+      currentlyDueCount: 0,
+      ...over,
+    };
+  }
+
   it("applyConnectAccountUpdate: payouts_enabled=true で verified にし held→payable へ遷移する", async () => {
     await seedTwoStaffWithTips();
     // A の連結アカウントはプロフィール作成時に自動作成済み。その実 ID で account.updated を発火させる。
     const connect = await mock.repo.findStaffConnect("auth-A");
     const acctA = connect!.stripeAccountId!;
 
-    const result = await applyConnectAccountUpdate(mock.repo, acctA, true);
+    const result = await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ payoutsEnabled: true }),
+    );
     expect(result.found).toBe(true);
     expect(result.verified).toBe(true);
     // A の held 2件が payable へ昇格する
@@ -1298,8 +1412,16 @@ describe("staff.service", () => {
     const connect = await mock.repo.findStaffConnect("auth-A");
     const acctA = connect!.stripeAccountId!;
 
-    const first = await applyConnectAccountUpdate(mock.repo, acctA, true);
-    const second = await applyConnectAccountUpdate(mock.repo, acctA, true);
+    const first = await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ payoutsEnabled: true }),
+    );
+    const second = await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ payoutsEnabled: true }),
+    );
     expect(first.promotedTips).toBe(2);
     // 既に verified のため二重遷移しない
     expect(second.verified).toBe(true);
@@ -1310,9 +1432,145 @@ describe("staff.service", () => {
   });
 
   it("applyConnectAccountUpdate: 該当口座が無ければ found=false", async () => {
-    const res = await applyConnectAccountUpdate(mock.repo, "acct_unknown", true);
+    const res = await applyConnectAccountUpdate(
+      mock.repo,
+      "acct_unknown",
+      accountState({ payoutsEnabled: true }),
+    );
     expect(res.found).toBe(false);
     expect(res.promotedTips).toBe(0);
+  });
+
+  it("applyConnectAccountUpdate: requirements.errors ありで action_required（要対応）になり、held は昇格しない", async () => {
+    await seedTwoStaffWithTips();
+    const connect = await mock.repo.findStaffConnect("auth-A");
+    const acctA = connect!.stripeAccountId!;
+
+    // 審査NG相当（errors 1件）の account.updated を模す
+    const result = await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ requirementsErrorCount: 1 }),
+    );
+    expect(result.found).toBe(true);
+    expect(result.verified).toBe(false);
+    // 要対応では held→payable は昇格しない（昇格は verified 確定時のみ＝従来どおり）
+    expect(result.promotedTips).toBe(0);
+
+    const me = await mock.repo.findStaffByAuthUserId("auth-A");
+    expect(me!.identityStatus).toBe("action_required");
+    // 残高上も held のまま・着金不可
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
+    expect(balance!.identityStatus).toBe("action_required");
+    expect(balance!.canPayout).toBe(false);
+    expect(balance!.heldAmount).toBe(255 + 425);
+  });
+
+  it("applyConnectAccountUpdate: 新規口座（未操作・past_due あり errors なし）は none 据え置き（誤発火バグの本丸）", async () => {
+    await seedTwoStaffWithTips();
+    const connect = await mock.repo.findStaffConnect("auth-A");
+    const acctA = connect!.stripeAccountId!;
+
+    // 連結アカウント作成直後の実データを模す:
+    // payouts_enabled=false / errors=0 / currently_due=1(document) / past_due=1(document) / pending_verification=0
+    const result = await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ pastDueCount: 1, currentlyDueCount: 1 }),
+    );
+    expect(result.found).toBe(true);
+    expect(result.verified).toBe(false);
+    // 誤って要対応に見せない・held も昇格しない
+    expect(result.promotedTips).toBe(0);
+    const me = await mock.repo.findStaffByAuthUserId("auth-A");
+    expect(me!.identityStatus).toBe("none");
+    // 残高上も held のまま・着金不可（「本人確認をする」導線が保たれる）
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
+    expect(balance!.identityStatus).toBe("none");
+    expect(balance!.canPayout).toBe(false);
+    expect(balance!.heldAmount).toBe(255 + 425);
+  });
+
+  it("applyConnectAccountUpdate: 全提出（pending_verification あり）で pending（申請中）になる", async () => {
+    await seedTwoStaffWithTips();
+    const connect = await mock.repo.findStaffConnect("auth-A");
+    const acctA = connect!.stripeAccountId!;
+
+    // 全提出 → Stripe が審査中（pending_verification が立つ）
+    const result = await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ pendingVerificationCount: 1 }),
+    );
+    expect(result.verified).toBe(false);
+    // 申請中では held→payable は昇格しない（昇格は verified 確定時のみ）
+    expect(result.promotedTips).toBe(0);
+    expect((await mock.repo.findStaffByAuthUserId("auth-A"))!.identityStatus).toBe("pending");
+  });
+
+  it("applyConnectAccountUpdate: 申請中の人への追加要求（errors なし・due あり）は action_required になる", async () => {
+    await seedTwoStaffWithTips();
+    const connect = await mock.repo.findStaffConnect("auth-A");
+    const acctA = connect!.stripeAccountId!;
+
+    // 【1】全提出で申請中（pending）へ
+    await applyConnectAccountUpdate(mock.repo, acctA, accountState({ pendingVerificationCount: 1 }));
+    // 【2】審査後に追加要求（期限切れの未提出項目）が届く → 要対応
+    await applyConnectAccountUpdate(mock.repo, acctA, accountState({ pastDueCount: 2 }));
+    const me = await mock.repo.findStaffByAuthUserId("auth-A");
+    expect(me!.identityStatus).toBe("action_required");
+  });
+
+  it("applyConnectAccountUpdate: 要対応から修正・再提出（errors が消え審査中）で pending に戻る", async () => {
+    await seedTwoStaffWithTips();
+    const connect = await mock.repo.findStaffConnect("auth-A");
+    const acctA = connect!.stripeAccountId!;
+
+    // 【1】審査NG（例 verification_document_failed_test_mode）→ action_required
+    await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ requirementsErrorCount: 1 }),
+    );
+    expect((await mock.repo.findStaffByAuthUserId("auth-A"))!.identityStatus).toBe(
+      "action_required",
+    );
+
+    // 【2】修正・再提出で errors が消え pending_verification（審査中）に戻る → pending
+    await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ pendingVerificationCount: 1 }),
+    );
+    expect((await mock.repo.findStaffByAuthUserId("auth-A"))!.identityStatus).toBe("pending");
+
+    // 【3】その後 payouts_enabled=true → verified 確定・held→payable 昇格（従来どおり不変）
+    const result = await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ payoutsEnabled: true }),
+    );
+    expect(result.verified).toBe(true);
+    expect(result.promotedTips).toBe(2);
+    expect((await mock.repo.findStaffByAuthUserId("auth-A"))!.identityStatus).toBe("verified");
+  });
+
+  it("applyConnectAccountUpdate: verified 後に requirements の通知が来ても後退しない", async () => {
+    await seedTwoStaffWithTips();
+    const connect = await mock.repo.findStaffConnect("auth-A");
+    const acctA = connect!.stripeAccountId!;
+
+    // verified に確定してから、errors 付きの account.updated が届いても verified を維持する
+    await applyConnectAccountUpdate(mock.repo, acctA, accountState({ payoutsEnabled: true }));
+    const after = await applyConnectAccountUpdate(
+      mock.repo,
+      acctA,
+      accountState({ requirementsErrorCount: 1 }),
+    );
+    // 既に verified のため二重遷移も後退もしない
+    expect(after.verified).toBe(true);
+    expect(after.promotedTips).toBe(0);
+    expect((await mock.repo.findStaffByAuthUserId("auth-A"))!.identityStatus).toBe("verified");
   });
 
   // --- 送金（payout）---
@@ -1336,7 +1594,11 @@ describe("staff.service", () => {
     // A の連結アカウント（プロフィール作成時に自動作成された実 ID）を取得する
     const connect = await mock.repo.findStaffConnect("auth-A");
     // account.updated で verified へ → A の held 2件（額面300/500）が payable（手取り 255+425=680）へ
-    await applyConnectAccountUpdate(mock.repo, connect!.stripeAccountId!, true);
+    await applyConnectAccountUpdate(
+      mock.repo,
+      connect!.stripeAccountId!,
+      accountState({ payoutsEnabled: true }),
+    );
   }
 
   // テスト用の Stripe payout 実行（呼ばれた額を記録し、指定の payout ID を返す）
@@ -1361,11 +1623,14 @@ describe("staff.service", () => {
     available = 1_000_000,
     pending = 0,
     nextAvailableOn: string | null = null,
+    pendingBuckets: { availableOn: string; amount: number }[] = [],
   ) {
     return vi.fn(async (_connectedAccountId: string) => ({
       availableAmount: available,
       pendingAmount: pending,
       nextAvailableOn,
+      // 準備中の日付ごとの内訳（既定は空。指定時は service がそのまま StaffBalance に載せることを検証する）
+      pendingBuckets,
     }));
   }
 
@@ -1459,6 +1724,22 @@ describe("staff.service", () => {
     expect(balance!.payableAmount).toBe(680);
   });
 
+  it("getStaffBalance: 準備中の日付ごとの内訳（pendingBuckets）を Stripe 残高からそのまま載せる", async () => {
+    await setupVerifiedWithPayable();
+    // 2日分の内訳（合計 300＝pendingStripeAmount）を返す状況
+    const buckets = [
+      { availableOn: "2026-07-01T00:00:00Z", amount: 200 },
+      { availableOn: "2026-07-03T00:00:00Z", amount: 100 },
+    ];
+    const getBalance = makeGetConnectBalance(600, 300, "2026-07-01T00:00:00Z", buckets);
+    const balance = await getStaffBalance(mock.repo, getBalance, "auth-A");
+    expect(balance).not.toBeNull();
+    // 日付ごとの内訳がそのまま返り、合計は pendingStripeAmount と一致する
+    expect(balance!.pendingBuckets).toEqual(buckets);
+    const bucketTotal = balance!.pendingBuckets.reduce((s, b) => s + b.amount, 0);
+    expect(bucketTotal).toBe(balance!.pendingStripeAmount);
+  });
+
   it("getStaffBalance: 未確認（verified でない）なら Stripe 残高は取得せず sendable/pending は 0（held は見える）", async () => {
     await seedTwoStaffWithTips();
     const getBalance = makeGetConnectBalance(600, 200);
@@ -1467,6 +1748,8 @@ describe("staff.service", () => {
     expect(getBalance).not.toHaveBeenCalled();
     expect(balance!.sendableAmount).toBe(0);
     expect(balance!.pendingStripeAmount).toBe(0);
+    // 準備中の内訳も空（Stripe 残高を引かないため）
+    expect(balance!.pendingBuckets).toEqual([]);
     // 本人確認待ち（held）は受取総額として見える（隠さない）
     expect(balance!.heldAmount).toBe(255 + 425);
     expect(balance!.canPayout).toBe(false);
@@ -1501,7 +1784,11 @@ describe("staff.service", () => {
     // 連結アカウントはプロフィール作成時に自動作成済み。その実 ID で account.updated を発火させる。
     await setupAndJoin(mock, "auth-C", "Cさん", "INV-OK");
     const connectC = await mock.repo.findStaffConnect("auth-C");
-    await applyConnectAccountUpdate(mock.repo, connectC!.stripeAccountId!, true);
+    await applyConnectAccountUpdate(
+      mock.repo,
+      connectC!.stripeAccountId!,
+      accountState({ payoutsEnabled: true }),
+    );
 
     const stripePayout = makeStripePayout();
     await expect(createStaffPayout(mock.repo, stripePayout, makeGetConnectBalance(), "auth-C")).rejects.toBeInstanceOf(
@@ -1656,6 +1943,137 @@ describe("staff.service", () => {
     expect(target!.status).toBe("paid");
     expect(target!.arrivedAt).not.toBeNull();
   });
+
+  // --- 送金の二重払い防止: 実 claim 検証・曖昧エラーの非 revert・failed 復活ガード ---
+
+  it("createStaffPayout: 選定と claim の乖離（間に返金等）は PayoutConflictError で中断・Stripe 未呼出", async () => {
+    await setupVerifiedWithPayable();
+    const stripePayout = makeStripePayout();
+
+    // 選定（listPayableTips）と claim の間に1件が返金される（返金レース）を再現する。
+    // createPendingPayoutAndMarkTipsPaid の直前で tip を refunded に変えてから本来の処理へ委譲する。
+    const original = mock.repo.createPendingPayoutAndMarkTipsPaid.bind(mock.repo);
+    const racyRepo: StaffRepository = {
+      ...mock.repo,
+      async createPendingPayoutAndMarkTipsPaid(params) {
+        const tips = mock.tipsByAuth.get("auth-A")!;
+        mock.tipsByAuth.set(
+          "auth-A",
+          tips.map((t, i) => (i === 0 ? { ...t, settlementStatus: "refunded" as const } : t)),
+        );
+        return original(params);
+      },
+    };
+
+    // 実確保が選定件数に満たない → 競合エラーで中断（資金は動かない）
+    await expect(
+      createStaffPayout(racyRepo, stripePayout, makeGetConnectBalance(), "auth-A"),
+    ).rejects.toBeInstanceOf(PayoutConflictError);
+    // Stripe は呼ばれない（「実確保0件・満額送金」を構造的に防ぐ）
+    expect(stripePayout).not.toHaveBeenCalled();
+    // 全ロールバック相当: paid になった tip は無く、payout 行も作られない
+    const tips = mock.tipsByAuth.get("auth-A")!;
+    expect(tips.filter((t) => t.settlementStatus === "paid")).toHaveLength(0);
+    expect(mock.payoutsByStaff.size).toBe(0);
+  });
+
+  it("createStaffPayout: claim できた手取り合計と Stripe 送金額・payout 行の額が必ず一致する", async () => {
+    await setupVerifiedWithPayable();
+    const stripePayout = makeStripePayout();
+
+    const result = await createStaffPayout(mock.repo, stripePayout, makeGetConnectBalance(), "auth-A");
+    // Stripe へ渡した amount ＝ payout 行の amount（実 claim 合計）。事前選定額をそのまま使わない
+    const callArg = stripePayout.mock.calls[0]![0];
+    expect(callArg.amount).toBe(result!.amount);
+    // claim した tip（paid）の手取り合計とも一致する
+    const paidTake = mock.tipsByAuth
+      .get("auth-A")!
+      .filter((t) => t.settlementStatus === "paid")
+      .reduce((s, t) => s + Math.floor(t.amount * 0.85), 0);
+    expect(callArg.amount).toBe(paidTake);
+  });
+
+  it("createStaffPayout: 曖昧な Stripe エラー（接続断・5xx）は revert しない（pending 残置・tip は paid のまま）", async () => {
+    await setupVerifiedWithPayable();
+    // stripe-node の StripeConnectionError を模す（err.type にエラー型名を持つ。タイムアウト等）
+    const connectionError = Object.assign(new Error("ETIMEDOUT"), {
+      type: "StripeConnectionError",
+    });
+    const stripePayout = vi.fn(async () => {
+      throw connectionError;
+    });
+
+    // 例外は呼び出し元へ伝播する
+    await expect(
+      createStaffPayout(mock.repo, stripePayout, makeGetConnectBalance(), "auth-A"),
+    ).rejects.toBe(connectionError);
+
+    // revert しない: tip は paid のまま（再送金は「送れる額なし」で自然にブロック＝二重送金しない）
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
+    expect(balance!.payableAmount).toBe(0);
+    expect(balance!.paidAmount).toBe(680);
+    // payout 行は pending のまま残る（stripe_payout_id 未補完）
+    const payouts = await getStaffPayouts(mock.repo, "auth-A");
+    expect(payouts!.items).toHaveLength(1);
+    expect(payouts!.items[0]!.status).toBe("pending");
+
+    // 実は成立していた場合: payout.paid Webhook（metadata.payout_id）で確定できる
+    const confirmed = await applyPayoutWebhookUpdate(mock.repo, {
+      kind: "paid",
+      stripePayoutId: "po_actually_succeeded",
+      payoutId: payouts!.items[0]!.id,
+      arrivedAt: new Date("2026-07-03T00:00:00Z"),
+      failureReason: null,
+    });
+    expect(confirmed).toBe(true);
+    const after = await getStaffPayouts(mock.repo, "auth-A");
+    expect(after!.items[0]!.status).toBe("paid");
+  });
+
+  it("createStaffPayout: 確定失敗（StripeInvalidRequestError）は従来どおり revert する", async () => {
+    await setupVerifiedWithPayable();
+    // Stripe 側で payout 未作成が確実なエラー（リクエスト拒否）を模す
+    const invalidRequest = Object.assign(new Error("invalid amount"), {
+      type: "StripeInvalidRequestError",
+    });
+    const stripePayout = vi.fn(async () => {
+      throw invalidRequest;
+    });
+
+    await expect(
+      createStaffPayout(mock.repo, stripePayout, makeGetConnectBalance(), "auth-A"),
+    ).rejects.toBe(invalidRequest);
+
+    // revert される: tip は payable へ戻り、payout 行は failed（従来どおり）
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A");
+    expect(balance!.payableAmount).toBe(680);
+    const payouts = await getStaffPayouts(mock.repo, "auth-A");
+    expect(payouts!.items[0]!.status).toBe("failed");
+  });
+
+  it("applyPayoutWebhookUpdate: revert 済み（failed）の payout は自前 id 照合では paid に復活しない", async () => {
+    await setupVerifiedWithPayable();
+    // 確定失敗 → revert（payout=failed・tip は payable へ戻る）
+    const failing = vi.fn(async () => {
+      throw new Error("insufficient_funds");
+    });
+    await expect(
+      createStaffPayout(mock.repo, failing, makeGetConnectBalance(), "auth-A"),
+    ).rejects.toThrow("insufficient_funds");
+    const failedPayout = [...mock.payoutsByStaff.values()][0]!;
+    expect(failedPayout.status).toBe("failed");
+
+    // 遅延到着した payout.paid が metadata.payout_id（自前 id フォールバック）で failed 行を引いても復活しない
+    const revived = await applyPayoutWebhookUpdate(mock.repo, {
+      kind: "paid",
+      stripePayoutId: "po_ghost",
+      payoutId: failedPayout.id,
+      arrivedAt: new Date("2026-07-03T00:00:00Z"),
+      failureReason: null,
+    });
+    expect(revived).toBe(false);
+    expect(mock.payoutsByStaff.get(failedPayout.id)!.status).toBe("failed");
+  });
 });
 
 // アバター画像アップロード（POST /staff/me/avatar）のユースケース検証。
@@ -1723,5 +2141,124 @@ describe("staff.service uploadStaffAvatar", () => {
     });
     expect(result).toBeNull();
     expect(fakeUpload).not.toHaveBeenCalled();
+  });
+});
+
+// ─────────────────────────────────────────────────────────────
+// フェーズ3: 招待 type 分岐（管理者招待→store_admin）・二重付与防止・脱退再有効化・モード判定
+// ─────────────────────────────────────────────────────────────
+describe("staff.service（招待 type 分岐・管理者招待・フェーズ3）", () => {
+  let mock: ReturnType<typeof createMockRepo>;
+  beforeEach(() => {
+    mock = createMockRepo();
+    // 承認済み店の pending なスタッフ招待
+    mock.invites.set("INV-STAFF", {
+      code: "INV-STAFF",
+      storeId: "store-1",
+      storeName: "カフェ Arigato",
+      inviteStatus: "pending",
+      inviteType: "staff",
+      storeAdopted: true,
+    });
+    // 承認済み店の pending な管理者招待（受け入れで store_admin role=admin を作る）
+    mock.invites.set("INV-ADMIN", {
+      code: "INV-ADMIN",
+      storeId: "store-1",
+      storeName: "カフェ Arigato",
+      inviteStatus: "pending",
+      inviteType: "admin",
+      storeAdopted: true,
+    });
+    // 同じ店の2枚目の管理者招待（二重付与防止・再有効化の検証に使う）
+    mock.invites.set("INV-ADMIN-2", {
+      code: "INV-ADMIN-2",
+      storeId: "store-1",
+      storeName: "カフェ Arigato",
+      inviteStatus: "pending",
+      inviteType: "admin",
+      storeAdopted: true,
+    });
+  });
+
+  it("getInviteInfo: 管理者招待は type='admin' を返す（受け入れ画面の表示を出し分ける）", async () => {
+    const info = await getInviteInfo(mock.repo, "INV-ADMIN");
+    expect(info!.type).toBe("admin");
+    const staffInfo = await getInviteInfo(mock.repo, "INV-STAFF");
+    expect(staffInfo!.type).toBe("staff");
+  });
+
+  it("joinStore: 管理者招待を受け入れると store_admin(admin) を作る（membership は作らない・managesStore=true）", async () => {
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-1", {
+      displayName: "店長 太郎",
+    });
+    const result = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-ADMIN");
+    expect(result.status).toBe("joined");
+    expect(result.type).toBe("admin");
+    // 管理者招待は所属（staff_store）・QR を作らない
+    expect(result.membershipId).toBeNull();
+    expect(result.tipUrl).toBeNull();
+    // 招待は消費される
+    expect(mock.invites.get("INV-ADMIN")!.inviteStatus).toBe("accepted");
+    // store_admin(role=admin・active) が作られる
+    const admin = mock.storeAdmins.get("store-1::auth-user-1");
+    expect(admin?.role).toBe("admin");
+    expect(admin?.leftAt).toBeNull();
+    // 兼任者になったので managesStore=true・所属（memberships）は空のまま
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.managesStore).toBe(true);
+    expect(me!.memberships).toHaveLength(0);
+  });
+
+  it("joinStore: 既に管理者なら二重付与しない（already_member・招待は消費しない）", async () => {
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-1", {
+      displayName: "店長 太郎",
+    });
+    await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-ADMIN");
+    // 同じ店の別の管理者招待で再度受け入れようとすると already_member
+    const again = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-ADMIN-2");
+    expect(again.status).toBe("already_member");
+    expect(again.type).toBe("admin");
+    // 2枚目の招待は消費されない（pending のまま）
+    expect(mock.invites.get("INV-ADMIN-2")!.inviteStatus).toBe("pending");
+    // store_admin は1件のまま（active）
+    expect(mock.storeAdmins.get("store-1::auth-user-1")?.role).toBe("admin");
+  });
+
+  it("joinStore: 脱退済みの管理者は再有効化する（rejoined・left_at→null）", async () => {
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-1", {
+      displayName: "店長 太郎",
+    });
+    await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-ADMIN");
+    // 管理者を外す（論理削除）
+    mock.storeAdmins.get("store-1::auth-user-1")!.leftAt = Date.now();
+    // モード判定は false に戻る
+    let me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.managesStore).toBe(false);
+    // 新しい管理者招待で再有効化する
+    const rejoined = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-ADMIN-2");
+    expect(rejoined.status).toBe("rejoined");
+    expect(mock.storeAdmins.get("store-1::auth-user-1")!.leftAt).toBeNull();
+    me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.managesStore).toBe(true);
+  });
+
+  it("joinStore: スタッフ招待は従来どおり staff_store を作り、store_admin は作らない（managesStore=false）", async () => {
+    await createStaffProfile(mock.repo, buildUrl, makeCreateConnectedAccount(), "auth-user-1", {
+      displayName: "山田 さくら",
+    });
+    const result = await joinStore(mock.repo, buildUrl, "auth-user-1", "INV-STAFF");
+    expect(result.type).toBe("staff");
+    expect(result.membershipId).not.toBeNull();
+    // store_admin は作られない
+    expect(mock.storeAdmins.get("store-1::auth-user-1")).toBeUndefined();
+    const me = await getStaffMe(mock.repo, buildUrl, "auth-user-1");
+    expect(me!.managesStore).toBe(false);
+    expect(me!.memberships).toHaveLength(1);
+  });
+
+  it("joinStore: 管理者招待もプロフィール未作成なら参加できない（StaffNotFoundError）", async () => {
+    await expect(
+      joinStore(mock.repo, buildUrl, "no-staff", "INV-ADMIN"),
+    ).rejects.toBeInstanceOf(StaffNotFoundError);
   });
 });

@@ -20,18 +20,22 @@ const noopSettlementDeps = makeSettlementDeps();
 
 /**
  * webhook Service 層のユニットテスト。
- * 「冪等性（同一イベント ID の2回目はスキップ）」と「種別→tip ステータス更新」の契約を、
- * Repository と tip 更新関数をモックに差し替えて実 DB なしで検証する。
+ * 「冪等性（処理済みイベントの再送はスキップ・業務処理失敗は再送で再処理）」と
+ * 「種別→tip ステータス更新」の契約を、Repository と tip 更新関数をモックに差し替えて実 DB なしで検証する。
  */
 
-// 受信済みイベント ID を Set に持つテスト用 Repository（実装の冪等性挙動を再現）
+// 受信イベント ID と処理済みフラグを Map に持つテスト用 Repository（実装の冪等性挙動を再現）。
+// 「処理済み」だけをスキップし、「受信済みだが未処理（前回失敗）」は再処理する契約。
 function makeWebhookRepo(): WebhookRepository {
-  const seen = new Set<string>();
+  const processed = new Map<string, boolean>();
   return {
     recordEventIfNew: vi.fn(async (id: string) => {
-      if (seen.has(id)) return false;
-      seen.add(id);
+      if (processed.get(id) === true) return false;
+      if (!processed.has(id)) processed.set(id, false);
       return true;
+    }),
+    markEventProcessed: vi.fn(async (id: string) => {
+      processed.set(id, true);
     }),
   };
 }
@@ -44,11 +48,16 @@ function succeededEvent(
   return {
     id: eventId,
     type: "payment_intent.succeeded",
+    eventAccountId: null,
     // 明示的に null を渡した場合はその null を尊重する（?? だと null を既定値で潰してしまうため）
     paymentIntentId: "piId" in opts ? (opts.piId ?? null) : "pi_1",
     tipId: "tipId" in opts ? (opts.tipId ?? null) : "tip_1",
     accountId: null,
     payoutsEnabled: null,
+    requirementsPendingVerificationCount: null,
+    requirementsErrorCount: null,
+    requirementsPastDueCount: null,
+    requirementsCurrentlyDueCount: null,
     payoutId: null,
     payoutMetadataId: null,
     payoutArrivedAt: null,
@@ -59,19 +68,31 @@ function succeededEvent(
   };
 }
 
-// account.updated の検証済みイベントを作る（Connected Account ID と payouts_enabled を持つ）
+// account.updated の検証済みイベントを作る（Connected Account ID・payouts_enabled に加え、
+// 審査NG・審査中・追加書類の判定材料（requirements の各件数）も指定できる）
 function accountUpdatedEvent(
   eventId: string,
   accountId: string,
   payoutsEnabled: boolean,
+  opts: {
+    errorCount?: number;
+    pendingVerificationCount?: number;
+    pastDueCount?: number;
+    currentlyDueCount?: number;
+  } = {},
 ): VerifiedEvent {
   return {
     id: eventId,
     type: "account.updated",
+    eventAccountId: null,
     paymentIntentId: null,
     tipId: null,
     accountId,
     payoutsEnabled,
+    requirementsErrorCount: opts.errorCount ?? 0,
+    requirementsPendingVerificationCount: opts.pendingVerificationCount ?? 0,
+    requirementsPastDueCount: opts.pastDueCount ?? 0,
+    requirementsCurrentlyDueCount: opts.currentlyDueCount ?? 0,
     payoutId: null,
     payoutMetadataId: null,
     payoutArrivedAt: null,
@@ -92,10 +113,15 @@ function payoutEvent(
   return {
     id: eventId,
     type,
+    eventAccountId: null,
     paymentIntentId: null,
     tipId: null,
     accountId: null,
     payoutsEnabled: null,
+    requirementsPendingVerificationCount: null,
+    requirementsErrorCount: null,
+    requirementsPastDueCount: null,
+    requirementsCurrentlyDueCount: null,
     payoutId,
     payoutMetadataId: opts.metadataId ?? null,
     payoutArrivedAt: opts.arrivedAt ?? null,
@@ -136,17 +162,29 @@ function makeUpdateDeps(returns = 1) {
 
 // account.updated 反映関数のモック。verified へ遷移し held→payable へ promote した件数を返す。
 // 既に verified の場合（2回目）は二重遷移しないよう promotedTips=0 を返すようにできる。
+// 第2引数は account 状態（payouts_enabled・requirements の各件数）のオブジェクト。
 function makeApplyAccountUpdate(promoted = 0) {
   const seenVerified = new Set<string>();
-  return vi.fn(async (accountId: string, payoutsEnabled: boolean) => {
-    if (!payoutsEnabled) return { found: true, verified: false, promotedTips: 0 };
-    // 既に verified にした口座は二重遷移しない
-    if (seenVerified.has(accountId)) {
-      return { found: true, verified: true, promotedTips: 0 };
-    }
-    seenVerified.add(accountId);
-    return { found: true, verified: true, promotedTips: promoted };
-  });
+  return vi.fn(
+    async (
+      accountId: string,
+      account: {
+        payoutsEnabled: boolean;
+        requirementsErrorCount: number;
+        pendingVerificationCount: number;
+        pastDueCount: number;
+        currentlyDueCount: number;
+      },
+    ) => {
+      if (!account.payoutsEnabled) return { found: true, verified: false, promotedTips: 0 };
+      // 既に verified にした口座は二重遷移しない
+      if (seenVerified.has(accountId)) {
+        return { found: true, verified: true, promotedTips: 0 };
+      }
+      seenVerified.add(accountId);
+      return { found: true, verified: true, promotedTips: promoted };
+    },
+  );
 }
 
 // 既定の no-op applyAccountUpdate（payment_intent 系テストで使う）
@@ -171,7 +209,8 @@ describe("webhook.service handleStripeWebhook", () => {
     );
 
     // ホスト型 Checkout は tipId を主経路に確定し、判明した PaymentIntent ID も渡す
-    expect(update.byTipId).toHaveBeenCalledWith("tip_1", "succeeded", "pi_1");
+    // （第4引数はイベントの発生元口座＝帰属口座検証。account なしイベントは null）
+    expect(update.byTipId).toHaveBeenCalledWith("tip_1", "succeeded", "pi_1", null);
     expect(update.byPaymentIntentId).not.toHaveBeenCalled();
     expect(result).toEqual({
       received: true,
@@ -193,10 +232,15 @@ describe("webhook.service handleStripeWebhook", () => {
     const failed: VerifiedEvent = {
       id: "evt_2",
       type: "payment_intent.payment_failed",
+      eventAccountId: null,
       paymentIntentId: "pi_2",
       tipId: "tip_2",
       accountId: null,
       payoutsEnabled: null,
+      requirementsPendingVerificationCount: null,
+      requirementsErrorCount: null,
+      requirementsPastDueCount: null,
+      requirementsCurrentlyDueCount: null,
       payoutId: null,
       payoutMetadataId: null,
       payoutArrivedAt: null,
@@ -207,7 +251,7 @@ describe("webhook.service handleStripeWebhook", () => {
     };
     const result = await handleStripeWebhook(repo, update, noopApplyAccountUpdate, noopApplyPayoutUpdate, noopSettlementDeps, failed);
 
-    expect(update.byTipId).toHaveBeenCalledWith("tip_2", "failed", "pi_2");
+    expect(update.byTipId).toHaveBeenCalledWith("tip_2", "failed", "pi_2", null);
     expect(result.tipUpdated).toBe(true);
   });
 
@@ -225,7 +269,7 @@ describe("webhook.service handleStripeWebhook", () => {
     );
 
     expect(update.byTipId).not.toHaveBeenCalled();
-    expect(update.byPaymentIntentId).toHaveBeenCalledWith("pi_only", "succeeded");
+    expect(update.byPaymentIntentId).toHaveBeenCalledWith("pi_only", "succeeded", null);
     expect(result.tipUpdated).toBe(true);
   });
 
@@ -267,10 +311,15 @@ describe("webhook.service handleStripeWebhook", () => {
     const other: VerifiedEvent = {
       id: "evt_other",
       type: "charge.refunded",
+      eventAccountId: null,
       paymentIntentId: "pi_x",
       tipId: "tip_x",
       accountId: null,
       payoutsEnabled: null,
+      requirementsPendingVerificationCount: null,
+      requirementsErrorCount: null,
+      requirementsPastDueCount: null,
+      requirementsCurrentlyDueCount: null,
       payoutId: null,
       payoutMetadataId: null,
       payoutArrivedAt: null,
@@ -300,7 +349,7 @@ describe("webhook.service handleStripeWebhook", () => {
       succeededEvent("evt_3"),
     );
 
-    expect(update.byTipId).toHaveBeenCalledWith("tip_1", "succeeded", "pi_1");
+    expect(update.byTipId).toHaveBeenCalledWith("tip_1", "succeeded", "pi_1", null);
     expect(result.tipUpdated).toBe(false);
   });
 
@@ -321,7 +370,14 @@ describe("webhook.service handleStripeWebhook", () => {
       accountUpdatedEvent("evt_acct_1", "acct_123", true),
     );
 
-    expect(applyAccountUpdate).toHaveBeenCalledWith("acct_123", true);
+    // account 状態（payouts_enabled・requirements の各件数）がオブジェクトで渡る
+    expect(applyAccountUpdate).toHaveBeenCalledWith("acct_123", {
+      payoutsEnabled: true,
+      requirementsErrorCount: 0,
+      pendingVerificationCount: 0,
+      pastDueCount: 0,
+      currentlyDueCount: 0,
+    });
     // tip の決済更新（byTipId / byPaymentIntentId）は呼ばれない
     expect(update.byTipId).not.toHaveBeenCalled();
     expect(result).toEqual({
@@ -413,9 +469,79 @@ describe("webhook.service handleStripeWebhook", () => {
       accountUpdatedEvent("evt_acct_pending", "acct_999", false),
     );
 
-    expect(applyAccountUpdate).toHaveBeenCalledWith("acct_999", false);
+    expect(applyAccountUpdate).toHaveBeenCalledWith("acct_999", {
+      payoutsEnabled: false,
+      requirementsErrorCount: 0,
+      pendingVerificationCount: 0,
+      pastDueCount: 0,
+      currentlyDueCount: 0,
+    });
     expect(result.identityVerified).toBe(false);
     expect(result.promotedTips).toBe(0);
+  });
+
+  it("account.updated の requirements（errors / pending_verification / past_due / currently_due）を反映関数へ渡す", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(0);
+    const applyAccountUpdate = makeApplyAccountUpdate(0);
+
+    // 審査NG相当（errors 1件・審査中 4件・past_due 2件・currently_due 3件）の account.updated
+    const result = await handleStripeWebhook(
+      repo,
+      update,
+      applyAccountUpdate,
+      noopApplyPayoutUpdate,
+      noopSettlementDeps,
+      accountUpdatedEvent("evt_acct_req", "acct_req", false, {
+        errorCount: 1,
+        pendingVerificationCount: 4,
+        pastDueCount: 2,
+        currentlyDueCount: 3,
+      }),
+    );
+
+    // 抽出した requirements の件数がそのまま反映関数へ渡る（状態遷移の判定は staff 側で行う）
+    expect(applyAccountUpdate).toHaveBeenCalledWith("acct_req", {
+      payoutsEnabled: false,
+      requirementsErrorCount: 1,
+      pendingVerificationCount: 4,
+      pastDueCount: 2,
+      currentlyDueCount: 3,
+    });
+    // payouts_enabled=false のため verified にはならない（要対応でも held→payable は昇格しない）
+    expect(result.identityVerified).toBe(false);
+    expect(result.promotedTips).toBe(0);
+  });
+
+  it("account.updated で requirements が抽出できなかった場合（null）は 0 扱いで渡す（安全側フォールバック）", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(0);
+    const applyAccountUpdate = makeApplyAccountUpdate(0);
+
+    // 件数がすべて null のイベント（抽出不能）を模す → ?? 0 で要対応へ誤遷移させない
+    const evt: VerifiedEvent = {
+      ...accountUpdatedEvent("evt_acct_null", "acct_null", false),
+      requirementsErrorCount: null,
+      requirementsPendingVerificationCount: null,
+      requirementsPastDueCount: null,
+      requirementsCurrentlyDueCount: null,
+    };
+    await handleStripeWebhook(
+      repo,
+      update,
+      applyAccountUpdate,
+      noopApplyPayoutUpdate,
+      noopSettlementDeps,
+      evt,
+    );
+
+    expect(applyAccountUpdate).toHaveBeenCalledWith("acct_null", {
+      payoutsEnabled: false,
+      requirementsErrorCount: 0,
+      pendingVerificationCount: 0,
+      pastDueCount: 0,
+      currentlyDueCount: 0,
+    });
   });
 
   // --- payout.paid / payout.failed（送金の着金確定・失敗） ---
@@ -576,10 +702,15 @@ describe("webhook.service handleStripeWebhook", () => {
     const evt: VerifiedEvent = {
       id: "evt_charge_updated",
       type: "charge.updated",
+      eventAccountId: null,
       paymentIntentId: "pi_x",
       tipId: "tip_x",
       accountId: null,
       payoutsEnabled: null,
+      requirementsPendingVerificationCount: null,
+      requirementsErrorCount: null,
+      requirementsPastDueCount: null,
+      requirementsCurrentlyDueCount: null,
       payoutId: null,
       payoutMetadataId: null,
       payoutArrivedAt: null,
@@ -712,10 +843,15 @@ describe("webhook.service handleStripeWebhook", () => {
     const evt: VerifiedEvent = {
       id: "evt_refund",
       type: "charge.refunded",
+      eventAccountId: "acct_r",
       paymentIntentId: "pi_r",
       tipId: null,
       accountId: null,
       payoutsEnabled: null,
+      requirementsPendingVerificationCount: null,
+      requirementsErrorCount: null,
+      requirementsPastDueCount: null,
+      requirementsCurrentlyDueCount: null,
       payoutId: null,
       payoutMetadataId: null,
       payoutArrivedAt: null,
@@ -737,6 +873,8 @@ describe("webhook.service handleStripeWebhook", () => {
       kind: "refunded",
       chargeId: "ch_r",
       paymentIntentId: "pi_r",
+      // イベントの発生元口座も渡す（帰属口座検証・多層防御）
+      connectedAccountId: "acct_r",
     });
     // 返金イベントは決済確定の写像をしない（byTipId は呼ばれない）
     expect(update.byTipId).not.toHaveBeenCalled();
@@ -752,10 +890,15 @@ describe("webhook.service handleStripeWebhook", () => {
     const evt: VerifiedEvent = {
       id: "evt_dispute",
       type: "charge.dispute.created",
+      eventAccountId: "acct_d",
       paymentIntentId: "pi_d",
       tipId: null,
       accountId: null,
       payoutsEnabled: null,
+      requirementsPendingVerificationCount: null,
+      requirementsErrorCount: null,
+      requirementsPastDueCount: null,
+      requirementsCurrentlyDueCount: null,
       payoutId: null,
       payoutMetadataId: null,
       payoutArrivedAt: null,
@@ -777,6 +920,7 @@ describe("webhook.service handleStripeWebhook", () => {
       kind: "disputed",
       chargeId: "ch_d",
       paymentIntentId: "pi_d",
+      connectedAccountId: "acct_d",
     });
     expect(result.settlementCorrected).toBe(true);
   });
@@ -790,10 +934,15 @@ describe("webhook.service handleStripeWebhook", () => {
     const evt: VerifiedEvent = {
       id: "evt_refund_same",
       type: "charge.refunded",
+      eventAccountId: null,
       paymentIntentId: "pi_rs",
       tipId: null,
       accountId: null,
       payoutsEnabled: null,
+      requirementsPendingVerificationCount: null,
+      requirementsErrorCount: null,
+      requirementsPastDueCount: null,
+      requirementsCurrentlyDueCount: null,
       payoutId: null,
       payoutMetadataId: null,
       payoutArrivedAt: null,
@@ -810,5 +959,135 @@ describe("webhook.service handleStripeWebhook", () => {
     expect(second.settlementCorrected).toBe(false);
     // 反映は1回だけ（二重遷移しない）
     expect(applySettlementCorrection).toHaveBeenCalledTimes(1);
+  });
+});
+
+// --- MAJOR-5: 冪等記録と業務処理の分離（イベントの恒久ロスト防止） ---
+
+describe("webhook.service 業務処理の失敗と再送（processed_at の契約）", () => {
+  it("業務処理が成功したら markEventProcessed で処理済みを刻む", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(1);
+
+    await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
+      noopSettlementDeps,
+      succeededEvent("evt_mark"),
+    );
+
+    // 成功時は処理済みマークが1回呼ばれる
+    expect(repo.markEventProcessed).toHaveBeenCalledWith("evt_mark");
+  });
+
+  it("業務処理が失敗したら処理済みにせず、再送（同一イベント ID）で再処理できる", async () => {
+    const repo = makeWebhookRepo();
+    // 1回目は業務処理（tip 更新）が失敗し、2回目（再送）は成功するモック
+    let calls = 0;
+    const byTipId = vi.fn(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error("db down");
+      return 1;
+    });
+    const update = { byTipId, byPaymentIntentId: vi.fn(async () => 0) };
+
+    // 1回目: 業務処理が失敗 → 例外が伝播し、処理済みマークは付かない
+    await expect(
+      handleStripeWebhook(
+        repo,
+        update,
+        noopApplyAccountUpdate,
+        noopApplyPayoutUpdate,
+        noopSettlementDeps,
+        succeededEvent("evt_retry"),
+      ),
+    ).rejects.toThrow("db down");
+    expect(repo.markEventProcessed).not.toHaveBeenCalled();
+
+    // 2回目（Stripe の再送）: duplicate 扱いにならず再処理され、今度は成功して処理済みになる
+    const second = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
+      noopSettlementDeps,
+      succeededEvent("evt_retry"),
+    );
+    expect(second.duplicate).toBe(false);
+    expect(second.tipUpdated).toBe(true);
+    expect(repo.markEventProcessed).toHaveBeenCalledWith("evt_retry");
+
+    // 3回目: 処理済みの再送は冪等にスキップされ、業務処理は再実行されない
+    const third = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
+      noopSettlementDeps,
+      succeededEvent("evt_retry"),
+    );
+    expect(third.duplicate).toBe(true);
+    expect(byTipId).toHaveBeenCalledTimes(2);
+  });
+});
+
+// --- MAJOR-7: イベントの帰属口座検証（多層防御） ---
+
+describe("webhook.service 帰属口座（eventAccountId）の引き渡し", () => {
+  it("Connect スコープのイベントは発生元口座を tip 更新（主経路）へ渡す", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(1);
+
+    await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
+      noopSettlementDeps,
+      { ...succeededEvent("evt_acct_scope"), eventAccountId: "acct_owner" },
+    );
+
+    // 発生元口座がそのまま渡り、Repository 側で「tip の店員の口座と一致する場合だけ」更新される
+    expect(update.byTipId).toHaveBeenCalledWith("tip_1", "succeeded", "pi_1", "acct_owner");
+  });
+
+  it("従経路（PaymentIntent ID）でも発生元口座を渡す", async () => {
+    const repo = makeWebhookRepo();
+    const update = makeUpdateDeps(1);
+
+    await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
+      noopSettlementDeps,
+      {
+        ...succeededEvent("evt_acct_scope_pi", { tipId: null, piId: "pi_scope" }),
+        eventAccountId: "acct_owner2",
+      },
+    );
+
+    expect(update.byPaymentIntentId).toHaveBeenCalledWith("pi_scope", "succeeded", "acct_owner2");
+  });
+
+  it("帰属不一致（0行更新）でも受理は成立する（tipUpdated=false・エラーにしない）", async () => {
+    const repo = makeWebhookRepo();
+    // Repository が帰属不一致で 0 行更新を返すケース
+    const update = makeUpdateDeps(0);
+
+    const result = await handleStripeWebhook(
+      repo,
+      update,
+      noopApplyAccountUpdate,
+      noopApplyPayoutUpdate,
+      noopSettlementDeps,
+      { ...succeededEvent("evt_mismatch"), eventAccountId: "acct_evil" },
+    );
+
+    // 不一致は無視（0行更新）され、イベント自体は処理済みになる（攻撃者による再送ループを作らない）
+    expect(result.tipUpdated).toBe(false);
+    expect(repo.markEventProcessed).toHaveBeenCalledWith("evt_mismatch");
   });
 });

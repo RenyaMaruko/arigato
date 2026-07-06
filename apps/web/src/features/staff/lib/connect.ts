@@ -42,5 +42,30 @@ export function initConnectOnboarding(): StripeConnectInstance {
       const session = await createConnectAccountSession();
       return session.clientSecret;
     },
+    // 埋め込みUIの見た目をアプリのデザイントークン（design-tokens.md / tailwind.config）に寄せる。
+    // 色・フォント・角丸を合わせ、Stripe画面がアプリに馴染むようにする（構造はStripeが描画）。
+    appearance: {
+      variables: {
+        // フォント（アプリ本文と同じ Noto Sans JP）
+        fontFamily: '"Noto Sans JP", sans-serif',
+        // 基本色（rose=アクセント / ink=本文 / page=背景 / line=罫線）
+        colorPrimary: "#ec3a6d",
+        colorText: "#1f2024",
+        colorBackground: "#ffffff",
+        colorBorder: "#e6e7ea",
+        // 主ボタンをアプリの rose 塗りボタンと同じトーンに
+        buttonPrimaryColorBackground: "#ec3a6d",
+        buttonPrimaryColorBorder: "#ec3a6d",
+        buttonPrimaryColorText: "#ffffff",
+        // リンク・アクション文字も rose に
+        actionPrimaryColorText: "#ec3a6d",
+        // フォームのアクセント（チェック・ラジオ等）
+        formAccentColor: "#ec3a6d",
+        // 角丸（アプリの rounded-xl=14px に合わせる。フォームは少し控えめ）
+        buttonBorderRadius: "14px",
+        formBorderRadius: "12px",
+        borderRadius: "12px",
+      },
+    },
   });
 }

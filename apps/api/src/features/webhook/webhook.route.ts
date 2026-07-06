@@ -47,9 +47,21 @@ export function createWebhookRoute(deps: WebhookDeps) {
       return c.json({ error: "webhook_error" }, 400);
     }
 
-    // 検証済みイベントを処理（冪等性・tip 更新）。Stripe へは 200 を返す（再送を止める）
-    const result = await deps.handleEvent(event);
-    return c.json(result, 200);
+    // 検証済みイベントを処理（冪等性・tip 更新）。
+    // 業務処理が失敗した場合は 500 を返して Stripe の再送に委ねる（processed_at 未セットのため
+    // 再送で再処理される＝イベントの恒久ロスト防止）。
+    try {
+      await deps.handleEvent(event);
+    } catch (err) {
+      console.error(
+        "[webhook.route] Webhook の業務処理に失敗しました（Stripe の再送で再処理されます）:",
+        err instanceof Error ? err.message : err,
+      );
+      return c.json({ error: "processing_failed" }, 500);
+    }
+
+    // 成功時は受理のみ返す（内部の処理結果は外部へ返さない）。Stripe へは 200（再送を止める）
+    return c.json({ received: true }, 200);
   });
 
   return route;

@@ -117,9 +117,20 @@ function StoreInviteResendContent({ store }: { store: StoreProfile }) {
               </svg>
             </div>
 
+            {/* 招待の種類バッジ（スタッフ招待／管理者招待） */}
+            {invite && (
+              <div className="mt-6 flex justify-center">
+                <span className="rounded-pill bg-rose-soft px-3 py-1 text-token-xs font-bold text-rose">
+                  {invite.type === "admin"
+                    ? t("store.invitedTypeAdminBadge")
+                    : t("store.invitedTypeStaffBadge")}
+                </span>
+              </div>
+            )}
+
             {/* 招待者名（入れていれば表示。無記名なら出さない） */}
             {invite?.label && (
-              <div className="mt-6 text-center text-token-xl font-bold text-ink">
+              <div className="mt-3 text-center text-token-xl font-bold text-ink">
                 {invite.label}
               </div>
             )}

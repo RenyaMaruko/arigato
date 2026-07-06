@@ -1,4 +1,10 @@
 import { createTipRepository } from "../features/tip/tip.repository.js";
+import type { TipRepository } from "../features/tip/tip.repository.js";
+import {
+  PENDING_TIP_EXPIRY_HOURS,
+  isPendingTipExpired,
+  shouldExpirePendingIntentStatus,
+} from "../features/tip/tip.model.js";
 import { createStaffRepository } from "../features/staff/staff.repository.js";
 import type {
   StaffRepository,
@@ -39,15 +45,46 @@ export type ReconcileSummary = {
   succeeded: number;
   failed: number;
   skipped: number;
+  // 期限切れ（作成から PENDING_TIP_EXPIRY_HOURS 時間超）で failed 化した孤児 pending の件数
+  expired: number;
+};
+
+// 突合ジョブの依存（コンポジション。テストではモックを注入する）
+export type StripeReconcileDeps = {
+  // tip Repository（pending 列挙・確定更新・孤児 pending の掃除）
+  repo: TipRepository;
+  // Stripe 側の PaymentIntent ステータスを取得する（Connected Account 上にあるため口座 ID 指定）
+  fetchIntentStatus: typeof fetchPaymentIntentStatus;
+  // 現在時刻（期限切れ判定に使う。テストで固定できる）
+  now: () => Date;
 };
 
 /**
  * 突合ジョブの本体。pending な tip を列挙し、Stripe の実ステータスと突合して更新する。
  * 1件のエラーで全体を止めず、件ごとに握って処理を続ける（夜間バッチの耐障害性）。
+ *
+ * 孤児 pending の掃除（回収経路の整備）:
+ *  - PaymentIntent が requires_payment_method 等（お客さまの操作待ち）のまま
+ *    作成から PENDING_TIP_EXPIRY_HOURS 時間を超えた pending は failed へ確定する。
+ *  - PaymentIntent を持たないまま期限を超えた pending も failed へ確定する（一括 SQL）。
+ *  お金は一切動いていないため安全。万一決済が遅延確定しても failed→succeeded の救済遷移で復活できる。
+ * 依存（Repository / Stripe / 現在時刻）は注入できる（省略時は実 DB ＋ 実 Stripe を配線する）。
  */
-export async function runStripeReconcile(): Promise<ReconcileSummary> {
-  const repo = createTipRepository();
-  const summary: ReconcileSummary = { checked: 0, succeeded: 0, failed: 0, skipped: 0 };
+export async function runStripeReconcile(
+  deps?: Partial<StripeReconcileDeps>,
+): Promise<ReconcileSummary> {
+  // 既定の配線（実 DB ＋ 実 Stripe）。テストでは deps を渡して差し替える。
+  const repo = deps?.repo ?? createTipRepository();
+  const fetchIntentStatus = deps?.fetchIntentStatus ?? fetchPaymentIntentStatus;
+  const now = deps?.now ?? (() => new Date());
+
+  const summary: ReconcileSummary = {
+    checked: 0,
+    succeeded: 0,
+    failed: 0,
+    skipped: 0,
+    expired: 0,
+  };
 
   // 決済未確定（pending）かつ PaymentIntent 作成済みの tip を取得
   const pendings = await repo.listPendingTipsForReconcile();
@@ -56,21 +93,27 @@ export async function runStripeReconcile(): Promise<ReconcileSummary> {
     summary.checked += 1;
     try {
       // PaymentIntent 方式では tip 作成時点で PaymentIntent ID が確定している。
-      // PaymentIntent が無い行（理論上の取りこぼし）はスキップする。
+      // PaymentIntent が無い行（理論上の取りこぼし）はスキップする（期限切れ分は後段の一括掃除が拾う）。
       if (!tip.paymentIntentId) {
         summary.skipped += 1;
         continue;
       }
 
       // Stripe 側の PaymentIntent ステータスを読む（Connected Account 上にあるため口座 ID 指定）
-      const snapshot = await fetchPaymentIntentStatus(
-        tip.paymentIntentId,
-        tip.connectedAccountId,
-      );
+      const snapshot = await fetchIntentStatus(tip.paymentIntentId, tip.connectedAccountId);
 
       const nextStatus = mapPaymentIntentStatusToTip(snapshot.status);
       if (!nextStatus) {
-        // まだ確定していない → スキップ（次回の突合に回す）
+        // まだ確定していない。お客さまの操作待ち（requires_*）のまま期限を超えたものは failed へ掃除する。
+        // processing（資金が動いている可能性）は期限に関わらず触らない（次回の突合に回す）。
+        if (
+          shouldExpirePendingIntentStatus(snapshot.status) &&
+          isPendingTipExpired(tip.createdAt, now())
+        ) {
+          await repo.updateTipStatusByTipId(tip.tipId, "failed", tip.paymentIntentId);
+          summary.expired += 1;
+          continue;
+        }
         summary.skipped += 1;
         continue;
       }
@@ -84,6 +127,16 @@ export async function runStripeReconcile(): Promise<ReconcileSummary> {
       console.error(`[reconcile] tip=${tip.tipId} の突合に失敗: ${message}`);
       summary.skipped += 1;
     }
+  }
+
+  // PaymentIntent を持たないまま期限を超えた pending を一括で failed へ掃除する
+  // （listPendingTipsForReconcile の対象外＝口座なし・PI なしの孤児もここで回収する）。
+  try {
+    summary.expired += await repo.failStalePendingTipsWithoutIntent(PENDING_TIP_EXPIRY_HOURS);
+  } catch (err) {
+    // 掃除の失敗は突合結果を壊さない（ログに残して次回に回す）
+    const message = err instanceof Error ? err.message : String(err);
+    console.error(`[reconcile] 孤児 pending の掃除に失敗: ${message}`);
   }
 
   return summary;

@@ -20,8 +20,9 @@ export function calculateStaffTakeAmount(faceAmount: number): number {
   return Math.floor(faceAmount * STAFF_TAKE_RATE);
 }
 
-// 本人確認の状態（none: 未着手 / pending: 審査中 / verified: 着金可能）
-export type IdentityStatus = "none" | "pending" | "verified";
+// 本人確認の状態
+// （none: 未着手 / pending: 審査中 / action_required: 要対応＝審査NG・追加書類 / verified: 着金可能）
+export type IdentityStatus = "none" | "pending" | "action_required" | "verified";
 
 // 招待のステータス（pending: 未消費 / accepted: 消費済み / revoked: 失効）
 export type InviteStatus = "pending" | "accepted" | "revoked";
@@ -38,21 +39,59 @@ export function canPayout(status: IdentityStatus): boolean {
   return status === "verified";
 }
 
+// account.updated から抽出した Connected Account の状態（deriveIdentityStatus の入力）。
+// Stripe は審査NG・追加書類を専用イベントではなく requirements の中身で返すため、
+// payouts_enabled に加えて requirements の各件数を渡す。
+// 注意: details_submitted はシグナルとして使わない。うちは受け取りを先に有効化するため作成時に
+// 情報を事前入力しており、連結アカウント作成直後から true になる＝「提出したか」を表せない。
+export type ConnectAccountState = {
+  // 送金（payout）が有効になったか（本人確認完了の確定シグナル・最優先）
+  payoutsEnabled: boolean;
+  // requirements.errors の件数（審査NG・書類不備の明示エラー）
+  requirementsErrorCount: number;
+  // requirements.pending_verification の件数（提出済み・Stripe が審査中の項目）
+  pendingVerificationCount: number;
+  // requirements.past_due の件数（期限切れの未提出項目。事前入力の都合で新規口座でも立つ）
+  pastDueCount: number;
+  // requirements.currently_due の件数（今求められている未提出項目）
+  currentlyDueCount: number;
+};
+
 /**
  * Stripe の account.updated（Connected Account の状態）から本人確認の状態を導く純粋関数。
- * payouts_enabled が true になったら verified（着金可能）。
- * まだなら、まだ未着手（none）でなければ審査中（pending）として扱う。
+ *  1. payouts_enabled=true → verified（着金可能・最優先）
+ *  2. 一度 verified になったら後退させない（取りこぼし再送対策）
+ *  3. requirements.errors が1件以上 → action_required（審査NG・書類不備の明示エラー）
+ *  4. pending_verification が1件以上 → pending（提出済み・Stripe が審査中）
+ *  5. currently_due / past_due が残っているだけなら:
+ *      - none（未着手）は none 据え置き（作成直後の新規口座にも要求＋past_due が立つため。
+ *        「本人確認をする」導線を保ち、誤って要対応に見せない）
+ *      - それ以外は action_required（提出後の人への追加要求＝要対応）
+ *  6. それ以外（要求なし・審査項目なし・未承認の狭間）:
+ *      - none は none 据え置き、それ以外は pending（要対応も問題が消えれば pending に戻る）
  * 本人確認は「後ろ倒し」のため、none のまま投げ銭は受け付けており、verified への遷移だけを着金の起点にする。
  */
 export function deriveIdentityStatus(
   current: IdentityStatus,
-  payoutsEnabled: boolean,
+  account: ConnectAccountState,
 ): IdentityStatus {
-  // 着金可能になった瞬間に verified へ確定する
-  if (payoutsEnabled) return "verified";
-  // 一度 verified になったら（取りこぼし再送などで）後退させない
+  // 【1】着金可能になった瞬間に verified へ確定する（要対応の残骸があっても verified を優先）
+  if (account.payoutsEnabled) return "verified";
+  // 【2】一度 verified になったら（取りこぼし再送などで）後退させない
   if (current === "verified") return "verified";
-  // オンボーディング進行中は審査中として扱う
+  // 【3】審査NG・書類不備の明示エラー → 要対応（/staff/identity で修正・再提出できる）
+  if (account.requirementsErrorCount > 0) return "action_required";
+  // 【4】提出済みで Stripe が審査中 → 申請中（全提出直後の applied 検知もここで拾う）
+  if (account.pendingVerificationCount > 0) return "pending";
+  // 【5】未提出の要求が残っている（エラーなし・審査中項目なし）
+  if (account.currentlyDueCount > 0 || account.pastDueCount > 0) {
+    // 未着手の人に要求が残っているだけ＝新規口座（事前入力で past_due も立つ）。据え置き
+    if (current === "none") return "none";
+    // 提出後の人への追加要求 → 要対応
+    return "action_required";
+  }
+  // 【6】要求なし・審査項目なし（未承認の狭間）。未着手は据え置き、それ以外は審査中扱いに戻す
+  if (current === "none") return "none";
   return "pending";
 }
 
@@ -217,6 +256,81 @@ export function selectPayoutTipsWithinAvailable(
     tipIds.push(tip.tipId);
   }
   return { tipIds, amount };
+}
+
+// 送金 claim（payable→paid の実確保）が選定内容と食い違ったときに投げる業務エラー。
+// 並行送金・返金レースで「選んだはずの tip を実際には確保できなかった」ことを表す終了シグナルで、
+// Repository がトランザクション内で投げて全ロールバックさせる（Stripe 未呼出＝資金は動かない）。
+// Route では 409（payout_conflict）に変換する。
+export class PayoutConflictError extends Error {
+  constructor(reason: PayoutClaimFailureReason) {
+    super(`payout_conflict:${reason}`);
+    this.name = "PayoutConflictError";
+  }
+}
+
+// 送金 claim の検証が失敗した理由（count_mismatch: 選定と実確保の件数不一致 / below_minimum: 実確保合計が最低送金額未満）
+export type PayoutClaimFailureReason = "count_mismatch" | "below_minimum";
+
+// 送金 claim の検証結果。ok のとき amount は「実際に確保できた tip の手取り合計」＝Stripe へ送る額。
+export type PayoutClaimVerification =
+  | { ok: true; amount: number }
+  | { ok: false; reason: PayoutClaimFailureReason };
+
+/**
+ * 送金 claim（UPDATE ... RETURNING で実際に payable→paid へ確保できた tip）を検証する純粋関数。
+ * 「事前選定した額をそのまま送金する」のではなく「実際に確保できた分だけを送金する」ための整合ルール:
+ *  - 実確保の件数が選定件数と一致しない（間に別送金・返金が割り込んだ）→ count_mismatch。
+ *  - 実確保した tip の手取り合計が最低送金額（¥100）未満 → below_minimum。
+ *  - どちらも満たせば ok。amount（手取り合計）を payout 行の額・Stripe 送金額に使う。
+ * claimedFaceAmounts は実際に更新できた tip の「額面」一覧を渡す（手取り換算はここで行う）。
+ */
+export function verifyPayoutClaim(
+  selectedCount: number,
+  claimedFaceAmounts: number[],
+): PayoutClaimVerification {
+  // 選定と実確保の件数が食い違えば競合（並行送金・返金レース）
+  if (claimedFaceAmounts.length !== selectedCount) {
+    return { ok: false, reason: "count_mismatch" };
+  }
+  // 実確保した tip の手取り合計（表示・選定と同じ換算で整合させる）
+  const amount = claimedFaceAmounts.reduce(
+    (sum, face) => sum + calculateStaffTakeAmount(face),
+    0,
+  );
+  // 実確保合計が最低送金額未満なら送金しない（0件＝0円を含む）
+  if (amount < MIN_PAYOUT_AMOUNT) {
+    return { ok: false, reason: "below_minimum" };
+  }
+  return { ok: true, amount };
+}
+
+// Stripe payout 実行エラーの分類
+// （definite_failure: Stripe 側で payout 未作成が確実 / ambiguous: 成立したか不明＝revert してはいけない）
+export type StripePayoutErrorClass = "definite_failure" | "ambiguous";
+
+// 「成立したか不明」な Stripe エラー型（stripe-node の err.type）。
+//  - StripeConnectionError: 接続断・タイムアウト（リクエストが届いたか／レスポンスが落ちたか不明）
+//  - StripeAPIError: Stripe 側の 5xx（処理されたか不明）
+const AMBIGUOUS_STRIPE_ERROR_TYPES = new Set(["StripeConnectionError", "StripeAPIError"]);
+
+/**
+ * Stripe payout 実行時のエラーを「確定失敗」か「曖昧」かに分類する純粋関数。
+ * 曖昧（接続断・タイムアウト・5xx）は payout が実は成立している可能性があるため revert してはいけない
+ * （revert→再送金で二重払いになる）。それ以外（StripeInvalidRequestError / StripeCardError 等の
+ * リクエスト拒否や、SDK 到達前の一般エラー）は Stripe 側で payout 未作成が確実なので従来どおり revert する。
+ * stripe-node のエラーは err.type にクラス名（例: "StripeConnectionError"）を持つため、それで判定する。
+ */
+export function classifyStripePayoutError(err: unknown): StripePayoutErrorClass {
+  // stripe-node のエラーは type プロパティにエラー型名を持つ（SDK を import せず純粋に判定する）
+  const type =
+    typeof err === "object" && err !== null && "type" in err
+      ? (err as { type: unknown }).type
+      : null;
+  if (typeof type === "string" && AMBIGUOUS_STRIPE_ERROR_TYPES.has(type)) {
+    return "ambiguous";
+  }
+  return "definite_failure";
 }
 
 // 受取履歴のキーセットページングで使うカーソル（最後に取得した行の位置）。

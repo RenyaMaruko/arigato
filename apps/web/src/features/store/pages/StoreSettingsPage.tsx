@@ -56,6 +56,20 @@ function StoreSettingsContent() {
             }
           />
           <Divider />
+          {/* 管理者（owner/admin の一覧）。スタッフ画面の「管理者」タブへ集約（§11.2）。
+              owner のみ操作（外す・オーナー譲渡）はスタッフ詳細で出し分ける */}
+          <SettingRow
+            label={t("store.settingsAdmins")}
+            onClick={() => navigate({ to: "/store/staff", search: { tab: "admins" } })}
+            icon={
+              <>
+                <circle cx="9" cy="8" r="3.2" />
+                <path d="M3.5 19c0-3.2 2.6-5 5.5-5s5.5 1.8 5.5 5" />
+                <path d="M16 8.5a2.6 2.6 0 1 0 0-1M17 14c2.2.3 3.8 1.8 3.8 4.2" />
+              </>
+            }
+          />
+          <Divider />
           <SettingRow
             label={t("store.settingsApproval")}
             onClick={() => navigate({ to: "/store/approval" })}
@@ -101,6 +115,11 @@ function StoreSettingsContent() {
             }
           />
         </div>
+
+        {/*
+          モード切替は設定から廃止（§11.4）。
+          店の管理 → 店員モードの切替は、ボトムナビ中央の切替ボタン（StoreModeSwitch）に一本化した。
+        */}
 
         {/* ログアウト */}
         <button

@@ -1,7 +1,7 @@
 ---
 name: generator
 description: "仕様書とスプリント契約に基づいてコードを実装するフルスタック開発者。動くものを作ることに集中し、スタブやTODOを残さない。"
-model: opus
+model: claude-fable-5
 color: orange
 ---
 

@@ -3,6 +3,7 @@ import {
   generateInviteCode,
   buildInviteUrl,
   summarizeGratitudeCounts,
+  decideOwnerSuccession,
 } from "./store.model.js";
 
 /**
@@ -92,5 +93,27 @@ describe("store.model", () => {
   it("summarizeGratitudeCounts: 空配列なら全件数 0", () => {
     const counts = summarizeGratitudeCounts([], new Date("2026-06-23T03:00:00Z"));
     expect(counts).toEqual({ totalCount: 0, weekCount: 0 });
+  });
+
+  // owner 自動継承の判定（owner ライフサイクル §5.4）
+  it("decideOwnerSuccession: 残る管理者がいれば最古参（created_at 最小）を昇格する", () => {
+    const decision = decideOwnerSuccession([
+      { authUserId: "new", createdAt: "2026-06-25T00:00:00Z" },
+      { authUserId: "old", createdAt: "2026-06-24T00:00:00Z" },
+      { authUserId: "mid", createdAt: "2026-06-24T12:00:00Z" },
+    ]);
+    expect(decision).toEqual({ kind: "promote", authUserId: "old" });
+  });
+
+  it("decideOwnerSuccession: created_at 同着は authUserId 昇順で決定的に選ぶ", () => {
+    const decision = decideOwnerSuccession([
+      { authUserId: "b", createdAt: "2026-06-24T00:00:00Z" },
+      { authUserId: "a", createdAt: "2026-06-24T00:00:00Z" },
+    ]);
+    expect(decision).toEqual({ kind: "promote", authUserId: "a" });
+  });
+
+  it("decideOwnerSuccession: 残る管理者がいなければ閉店（close）を返す", () => {
+    expect(decideOwnerSuccession([])).toEqual({ kind: "close" });
   });
 });

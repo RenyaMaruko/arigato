@@ -77,6 +77,56 @@ export const ja = {
       // 決済開始（Checkout 作成）に失敗したとき
       payStartError: "決済を開始できませんでした。もう一度お試しください。",
     },
+    // 統合ログイン／サインアップ・パスワード再設定（店員・店舗共通の唯一の認証入口）
+    auth: {
+      // ログイン／サインアップ画面
+      loginTitle: "ログイン",
+      signupTitle: "アカウント作成",
+      loginLead: "メールアドレスとパスワードでログイン",
+      signupLead: "メールアドレスとパスワードで新規登録",
+      continueWithGoogle: "Google で続ける",
+      or: "または",
+      emailLabel: "メールアドレス",
+      emailPlaceholder: "you@example.com",
+      passwordLabel: "パスワード",
+      passwordPlaceholder: "8文字以上",
+      loginSubmit: "ログイン",
+      signupSubmit: "アカウントを作成",
+      toSignup: "アカウントをお持ちでない方はこちら",
+      toLogin: "すでにアカウントをお持ちの方はこちら",
+      forgotPassword: "パスワードをお忘れですか？",
+      // 入力・認証のエラー
+      emailEmpty: "メールアドレスを入力してください。",
+      passwordEmpty: "パスワードを入力してください。",
+      passwordTooShort: "パスワードは8文字以上で入力してください。",
+      loginError: "ログインに失敗しました。メールアドレスとパスワードをご確認ください。",
+      emailNotConfirmed:
+        "メールの確認が完了していません。確認メールのリンクを開いてからログインしてください。",
+      signupError: "登録に失敗しました。もう一度お試しください。",
+      signupExists: "このメールアドレスは既に登録されています。ログインをお試しください。",
+      // サインアップ後（メール確認の案内）
+      signupSentTitle: "確認メールを送りました",
+      signupSentLead:
+        "メールのリンクを開くと登録が完了します。確認後にログインできます。",
+      backToLogin: "ログインへ戻る",
+      loginNote: "店の招待リンクからの登録で、所属が確定します",
+      // パスワード再設定（申請）
+      resetTitle: "パスワードの再設定",
+      resetRequestLead: "登録したメールアドレスに、再設定用のリンクを送ります。",
+      resetSubmit: "再設定メールを送る",
+      resetSentLead: "メールのリンクを開いて、新しいパスワードを設定してください。",
+      resetError: "送信に失敗しました。もう一度お試しください。",
+      // パスワード再設定（新パスワード設定）
+      newPasswordTitle: "新しいパスワードを設定",
+      newPasswordLead: "新しいパスワードを入力してください。",
+      newPasswordLabel: "新しいパスワード",
+      newPasswordConfirmLabel: "新しいパスワード（確認）",
+      newPasswordSubmit: "パスワードを変更する",
+      newPasswordMismatch: "パスワードが一致しません。",
+      newPasswordDoneTitle: "パスワードを変更しました",
+      newPasswordDoneLead: "新しいパスワードでご利用いただけます。",
+      toHome: "ホームへ",
+    },
     // 店員さん画面
     staff: {
       san: "さん",
@@ -86,8 +136,6 @@ export const ja = {
       continueWithGoogle: "Google で続ける",
       emailLabel: "メールアドレス",
       emailPlaceholder: "you@example.com",
-      sendMagicLink: "メールでログインリンクを送る",
-      magicLinkSent: "ログイン用のリンクをメールに送りました。メールを確認してください。",
       or: "または",
       loginNote: "店の招待リンクからの登録で、所属が確定します",
       loginError: "ログインに失敗しました。もう一度お試しください。",
@@ -106,6 +154,11 @@ export const ja = {
       inviteLead: "このお店の店員さんとして登録します",
       inviteStoreLabel: "所属するお店",
       inviteStart: "参加する",
+      // 管理者招待（type=admin）の受け入れ表示
+      inviteTitleAdmin: "管理者への招待",
+      inviteLeadAdmin: "このお店の管理者として参加します",
+      inviteStoreLabelAdmin: "管理するお店",
+      inviteValidAdmin: "の管理者になります",
       // 参加（join）の処理中・完了・既に所属
       joining: "参加処理中…",
       joinErrorInvite: "招待が無効です。コードを確認してください。",
@@ -129,6 +182,8 @@ export const ja = {
       // ホーム
       homeQr: "QRを表示",
       homeProfile: "プロフィール",
+      // ホームの「店舗作成」タイル（§11.4・管理店の有無に関わらず常に表示）
+      homeCreateStore: "店舗作成",
       homeWelcome: "ようこそ",
       // 所属店一覧（複数可・掛け持ち）。各店ごとにQRへ導く
       homeStoresLabel: "所属しているお店",
@@ -145,6 +200,12 @@ export const ja = {
       homeBalanceSendableNote: "いま送金できる額 {{amount}}（残りは準備中です）",
       // 残高のすぐ下のアクション（未確認＝本人確認へ／確認済＝残高の詳細へ）
       homeVerifyCta: "本人確認をする",
+      // 本人確認の申請中（審査待ち）。状態表示＋審査期間の一言（やることは無いため導線は出さない）
+      homeIdentityPendingCta: "ただいま申請中",
+      homeIdentityPendingNote: "本人確認を審査中です（1〜2営業日ほどかかります）",
+      // 本人確認の要対応（審査NG・追加書類）。一言＋押せるボタン（/staff/identity で修正・再提出できる）
+      homeIdentityActionRequiredNote: "本人確認で追加の確認が必要です",
+      homeIdentityActionRequiredCta: "追加の確認が必要です",
       homeBalanceDetailCta: "残高の詳細を見る",
       // 確認済みのホームの主アクション（送金画面へ）
       homePayoutCta: "送金する",
@@ -237,6 +298,8 @@ export const ja = {
       payoutPendingSub: "（受け取り後、数日で送金できるようになります）",
       // {{date}} に available になる日付（例: 7月1日）。available_on が取れたときだけ出す
       payoutPendingDate: "{{date}}から送金できます",
+      // 準備中の日付ごとの行ラベル（{{date}} に「M月D日」。例: 7月1日から）。日付ごとの内訳行に使う
+      payoutPendingBucketDate: "{{date}}から",
       payoutHeldLabel: "本人確認待ち",
       payoutHeldSub: "（本人確認を済ませると送金できるようになります）",
       // 準備中で「送金できる額」が0のときの理由
@@ -245,7 +308,7 @@ export const ja = {
       payoutCta: "送金する",
       payoutConfirmTitle: "送金の確認",
       // {{amount}} に送金額（例: ¥7,650）
-      payoutConfirmBody: "{{amount}} を登録口座へ送金します。申請から数営業日で着金します。",
+      payoutConfirmBody: "{{amount}} を登録口座へ送金します。\n申請から数営業日で着金します。",
       payoutConfirmCta: "送金する",
       payoutCancel: "キャンセル",
       payoutSending: "送金中…",
@@ -281,14 +344,17 @@ export const ja = {
       identityStart: "手続きをはじめる",
       identityStarting: "リンクを準備中…",
       identityError: "手続きを開始できませんでした。もう一度お試しください。",
-      // 本人確認完了（07）
-      identityCompleteTitle: "本人確認が完了しました！",
-      identityCompleteSub: "保留残高が着金可能になりました",
-      identityCompleteAmountLabel: "着金可能額として利用できます",
-      identityCompletePending: "本人確認の手続きを確認しています…",
-      identityCompletePendingNote: "完了が反映されると、この画面が切り替わります。",
-      identityCompleteSeeBalance: "残高を確認する",
-      identityCompleteSeeHistory: "履歴を見る",
+      // 本人確認の申請完了（07）。提出の反映（Webhook・数秒）を待ってから申請完了を出す
+      identityApplying: "申請中…",
+      identityApplyingNote: "申請の完了を確認しています。数秒お待ちください。",
+      identityAppliedTitle: "本人確認の申請が完了しました",
+      identityAppliedNote:
+        "審査には1〜2営業日かかります。\n完了すると送金できるようになります。",
+      // 反映が長引いたとき（断定しない。裏で確認は続けており、届き次第 申請完了へ自動で切り替わる）
+      identityApplyTimeoutTitle: "確認に時間がかかっています",
+      identityApplyTimeoutNote:
+        "このままお待ちいただくと、確認でき次第この画面が切り替わります。手続きが途中の場合は、本人確認の画面から続きを行ってください。",
+      identityApplyTimeoutResume: "手続きを再開する",
       identityCompleteGoHome: "ホームに戻る",
       // 申告データ出力（08）
       exportTitle: "データ出力",
@@ -308,6 +374,13 @@ export const ja = {
       settingsProfile: "プロフィール編集",
       settingsIdentity: "本人確認・口座登録",
       settingsExport: "申告データ（CSV）",
+      // 店の管理・開設への暫定導線（フェーズ1。本格的なモード切替はフェーズ3）
+      settingsStoreAdmin: "店の管理・開設へ",
+      // モード切替（兼任者のみ）・店の開設（管理する店が無い人）。フェーズ3の本設計
+      settingsStoreManage: "店の管理へ",
+      settingsStoreManageSub: "お店の管理モードに切り替える",
+      settingsStoreOpen: "店を開設する",
+      settingsStoreOpenSub: "あなたのお店をはじめる（オーナーになります）",
       // 共通
       loading: "読み込み中…",
     },
@@ -319,8 +392,6 @@ export const ja = {
       continueWithGoogle: "Google で続ける",
       emailLabel: "メールアドレス",
       emailPlaceholder: "store@example.com",
-      sendMagicLink: "メールでログインリンクを送る",
-      magicLinkSent: "ログイン用のリンクをメールに送りました。メールを確認してください。",
       or: "または",
       loginNote: "店舗アカウントでログインしてください",
       loginError: "ログインに失敗しました。もう一度お試しください。",
@@ -332,8 +403,12 @@ export const ja = {
       createNameLabel: "店名",
       createNamePlaceholder: "例）カフェ Arigato",
       createAgreeLabel:
-        "このお店で投げ銭を導入することに同意します（就業規則との整合は店舗側で確認します）。",
+        "このお店で、スタッフがお客さまからチップを受け取ることに同意します。",
       createSubmit: "このお店を作成する",
+      // 店舗作成の完了画面（チェック演出）。{{name}} に店名。「はじめる」で店舗管理へ入る
+      createdTitle: "{{name}} を作成しました！",
+      createdLead: "お店の管理をはじめましょう",
+      createdStart: "はじめる",
       createError: "お店を作成できませんでした。もう一度お試しください。",
       createAlreadyExists: "このアカウントには既にお店があります。",
       // ホーム（01）
@@ -360,13 +435,24 @@ export const ja = {
       staffTitle: "スタッフ一覧",
       staffTabActive: "在籍中",
       staffTabInvited: "招待中",
+      // 管理者タブ（owner＋admin を表示・owner はオーナーバッジ）
+      staffTabAdmins: "管理者",
       staffEmpty: "まだ在籍中のスタッフはいません",
-      staffInviteCta: "スタッフを招待する",
+      staffInviteCta: "招待する",
+      // 招待中タブの種類バッジ（スタッフ招待／管理者招待）
+      invitedTypeStaffBadge: "スタッフ",
+      invitedTypeAdminBadge: "管理者",
+      // 管理者タブが空・読み込み中
+      adminsTabEmpty: "管理者がいません",
       // スタッフ詳細（一覧の行タップ→基本情報・在籍解除）
       staffDetailTitle: "スタッフ詳細",
       staffDetailJoinedAt: "参加日：{{date}}",
       staffDetailNoHeadline: "一言は設定されていません",
       staffDetailLoadError: "スタッフ情報を読み込めませんでした",
+      // スタッフ詳細での管理者操作（owner のみ・対象が管理者のとき・§11.3）
+      staffDetailRemoveAdminCta: "管理者権限を外す",
+      staffDetailMakeOwnerCta: "このユーザーをオーナーにする",
+      staffDetailAdminSectionTitle: "管理者としての操作",
       // 在籍解除（このスタッフを外す）＋確認ダイアログ
       staffRemoveCta: "このスタッフを外す",
       staffRemoveConfirmTitle: "このスタッフを外しますか？",
@@ -378,9 +464,14 @@ export const ja = {
       staffRemoving: "処理中…",
       staffRemoveError: "スタッフを外せませんでした。もう一度お試しください。",
       // スタッフ招待（04）
-      inviteTitle: "スタッフ招待",
+      inviteTitle: "招待",
       inviteHeading: "スタッフを招待するための\nリンクを発行します",
       inviteLead: "このリンクから新規登録したスタッフは、\n自動でこのお店に所属します。",
+      // 招待の種類選択（スタッフとして／管理者として）。管理者は owner のみ選べる（§3.2）
+      inviteTypeSectionLabel: "招待の種類",
+      inviteTypeStaff: "スタッフとして",
+      inviteTypeAdmin: "管理者として",
+      inviteTypeAdminOwnerOnly: "管理者として招待できるのはオーナーだけです",
       // 招待者名（任意メモ。誰宛の招待かを見分けるため）
       inviteLabelLabel: "招待者名",
       inviteLabelPlaceholder: "例：佐藤さん／ホール担当",
@@ -431,7 +522,56 @@ export const ja = {
       settingsTitle: "設定",
       settingsProfile: "店舗プロフィール",
       settingsStaff: "スタッフ招待・管理",
+      settingsAdmins: "管理者",
       settingsApproval: "導入・承認",
+      // モード切替（店の管理→店員モード）。店の管理は兼任者のみ到達するため常に出してよい
+      settingsStaffMode: "店員モードへ",
+      settingsStaffModeSub: "自分の受け取り・QR の画面に切り替える",
+      // 管理者一覧・招待・削除・owner 譲渡・owner 離脱・閉店（フェーズ3）
+      adminsTitle: "管理者",
+      adminsLead: "このお店を管理する人たちです",
+      adminsOwnerBadge: "オーナー",
+      adminsAdminBadge: "管理者",
+      adminsSelf: "（あなた）",
+      adminsNoName: "名前未設定",
+      adminsInviteCta: "管理者を招待する",
+      adminsLoadError: "管理者を読み込めませんでした",
+      // 管理者を外す（owner のみ）
+      adminsRemoveCta: "外す",
+      adminsRemoveConfirmTitle: "この管理者を外しますか？",
+      adminsRemoveConfirmBody: "外すと、この人はお店の管理ができなくなります。受け取り・記録には影響しません。",
+      adminsRemoveConfirmCta: "外す",
+      adminsRemoveCancel: "キャンセル",
+      adminsRemoving: "処理中…",
+      adminsRemoveError: "管理者を外せませんでした。もう一度お試しください。",
+      // owner 譲渡（owner のみ・対象 admin を選ぶ）
+      adminsTransferCta: "オーナーを譲渡",
+      adminsTransferConfirmTitle: "オーナーを譲渡しますか？",
+      adminsTransferConfirmBody: "「{{name}}」をこのお店のオーナーにします。あなたは管理者になります。",
+      adminsTransferConfirmCta: "譲渡する",
+      adminsTransferring: "処理中…",
+      adminsTransferError: "オーナーを譲渡できませんでした。もう一度お試しください。",
+      // owner が店から抜ける・店を閉じる（owner のみ・危険な操作）
+      adminsDangerTitle: "オーナーの操作",
+      adminsLeaveCta: "オーナーを退任して抜ける",
+      adminsLeaveConfirmTitle: "オーナーを退任しますか？",
+      adminsLeaveConfirmBody:
+        "他に管理者がいれば、最も古い管理者が自動でオーナーになります。管理者がいなければお店は閉店します。",
+      adminsLeaveConfirmCta: "退任する",
+      adminsLeaving: "処理中…",
+      adminsLeaveError: "退任できませんでした。もう一度お試しください。",
+      adminsCloseCta: "お店を閉じる（閉店）",
+      adminsCloseConfirmTitle: "お店を閉じますか？",
+      adminsCloseConfirmBody:
+        "閉店するとQR・所属は無効になります。これまでの記録や、スタッフが受け取った収益は残ります。",
+      adminsCloseConfirmCta: "閉店する",
+      adminsClosing: "処理中…",
+      adminsCloseError: "閉店できませんでした。もう一度お試しください。",
+      // 管理者招待（リンク発行・owner のみ）
+      adminInviteTitle: "管理者を招待",
+      adminInviteHeading: "管理者を招待するための\nリンクを発行します",
+      adminInviteLead: "このリンクから参加した人は、\nこのお店の管理者になります。",
+      adminInviteError: "招待リンクの発行に失敗しました。もう一度お試しください。",
       settingsNotifications: "通知設定",
       settingsFaq: "よくある質問",
       settingsContact: "お問い合わせ",
@@ -458,6 +598,23 @@ export const ja = {
       logoTooLarge: "画像サイズが大きすぎます（5MB まで）。",
       // 共通
       back: "戻る",
+    },
+    // ボトムナビ中央の「店舗管理 ⇄ 店員」切替（§11.4・店員側/店側の両ナビ共通）
+    mode: {
+      // 店員モードのラベル・aria（押すと店の管理へ）
+      toStore: "店舗管理",
+      // 管理モードのラベル・aria（押すと店員モードへ戻る）
+      toStaff: "店員",
+      // 管理店が複数のときの選択シート見出し
+      selectStoreTitle: "管理するお店を選ぶ",
+      // 選択シートで自分がオーナーの店に付けるバッジ
+      ownerBadge: "オーナー",
+      // シートを閉じる（スクリムの aria）
+      close: "閉じる",
+      // 初回のみのチュートリアル（コーチマーク）
+      tutorialTitle: "ここで切り替え",
+      tutorialBody: "この中央のボタンで、店員モードとお店の管理モードを切り替えられます。",
+      tutorialGotIt: "わかりました",
     },
   },
 } as const;

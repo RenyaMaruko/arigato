@@ -7,7 +7,7 @@ import type {
   StaffReceiptStoreRow,
   StaffConnectRow,
 } from "./staff.repository.js";
-import type { IdentityStatus } from "./staff.model.js";
+import { deriveIdentityStatus, type IdentityStatus } from "./staff.model.js";
 
 /**
  * staff feature の Repository インメモリ実装。
@@ -41,6 +41,13 @@ export function createInMemoryStaffRepository(): StaffRepository {
     string,
     { stripeAccountId: string | null; identityStatus: IdentityStatus }
   >();
+  // 店の管理者（store_admin 相当）。キー `${storeId}::${authUserId}`。leftAt は論理削除（null＝active）。
+  // 管理者招待の受け入れ（acceptAdminInvite）とモード切替の判定（hasManagedStore）に使う。
+  const storeAdmins = new Map<
+    string,
+    { storeId: string; authUserId: string; role: "owner" | "admin"; leftAt: number | null }
+  >();
+  const adminKey = (storeId: string, authUserId: string) => `${storeId}::${authUserId}`;
 
   // 開発用シード招待（任意）。導入承認に同意済みの店の pending 招待を1件用意する
   const seedCode = process.env.SEED_INVITE_CODE;
@@ -50,6 +57,8 @@ export function createInMemoryStaffRepository(): StaffRepository {
       storeId: randomUUID(),
       storeName: process.env.SEED_STORE_NAME ?? "テスト店",
       inviteStatus: "pending",
+      // 開発シードはスタッフ招待（在籍・QR）
+      inviteType: "staff",
       storeAdopted: true,
     });
   }
@@ -172,6 +181,65 @@ export function createInMemoryStaffRepository(): StaffRepository {
       };
     },
 
+    // 管理者招待（type='admin'）を受け入れて store_admin role=admin を作る/再有効化する
+    async acceptAdminInvite(authUserId, code) {
+      const invite = invites.get(code);
+      // pending かつ type='admin' かつ店承認済みのときだけ使える
+      if (
+        !invite ||
+        invite.inviteStatus !== "pending" ||
+        invite.inviteType !== "admin" ||
+        !invite.storeAdopted
+      ) {
+        throw new Error("invite_not_usable");
+      }
+      if (!profileByAuth.get(authUserId)) {
+        throw new Error("staff_not_found");
+      }
+      const key = adminKey(invite.storeId, authUserId);
+      const existing = storeAdmins.get(key);
+      // 既に active な管理者（owner/admin）→ already_member（二重付与しない・招待は消費しない）
+      if (existing && existing.leftAt === null) {
+        return {
+          outcome: "already_member" as const,
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      }
+      // 脱退済み → 再有効化（role='admin'）＋招待を消費
+      if (existing && existing.leftAt !== null) {
+        storeAdmins.set(key, { ...existing, role: "admin", leftAt: null });
+        invites.set(code, { ...invite, inviteStatus: "accepted" });
+        return {
+          outcome: "rejoined" as const,
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      }
+      // 無ければ新規に管理者(admin)を作る＋招待を消費
+      storeAdmins.set(key, {
+        storeId: invite.storeId,
+        authUserId,
+        role: "admin",
+        leftAt: null,
+      });
+      invites.set(code, { ...invite, inviteStatus: "accepted" });
+      return {
+        outcome: "joined" as const,
+        storeId: invite.storeId,
+        storeName: invite.storeName,
+      };
+    },
+
+    // 自分が active な管理者である店が1つ以上あるか（モード切替の判定）。
+    // メモリ実装は店の閉店を追わないため active な store_admin の有無だけで判定する。
+    async hasManagedStore(authUserId) {
+      for (const a of storeAdmins.values()) {
+        if (a.authUserId === authUserId && a.leftAt === null) return true;
+      }
+      return false;
+    },
+
     async updateStaffProfile(authUserId, params) {
       const existing = profileByAuth.get(authUserId);
       if (!existing) return null;
@@ -286,9 +354,10 @@ export function createInMemoryStaffRepository(): StaffRepository {
       return [];
     },
 
-    // account.updated を反映する。Connect ストアから対象を引き、payouts_enabled=true なら verified へ。
+    // account.updated を反映する。Connect ストアから対象を引き、Model の deriveIdentityStatus で
+    // 次の本人確認状態（verified / action_required / pending / 据え置き）を導いて書き込む（実 DB 実装と同じ契約）。
     // 既に verified なら二重遷移しない。tip を持たないため promotedTips は 0。
-    async applyAccountUpdate(stripeAccountId, payoutsEnabled) {
+    async applyAccountUpdate(stripeAccountId, account) {
       // Stripe Account ID で本人を逆引きする
       let foundAuth: string | null = null;
       for (const [authUserId, connect] of connectByAuth) {
@@ -300,16 +369,27 @@ export function createInMemoryStaffRepository(): StaffRepository {
       if (!foundAuth) return { found: false, verified: false, promotedTips: 0 };
 
       const connect = connectByAuth.get(foundAuth)!;
-      if (!payoutsEnabled) {
-        return { found: true, verified: connect.identityStatus === "verified", promotedTips: 0 };
+      // 次の状態を Model の純粋関数で導く（要対応・審査中の判定を実 DB 実装と共有する）
+      const nextStatus = deriveIdentityStatus(connect.identityStatus, account);
+
+      // 本人確認の状態を書き込む内部ヘルパ（Connect とプロフィールの両方を同期する）
+      const writeStatus = (status: IdentityStatus) => {
+        connectByAuth.set(foundAuth!, { ...connect, identityStatus: status });
+        const profile = profileByAuth.get(foundAuth!);
+        if (profile) profileByAuth.set(foundAuth!, { ...profile, identityStatus: status });
+      };
+
+      // verified 以外（pending / action_required / none 据え置き）は状態の書き込みだけ行う
+      if (nextStatus !== "verified") {
+        if (nextStatus !== connect.identityStatus) writeStatus(nextStatus);
+        return { found: true, verified: false, promotedTips: 0 };
       }
+      // 既に verified なら二重遷移しない（冪等）
       if (connect.identityStatus === "verified") {
         return { found: true, verified: true, promotedTips: 0 };
       }
       // verified へ確定し、プロフィールの identity_status も同期する
-      connectByAuth.set(foundAuth, { ...connect, identityStatus: "verified" });
-      const profile = profileByAuth.get(foundAuth);
-      if (profile) profileByAuth.set(foundAuth, { ...profile, identityStatus: "verified" });
+      writeStatus("verified");
       return { found: true, verified: true, promotedTips: 0 };
     },
 

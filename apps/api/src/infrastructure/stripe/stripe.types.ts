@@ -38,6 +38,9 @@ export type VerifiedWebhookEvent = {
   id: string;
   // イベント種別（payment_intent.succeeded / account.updated など）
   type: string;
+  // イベントの発生元 Connected Account ID（Connect スコープのイベントで event.account に入る）。
+  // tip 更新・鏡保存・補正の帰属口座検証（多層防御）に使う。platform スコープのイベントは null
+  eventAccountId: string | null;
   // 対象 PaymentIntent の ID（tip との突合に使う。該当しないイベントは null）
   paymentIntentId: string | null;
   // PaymentIntent の metadata に載せた tip ID（あれば tip 特定に優先利用）
@@ -46,6 +49,14 @@ export type VerifiedWebhookEvent = {
   accountId: string | null;
   // Connected Account の payouts_enabled（着金可否の起点。account.updated 以外は null）
   payoutsEnabled: boolean | null;
+  // requirements.errors の件数（審査NG・書類不備の明示エラー。account.updated 以外は null）
+  requirementsErrorCount: number | null;
+  // requirements.pending_verification の件数（提出済み・Stripe が審査中の項目。account.updated 以外は null）
+  requirementsPendingVerificationCount: number | null;
+  // requirements.past_due の件数（期限切れの未提出項目。account.updated 以外は null）
+  requirementsPastDueCount: number | null;
+  // requirements.currently_due の件数（今求められている未提出項目。account.updated 以外は null）
+  requirementsCurrentlyDueCount: number | null;
   // payout.* 系の Stripe Payout ID（該当しないイベントは null。送金の着金/失敗の照合に使う）
   payoutId: string | null;
   // payout.* の metadata.payout_id（自前 payout 行の id。stripe_payout_id 未更新時の照合バックアップ。対象外は null）
@@ -165,4 +176,16 @@ export type ConnectBalance = {
   // 準備中の資金が最も早く available になる日時（ISO 文字列・「◯月◯日から送金できます」表示用）。
   // pending が無い／available_on を拾えない場合は null
   nextAvailableOn: string | null;
+  // 準備中（pending）の available_on を「暦日ごと（Asia/Tokyo 基準）」にまとめた内訳（日付昇順）。
+  // UI で「M月D日から ¥金額」を日付ごとに並べるために使う。
+  // 合計は pendingAmount と必ず一致させる（ページング等で差が出る場合は最早バケットへ寄せる）。
+  pendingBuckets: PendingBucket[];
+};
+
+// 準備中（pending）の内訳1件分（available_on の暦日ごとに合算した金額）。
+export type PendingBucket = {
+  // その日（Asia/Tokyo 基準の暦日の 0:00 を ISO 文字列で表す）。UI は「M月D日」に整形して表示する
+  availableOn: string;
+  // その日に available になる準備中の合計額（円・整数）
+  amount: number;
 };

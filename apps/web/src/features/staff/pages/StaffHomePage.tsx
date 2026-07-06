@@ -35,6 +35,12 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
   const sendableAmount = balance?.sendableAmount ?? 0;
   // 着金可能（本人確認済み）かどうかは残高API の canPayout を正とする（プロフィールの identityStatus と整合）
   const verified = balance?.canPayout ?? me.identityStatus === "verified";
+  // 本人確認の状態（残高API を正・未取得時はプロフィールで代替）
+  const identityStatus = balance?.identityStatus ?? me.identityStatus;
+  // 本人確認の申請中（オンボーディング提出済み・審査待ち）。ボタンを「ただいま申請中」表示に切り替える
+  const identityPending = !verified && identityStatus === "pending";
+  // 要対応（審査NG・追加書類）。押せるボタンで /staff/identity へ導き、不足の修正・再提出をしてもらう
+  const identityActionRequired = !verified && identityStatus === "action_required";
 
   return (
     <PhoneFrame>
@@ -72,10 +78,18 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
                       amount: `¥${sendableAmount.toLocaleString()}`,
                     })
                   : t("staff.homeBalanceVerifiedNote")
-                : t("staff.homeBalanceToSendNote")}
+                : identityActionRequired
+                  ? // 要対応（審査NG・追加書類）は気づけるよう一言で知らせる
+                    t("staff.homeIdentityActionRequiredNote")
+                  : identityPending
+                    ? // 申請中は審査期間の目安を一言で添える
+                      t("staff.homeIdentityPendingNote")
+                    : t("staff.homeBalanceToSendNote")}
           </div>
 
-          {/* 残高のすぐ下のアクション。未確認なら本人確認へ、確認済なら送金（送金画面）へ */}
+          {/* 残高のすぐ下のアクション。
+              確認済み → 送金へ／申請中 → 「ただいま申請中」（押せない状態表示）／未着手 → 本人確認へ。
+              申請中でも途中離脱（書類未提出）や追加書類の再開ができるよう、小さな確認リンクだけ残す。 */}
           {verified ? (
             <button
               type="button"
@@ -85,6 +99,23 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
               {t("staff.homePayoutCta")}
               <ChevronIcon />
             </button>
+          ) : identityActionRequired ? (
+            // 要対応（審査NG・追加書類）: 押せるボタンで本人確認画面へ。埋め込み画面が不足・エラー内容を
+            // 表示し、修正・再提出できる。注意が伝わるようローズ枠線＋ローズ文字（トークン準拠）にする
+            <button
+              type="button"
+              onClick={() => navigate({ to: "/staff/identity" })}
+              className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-rose bg-page py-3 text-token-md font-bold text-rose"
+            >
+              {t("staff.homeIdentityActionRequiredCta")}
+              <ChevronIcon />
+            </button>
+          ) : identityPending ? (
+            // 申請中の状態表示（ボタンではない・押せない）。申請中＝提出済みの審査待ちで、
+            // ユーザーがやることは無い（未提出は none のまま・審査NGは action_required になるため導線不要）
+            <div className="mt-3.5 flex w-full items-center justify-center rounded-xl bg-rose/40 py-3 text-token-md font-bold text-page">
+              {t("staff.homeIdentityPendingCta")}
+            </div>
           ) : (
             <button
               type="button"
@@ -164,6 +195,13 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
             label={t("staff.homeProfile")}
             onClick={() => navigate({ to: "/staff/profile" })}
             icon={<UserIcon />}
+          />
+          {/* 店舗作成（§11.4）。管理店の有無に関わらず常に表示（何店でも作れる）。
+              押すと店作成フロー（/store/new）へ。作成後は店員ホームへ戻り中央ナビ切替が出る。 */}
+          <FeatureTile
+            label={t("staff.homeCreateStore")}
+            onClick={() => navigate({ to: "/store/new" })}
+            icon={<StoreCreateIcon />}
           />
         </div>
       </div>
@@ -277,6 +315,28 @@ function ExportIcon() {
       <path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z" />
       <path d="M14 3v5h5" />
       <path d="M12 18v-6M9.5 14.5 12 12l2.5 2.5" />
+    </svg>
+  );
+}
+
+/** 店舗作成（建物＋プラス）アイコン。ホームの「店舗作成」タイルに使う。 */
+function StoreCreateIcon() {
+  return (
+    <svg
+      width="30"
+      height="30"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="1.7"
+      strokeLinecap="round"
+      strokeLinejoin="round"
+      aria-hidden="true"
+    >
+      <path d="M4 9.5 5.2 5h13.6L20 9.5" />
+      <path d="M4 9.5V20h9" />
+      <path d="M4 9.5a2 2 0 0 0 4 0 2 2 0 0 0 4 0 2 2 0 0 0 4 0 2 2 0 0 0 4 0" />
+      <path d="M17 15v6M14 18h6" />
     </svg>
   );
 }

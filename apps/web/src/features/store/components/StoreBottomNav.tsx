@@ -1,9 +1,12 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
+import { StoreModeSwitch } from "../../../components/common/StoreModeSwitch.js";
 
 /**
- * 店画面の共通ボトムナビ（ホーム / スタッフ / 感謝の可視化 / 設定）。
+ * 店画面の共通ボトムナビ（ホーム / スタッフ / ⇄切替 / 記録 / 設定）。
  * 現在地（active）をローズで強調し、それ以外は淡色にする。モック01/03/06/07 共通の下部ナビ。
+ * 中央には「店舗管理 ⇄ 店員」切替ボタン（StoreModeSwitch・§11.4）を置き、店員モードへ戻せる。
+ * 管理店を持つ人だけに出る（店の管理画面には管理者しか来ないため実質常に表示される）。
  */
 type NavKey = "home" | "staff" | "gratitude" | "settings";
 
@@ -56,6 +59,9 @@ export function StoreBottomNav({ active }: { active?: NavKey }) {
         </svg>
         <span className="text-[10px]">{t("store.navStaff")}</span>
       </Link>
+
+      {/* 中央の「店舗管理 ⇄ 店員」切替（店員モードへ戻す・§11.4） */}
+      <StoreModeSwitch mode="store" />
 
       {/* 感謝の可視化 */}
       <Link

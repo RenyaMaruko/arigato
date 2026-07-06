@@ -14,13 +14,16 @@ export const store = pgTable("store", {
   industry: text("industry"),
   // 店のロゴ画像 URL（任意）
   logoUrl: text("logo_url"),
-  // 店アカウントの所有者（Supabase auth.users の UUID）。
-  // 店スコープのアクセス制御に使う（この auth ユーザーだけが自店を操作できる）。
-  // auth スキーマは Supabase 管理のため FK は張らず ID 文字列で保持する。
-  // セルフサーブ登録では作成者が必ず所有者になる。移行用の既存行は null のままでも壊れない設計。
+  // 【非使用・後方互換のため残置】旧「1オーナー共有」の所有者カラム。
+  // owner 表現は store_admin(role=owner) へ移行済み。新規作成では書き込まず、参照もしない。
+  // 物理削除せず非使用化して残す（安全側。既存マイグレーション連番との整合を保つ）。
   ownerAuthUserId: uuid("owner_auth_user_id"),
   // 導入承認に同意した日時。店自身の一手間（「うちで投げ銭OK」の同意）として作成時に記録する。
   // 運営審査のゲート（status の pending→approved）は廃止し、これを導入承認の記録とする。未同意は null。
   adoptionAgreedAt: timestamp("adoption_agreed_at", { withTimezone: true }),
+  // 店の論理削除（閉店）。null＝営業中／値あり＝閉店。
+  // 閉店すると QR・所属（staff_store）を無効化し、店一覧・解決から除外する。
+  // 物理削除はしない（受取記録・資金が store_id を参照するため履歴を保全する）。
+  closedAt: timestamp("closed_at", { withTimezone: true }),
   createdAt: timestamp("created_at", { withTimezone: true }).notNull().defaultNow(),
 });

@@ -6,6 +6,9 @@ import type {
   StoreStaffResponse,
   StoreStaffDetail,
   StoreGratitude,
+  StoreAdminsResponse,
+  StoreManagedListResponse,
+  StoreOwnerLeaveResult,
   UpdateStoreProfileInput,
   CreateStoreInput,
   CreateStoreInviteInput,
@@ -16,7 +19,9 @@ import {
   generateInviteCode,
   summarizeGratitudeCounts,
   buildLogoStoragePath,
+  decideOwnerSuccession,
 } from "./store.model.js";
+import type { StoreRole } from "./store.model.js";
 import type { StoreRepository, StoreRow } from "./store.repository.js";
 
 /**
@@ -62,69 +67,95 @@ function toStoreProfile(row: StoreRow): StoreProfile {
 }
 
 /**
- * 店スコープのガード（アクセス制御の中核）。
- * storeId の店を取得し、認証済みの authUserId が所有者であることを確認する。
- * - 店が無ければ StoreNotFoundError。
- * - 所有者が未紐付け（null）または別の auth ユーザーなら StoreForbiddenError（他店は触れない）。
- * 通過した場合だけ店行を返す。すべての店スコープ API はまずこれを通す。
+ * 店スコープのガード（アクセス制御の中核・日常運用）。
+ * storeId の店を取得し、認証済みの authUserId がその店の active な管理者（owner/admin）であることを確認する。
+ * - 店が無い／閉店済み（closed_at）なら StoreNotFoundError（閉店は論理削除＝解決から除外）。
+ * - active な管理者でなければ StoreForbiddenError（他店・非管理者は触れない）。
+ * 通過した場合だけ店行とロール（owner/admin）を返す。日常運用の全 API はまずこれを通す。
  */
-async function requireOwnedStore(
+async function requireStoreAdmin(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+): Promise<{ store: StoreRow; role: StoreRole }> {
+  const store = await repo.findStoreById(storeId);
+  // 存在しない、または閉店済み（論理削除）は「無い」ものとして扱う
+  if (!store || store.closedAt !== null) {
+    throw new StoreNotFoundError();
+  }
+  // その店の active な管理者（owner/admin）だけが操作できる
+  const role = await repo.findActiveAdminRole(storeId, authUserId);
+  if (!role) {
+    throw new StoreForbiddenError();
+  }
+  return { store, role };
+}
+
+/**
+ * owner 専用のガード（管理者管理・owner譲渡・店削除）。
+ * requireStoreAdmin を通したうえで、ロールが owner であることを追加確認する。
+ * owner でない管理者(admin)は StoreForbiddenError（owner 専用操作は admin には許さない）。
+ */
+async function requireStoreOwner(
   repo: StoreRepository,
   authUserId: string,
   storeId: string,
 ): Promise<StoreRow> {
-  const store = await repo.findStoreById(storeId);
-  if (!store) {
-    throw new StoreNotFoundError();
-  }
-  // 所有者が一致しない店は触れない（自店のデータのみ取得可）
-  if (store.ownerAuthUserId !== authUserId) {
+  const { store, role } = await requireStoreAdmin(repo, authUserId, storeId);
+  if (role !== "owner") {
     throw new StoreForbiddenError();
   }
   return store;
 }
 
 /**
- * 自分（ログイン中の店アカウント）が所有する店を取得する（GET /store/me）。
- * 店ホーム・設定の起点。未作成（どの店も所有していない）なら null を返し、
- * フロントは店舗作成（セルフサーブ）導線へ誘導する。
+ * 自分（ログイン中のアカウント）が管理者である店を取得する（GET /store/me）。
+ * 店ホーム・設定の起点。owner を優先し、次に古参順で1件返す（フェーズ2は1店の一般ケース）。
+ * どの店の管理者でもない（未作成）なら null を返し、フロントは店舗作成（セルフサーブ）導線へ誘導する。
  */
 export async function getMyStore(
   repo: StoreRepository,
   authUserId: string,
 ): Promise<StoreProfile | null> {
-  const store = await repo.findStoreByOwner(authUserId);
+  const store = await repo.findStoreForAdmin(authUserId);
   if (!store) return null;
   return toStoreProfile(store);
 }
 
-// 店舗の重複作成（1アカウント1店舗）を防ぐためのエラー（Route で 409 に変換する）
-export class StoreAlreadyExistsError extends Error {
-  constructor() {
-    super("store_already_exists");
-    this.name = "StoreAlreadyExistsError";
-  }
+/**
+ * 自分（ログイン中のアカウント）が管理する店の一覧を取得する（GET /store/mine・§11.4）。
+ * 中央ナビの切替（1件なら直行・複数なら一覧から選択）に使う。owner を先頭に古参順で返す。
+ * 金額・残高・件数は一切含めない（店はお金に触れない）。管理する店が無ければ空配列。
+ */
+export async function listMyManagedStores(
+  repo: StoreRepository,
+  authUserId: string,
+): Promise<StoreManagedListResponse> {
+  const rows = await repo.listManagedStores(authUserId);
+  return {
+    items: rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      logoUrl: r.logoUrl,
+      role: r.role,
+    })),
+  };
 }
 
 /**
  * 店舗をセルフサーブで新規作成する（POST /store）。
- * ログイン中の店アカウントを所有者にし、店名等と「導入承認の同意」を受けて作成する。
+ * ログイン中のアカウントを所有者にし、店名等と「導入承認の同意」を受けて作成する。
  * 同意（adoption_agreed_at）は Repository が作成時刻で記録する（店自身の一手間）。
  * 運営の事前発行・claim・承認ゲートは廃止し、ここで自己登録を完結させる。
  *
- * - 既に自分の店があれば多重作成を防ぐ（StoreAlreadyExistsError・1アカウント1店舗）。
+ * 複数店舗（§11.4）: 1アカウントで何店でも作れる（既に店を管理していても新規作成を許す）。
+ * フェーズ2の「1アカウント1店」制限は撤廃した。作成後は店員ホームへ戻り、中央ナビの切替で管理モードに入る。
  */
 export async function createStore(
   repo: StoreRepository,
   authUserId: string,
   input: CreateStoreInput,
 ): Promise<StoreProfile> {
-  // 多重作成の防止（同じ auth ユーザーは1つの店のみ所有する）
-  const existing = await repo.findStoreByOwner(authUserId);
-  if (existing) {
-    throw new StoreAlreadyExistsError();
-  }
-
   // 空文字の任意項目は未入力（null）に正規化して保存する
   const normalize = (v: string | undefined): string | null => {
     if (v == null) return null;
@@ -132,8 +163,9 @@ export async function createStore(
     return trimmed === "" ? null : trimmed;
   };
 
-  const created = await repo.createStore({
-    ownerAuthUserId: authUserId,
+  // 店の作成と同時に作成者を owner（store_admin role=owner）にする（Repository が1トランザクションで行う）
+  const created = await repo.createStoreWithOwner({
+    creatorAuthUserId: authUserId,
     name: input.name.trim(),
     description: normalize(input.description),
     industry: normalize(input.industry),
@@ -151,7 +183,7 @@ export async function getStore(
   authUserId: string,
   storeId: string,
 ): Promise<StoreProfile> {
-  const store = await requireOwnedStore(repo, authUserId, storeId);
+  const { store } = await requireStoreAdmin(repo, authUserId, storeId);
   return toStoreProfile(store);
 }
 
@@ -165,7 +197,7 @@ export async function updateStore(
   storeId: string,
   input: UpdateStoreProfileInput,
 ): Promise<StoreProfile> {
-  await requireOwnedStore(repo, authUserId, storeId);
+  await requireStoreAdmin(repo, authUserId, storeId);
   // 空文字の任意項目は未入力（null）に正規化して保存する
   const normalize = (v: string | undefined): string | null => {
     if (v == null) return null;
@@ -204,7 +236,7 @@ export class InvalidImageError extends Error {
  * 店ロゴ画像をアップロードして自店の logo_url を更新する（POST /store/:storeId/logo・店スコープ）。
  *
  * 流れ:
- *  1. 自店のオーナーであることを確認する（他店のロゴは変えられない）。
+ *  1. 自店の管理者（owner / admin＝店情報編集の権限者・§3.1）であることを確認する（他店のロゴは変えられない）。
  *  2. サーバ側で検証する（MIME が許可画像か・サイズ上限内か）。違反は InvalidImageError（400）。
  *  3. Storage（公開バケット）へ logos/<storeId>/<uuid>.<ext> で保存し、公開URLを得る（infrastructure 経由）。
  *  4. 自店の store.logo_url を公開URLへ更新する（生 SQL は Repository）。
@@ -217,8 +249,8 @@ export async function uploadStoreLogo(
   storeId: string,
   file: { body: ArrayBuffer; contentType: string },
 ): Promise<LogoUploadResult> {
-  // 【1】自店のオーナー確認（他店は触れない）。違反は StoreForbiddenError → Route で 404。
-  await requireOwnedStore(repo, authUserId, storeId);
+  // 【1】自店の管理者確認（owner / admin。他店は触れない）。違反は StoreForbiddenError → Route で 404。
+  await requireStoreAdmin(repo, authUserId, storeId);
 
   // 【2】サーバ側検証（MIME・サイズ）。違反は 400（InvalidImageError）。
   const meta = ImageUploadMetaSchema.safeParse({
@@ -263,7 +295,7 @@ export async function createStoreInvite(
   storeId: string,
   input?: CreateStoreInviteInput,
 ): Promise<StoreInviteCreated> {
-  await requireOwnedStore(repo, authUserId, storeId);
+  await requireStoreAdmin(repo, authUserId, storeId);
   // ラベル（誰宛かの任意メモ）を正規化する。空白のみ・未入力は無記名（null）にする
   const rawLabel = input?.label;
   const label = rawLabel != null && rawLabel.trim() !== "" ? rawLabel.trim() : null;
@@ -280,6 +312,83 @@ export async function createStoreInvite(
 }
 
 /**
+ * 管理者招待を発行する（POST /store/:storeId/admin-invites・§3.2）。owner のみ。
+ * スタッフ招待（createStoreInvite）と仕組みは同じだが、type='admin' の招待を発行し、
+ * 権限は requireStoreOwner（管理者招待は owner のみ）にする。受け入れると store_admin role=admin になる。
+ * ロールは発行時に確定（受け手は選ばない・常に role=admin）。
+ */
+export async function createStoreAdminInvite(
+  repo: StoreRepository,
+  buildInviteUrl: BuildInviteUrl,
+  authUserId: string,
+  storeId: string,
+  input?: CreateStoreInviteInput,
+): Promise<StoreInviteCreated> {
+  // 管理者招待は owner のみが発行できる
+  await requireStoreOwner(repo, authUserId, storeId);
+  // ラベル（誰宛かの任意メモ）を正規化する。空白のみ・未入力は無記名（null）にする
+  const rawLabel = input?.label;
+  const label = rawLabel != null && rawLabel.trim() !== "" ? rawLabel.trim() : null;
+  const code = generateInviteCode();
+  const invite = await repo.createAdminInvite(storeId, code, label);
+  return {
+    code: invite.code,
+    inviteUrl: buildInviteUrl(invite.code),
+    status: invite.status,
+    createdAt: invite.createdAt,
+    label: invite.label,
+  };
+}
+
+/**
+ * 管理者一覧を取得する（GET /store/:storeId/admins・店の管理モード）。店スコープ。
+ * その店の active な管理者（owner/admin）を owner 先頭・古参順で返す。金額は含めない。
+ * 閲覧はその店の管理者（owner/admin）なら可（requireStoreAdmin）。応答には閲覧者のロール（viewerRole）を含め、
+ * フロントは owner のときだけ管理者の招待・削除・owner 譲渡ボタンを出す。
+ */
+export async function listStoreAdmins(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+): Promise<StoreAdminsResponse> {
+  const { role } = await requireStoreAdmin(repo, authUserId, storeId);
+  const admins = await repo.listAdminsForDisplay(storeId);
+  return {
+    items: admins.map((a) => ({
+      authUserId: a.authUserId,
+      role: a.role,
+      displayName: a.displayName,
+      avatarUrl: a.avatarUrl,
+      createdAt: a.createdAt,
+      // 自分自身か（UI の「あなた」表示・自分を外せない/自分へ譲渡できない判定に使う）
+      isSelf: a.authUserId === authUserId,
+    })),
+    viewerRole: role,
+  };
+}
+
+/**
+ * 管理者を外す（POST /store/:storeId/admins/:authUserId/remove・§3.1）。owner のみ。
+ * 対象（targetAuthUserId）の active な管理者(admin)を論理削除（left_at）する。
+ * owner は外せない（owner を外すには owner 譲渡か店の閉店を使う）。お金は移動しない（店はお金に触れない）。
+ *
+ * - owner でない・他店・非管理者は 404/403 相当（requireStoreOwner）。
+ * - 対象が active な admin でない（存在しない・owner・脱退済み）なら StoreAdminNotFoundError。
+ */
+export async function removeStoreAdmin(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+  targetAuthUserId: string,
+): Promise<void> {
+  await requireStoreOwner(repo, authUserId, storeId);
+  const removed = await repo.removeAdmin(storeId, targetAuthUserId);
+  if (removed === 0) {
+    throw new StoreAdminNotFoundError();
+  }
+}
+
+/**
  * 招待中（pending）の招待一覧を取得する（GET /store/:storeId/invites）。店スコープ。
  * accepted（所属確定）は在籍中タブに出るため、revoked（失効）は履歴管理しないため返さない。
  * よって全 item が pending であり、各行はリンク再コピー・取り消しの対象になる。
@@ -290,12 +399,14 @@ export async function listStoreInvites(
   authUserId: string,
   storeId: string,
 ): Promise<StoreInvitesResponse> {
-  await requireOwnedStore(repo, authUserId, storeId);
+  await requireStoreAdmin(repo, authUserId, storeId);
   const invites = await repo.listInvites(storeId);
   return {
     items: invites.map((i) => ({
       code: i.code,
       status: i.status,
+      // 招待の種類（staff/admin）。招待中タブで種類ラベルを出し分ける（§11.2）
+      type: i.type,
       createdAt: i.createdAt,
       inviteUrl: buildInviteUrl(i.code),
       acceptedStaffName: i.acceptedStaffName,
@@ -327,7 +438,7 @@ export async function revokeStoreInvite(
   code: string,
 ): Promise<void> {
   // 自店の所有者であることを先に確認する（他店の招待は触れない）
-  await requireOwnedStore(repo, authUserId, storeId);
+  await requireStoreAdmin(repo, authUserId, storeId);
   const revoked = await repo.revokeInvite(storeId, code);
   if (revoked === 0) {
     throw new StoreInviteNotFoundError();
@@ -344,7 +455,7 @@ export async function listStoreStaff(
   authUserId: string,
   storeId: string,
 ): Promise<StoreStaffResponse> {
-  await requireOwnedStore(repo, authUserId, storeId);
+  await requireStoreAdmin(repo, authUserId, storeId);
   const staff = await repo.listStaff(storeId);
   return {
     items: staff.map((s) => ({
@@ -377,7 +488,8 @@ export async function getStoreStaffDetail(
   storeId: string,
   staffId: string,
 ): Promise<StoreStaffDetail> {
-  await requireOwnedStore(repo, authUserId, storeId);
+  // 閲覧者のロール（viewerRole）を取得する。owner のときだけ管理者操作を出し分ける（§11.3）
+  const { role: viewerRole } = await requireStoreAdmin(repo, authUserId, storeId);
   const detail = await repo.findStaffDetail(storeId, staffId);
   if (!detail) {
     throw new StoreStaffNotFoundError();
@@ -388,6 +500,11 @@ export async function getStoreStaffDetail(
     headline: detail.headline,
     avatarUrl: detail.avatarUrl,
     joinedAt: detail.joinedAt,
+    // 対象の人（管理者操作の対象）と、その人のこの店でのロール（owner/admin/なし）
+    authUserId: detail.authUserId,
+    role: detail.role,
+    // 閲覧者のロール（owner だけに管理者操作を出す）
+    viewerRole,
   };
 }
 
@@ -408,7 +525,7 @@ export async function removeStoreStaff(
   staffId: string,
 ): Promise<void> {
   // 自店のオーナーであることを先に確認する（他店のスタッフは触れない）
-  await requireOwnedStore(repo, authUserId, storeId);
+  await requireStoreAdmin(repo, authUserId, storeId);
   const removed = await repo.removeStaff(storeId, staffId);
   if (removed === 0) {
     throw new StoreStaffNotFoundError();
@@ -446,7 +563,7 @@ export async function getStoreGratitude(
   now: Date,
   period: GratitudePeriod = {},
 ): Promise<StoreGratitude> {
-  await requireOwnedStore(repo, authUserId, storeId);
+  await requireStoreAdmin(repo, authUserId, storeId);
 
   // 件数集計（受取日時の全件を取得し、Model で totalCount を期間に絞り weekCount は常に今週を算出。金額は扱わない）
   const times = await repo.listGratitudeTimes(storeId);
@@ -487,5 +604,129 @@ export async function getStoreGratitude(
       avatarUrl: p.avatarUrl,
       count: p.count,
     })),
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// owner ライフサイクル・店の論理削除（閉店）
+// ─────────────────────────────────────────────────────────────
+
+/**
+ * 店を論理削除（閉店）する（POST /store/:storeId/close）。owner のみ。
+ * store.closed_at をセットし、その店の QR・所属（staff_store）を無効化する（新規投げ銭を停止）。
+ * 過去の受取記録・資金（tip）は保全（物理削除しない）。資金は各スタッフの Stripe 連結口座にあり、
+ * 閉店で決済取消・返金は一切発生しない（横断ルール: 店はお金に触れない）。
+ *
+ * - owner でない管理者(admin)・他店・非管理者は 404/403 相当（requireStoreOwner）。
+ * - 既に閉店済みの店は StoreNotFoundError（requireStoreOwner が閉店店を「無い」扱いにする）。
+ */
+export async function closeStore(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+): Promise<void> {
+  // owner のみが閉店できる（closed 済みは requireStoreAdmin 側で 404 になる）
+  await requireStoreOwner(repo, authUserId, storeId);
+  await repo.closeStore(storeId);
+}
+
+// owner 譲渡・自動継承で対象の管理者が見つからない（active な admin でない等）ときのエラー（Route で 404 に変換）
+export class StoreAdminNotFoundError extends Error {
+  constructor() {
+    super("store_admin_not_found");
+    this.name = "StoreAdminNotFoundError";
+  }
+}
+
+/**
+ * owner を譲渡する（POST /store/:storeId/transfer-owner）。現 owner のみ。
+ * 現 owner が、その店の active な管理者(admin)1人（targetAuthUserId）を指名して owner を引き継ぐ。
+ * Repository が1トランザクションで「現 owner→admin」「対象→owner」を行い、owner1人の不変条件を保つ。
+ *
+ * - owner でない・他店・非管理者は 404/403 相当（requireStoreOwner）。
+ * - target が active な admin でない（存在しない・owner 自身・脱退済み）なら StoreAdminNotFoundError。
+ */
+export async function transferStoreOwner(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+  targetAuthUserId: string,
+): Promise<void> {
+  // 現 owner であることを確認する（owner 専用操作）
+  await requireStoreOwner(repo, authUserId, storeId);
+  // 指名先が active な admin であることを確認する（自分自身や owner・脱退者は不可）
+  const targetRole = await repo.findActiveAdminRole(storeId, targetAuthUserId);
+  if (targetRole !== "admin") {
+    throw new StoreAdminNotFoundError();
+  }
+  // トランザクションで譲渡する（owner1人の不変条件を維持）
+  await repo.transferOwner(storeId, authUserId, targetAuthUserId);
+}
+
+// owner 離脱／消失時の処理結果。
+// - promoted: 残る最古参の管理者を owner へ自動昇格した（newOwnerAuthUserId が新 owner）
+// - closed:   残る管理者がいないので店を論理削除（閉店）した
+export type OwnerDepartureResult =
+  | { action: "promoted"; newOwnerAuthUserId: string }
+  | { action: "closed" };
+
+/**
+ * owner が抜ける／消える（引き継ぎ操作なしのアカウント削除等）ときの処理（owner ライフサイクル §5.4）。
+ * UI トリガはフェーズ3だが、判定ロジック本体をここに実装する（テスト可能な形）。
+ *
+ * 流れ:
+ *  1. 現 owner を論理削除（left_at=now）する（抜ける／消える）。
+ *  2. 残る active な管理者(admin)を古参順で取得する。
+ *  3. Model の判定（decideOwnerSuccession）で出し分ける:
+ *     - 残る管理者がいれば最古参（created_at 最小）を owner へ自動昇格（店を生かす）。
+ *     - 誰もいなければ店を論理削除（閉店＝closed_at）する（owner 不在の店を作らない）。
+ *
+ * ＝「管理者が残っていれば自動昇格／いなければ削除」の出し分け。
+ */
+export async function handleOwnerDeparture(
+  repo: StoreRepository,
+  storeId: string,
+  ownerAuthUserId: string,
+): Promise<OwnerDepartureResult> {
+  // 【1】現 owner を外す（論理削除）
+  await repo.leaveAdmin(storeId, ownerAuthUserId);
+
+  // 【2】残る active な管理者（owner を外したので admin のみが残る）を古参順で取得する
+  const remaining = await repo.listActiveAdmins(storeId);
+
+  // 【3】判定（純粋関数）: 残る管理者がいれば最古参を昇格、いなければ閉店
+  const decision = decideOwnerSuccession(
+    remaining.map((a) => ({ authUserId: a.authUserId, createdAt: a.createdAt })),
+  );
+
+  if (decision.kind === "promote") {
+    // 最古参の管理者を owner へ自動昇格する（店を生かす）
+    await repo.promoteAdminToOwner(storeId, decision.authUserId);
+    return { action: "promoted", newOwnerAuthUserId: decision.authUserId };
+  }
+
+  // 残る管理者がいない → 店を論理削除（閉店）する
+  await repo.closeStore(storeId);
+  return { action: "closed" };
+}
+
+/**
+ * owner が店から抜ける（POST /store/:storeId/owner/leave・owner ライフサイクル §5.4 の UI トリガ）。owner のみ。
+ * requireStoreOwner を通したうえで handleOwnerDeparture を呼び、残る管理者がいれば最古参を自動昇格、
+ * いなければ店を論理削除（閉店）する。結果（promoted / closed）をフロントに返す（案内の出し分け）。
+ * 資金・受取履歴は保全（店はお金に触れない）。
+ */
+export async function leaveStoreAsOwner(
+  repo: StoreRepository,
+  authUserId: string,
+  storeId: string,
+): Promise<StoreOwnerLeaveResult> {
+  // owner のみが「抜ける」操作を行える（閉店済みは requireStoreAdmin 側で 404）
+  await requireStoreOwner(repo, authUserId, storeId);
+  const result = await handleOwnerDeparture(repo, storeId, authUserId);
+  return {
+    action: result.action,
+    // 自動昇格したときだけ新 owner を返す（閉店時は null）
+    newOwnerAuthUserId: result.action === "promoted" ? result.newOwnerAuthUserId : null,
   };
 }

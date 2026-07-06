@@ -92,6 +92,12 @@ export function StaffSettingsPage() {
           />
         </div>
 
+        {/*
+          モード切替は設定から廃止（§11.4）。
+          店員 ⇄ 店の管理の切替は、ボトムナビ中央の切替ボタン（StoreModeSwitch）に一本化した。
+          店舗の新規開設は店員ホームの「店舗作成」導線（/store/new）に置く。
+        */}
+
         {/* ログアウト */}
         <button
           type="button"
@@ -112,10 +118,13 @@ export function StaffSettingsPage() {
  */
 function SettingRow({
   label,
+  sublabel,
   icon,
   onClick,
 }: {
   label: string;
+  // 補足の説明行（任意・モード切替の説明などに使う）
+  sublabel?: string;
   icon: ReactNode;
   onClick?: () => void;
 }) {
@@ -141,7 +150,10 @@ function SettingRow({
           {icon}
         </svg>
       </span>
-      <span className="flex-1 text-token-lg text-ink">{label}</span>
+      <span className="flex-1">
+        <span className="block text-token-lg text-ink">{label}</span>
+        {sublabel && <span className="mt-0.5 block text-token-xs text-muted">{sublabel}</span>}
+      </span>
       <span className="text-muted-soft">
         <svg
           width="18"

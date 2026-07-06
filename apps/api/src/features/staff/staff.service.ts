@@ -29,10 +29,15 @@ import {
   calculateStaffTakeAmount,
   evaluatePayoutEligibility,
   selectPayoutTipsWithinAvailable,
+  classifyStripePayoutError,
   decodeTipCursor,
   encodeTipCursor,
   type IdentityStatus,
+  type ConnectAccountState,
 } from "./staff.model.js";
+// 送金 claim の競合エラー（Repository が投げ、Route で 409 に変換する）。
+// Route が service 経由でエラー型を参照できるよう再公開する（既存の Payout*Error と同じ入口に揃える）
+export { PayoutConflictError } from "./staff.model.js";
 import type {
   StaffRepository,
   StaffProfileRow,
@@ -81,6 +86,8 @@ function toStaffMe(
   memberships: StaffMembershipRow[],
   receiptStores: StaffReceiptStoreRow[],
   buildUrl: BuildTipUrl,
+  // 兼任者（active な store_admin を持つ人）か。true のときだけ店員側に「店の管理へ」を出す
+  managesStore: boolean,
 ): StaffMe {
   return {
     id: profile.id,
@@ -88,6 +95,8 @@ function toStaffMe(
     headline: profile.headline,
     avatarUrl: profile.avatarUrl,
     identityStatus: profile.identityStatus,
+    // 兼任者（管理する店がある）か。モード切替導線「店の管理へ」の出し分けに使う
+    managesStore,
     // 所属店一覧（active のみ・各 membership ごとに店ごとQR用URL を組み立てる）
     memberships: memberships.map((m) => ({
       membershipId: m.membershipId,
@@ -124,6 +133,8 @@ export async function getInviteInfo(
     code: invite.code,
     storeId: invite.storeId,
     storeName: invite.storeName,
+    // 招待の種類（staff: 店員として参加 / admin: 店の管理者として参加）。受け入れ画面の表示を出し分ける
+    type: invite.inviteType,
     valid,
   };
 }
@@ -143,7 +154,9 @@ export async function getStaffMe(
   // 所属一覧（active のみ）と、受取履歴の店フィルタ用の店一覧（在籍中＋脱退済み）を併せて取得する
   const memberships = await repo.listMembershipsByAuthUserId(authUserId);
   const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
-  return toStaffMe(profile, memberships, receiptStores, buildUrl);
+  // 兼任者（active な store_admin を持つ人）か（モード切替導線の出し分け）
+  const managesStore = await repo.hasManagedStore(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore);
 }
 
 // プロフィール作成・参加で起こりうる業務エラー（Route で HTTP ステータスに変換する）
@@ -224,8 +237,10 @@ export async function createStaffProfile(
     }
   }
 
-  // 作成直後は所属なし・受取も無し。どちらも空配列で返す（後続の join で追加される）
-  return toStaffMe(profile, [], [], buildUrl);
+  // 作成直後は所属なし・受取も無し。どちらも空配列で返す（後続の join で追加される）。
+  // 稀に「先に店を作成（owner）してからプロフィール作成」した人もいるため managesStore は問い合わせる。
+  const managesStore = await repo.hasManagedStore(authUserId);
+  return toStaffMe(profile, [], [], buildUrl, managesStore);
 }
 
 /**
@@ -254,11 +269,29 @@ export async function joinStore(
     throw new InviteNotUsableError();
   }
 
-  // 所属を追加（既存なら already_member）。二重消費・一意制約は Repository のトランザクションで担保
+  // 受け入れ分岐（§2.3）: 招待の type で分ける。
+  //  - admin → store_admin 行（role=admin・active）を作る/再有効化する（所属＝staff_store は作らない）
+  //  - staff → 従来どおり staff_store 行（在籍・QR）を作る/再有効化する
   try {
+    if (invite.inviteType === "admin") {
+      // 管理者招待の受け入れ。二重付与防止・脱退再有効化は Repository のトランザクションで担保
+      const result = await repo.acceptAdminInvite(authUserId, inviteCode);
+      return {
+        status: result.outcome,
+        type: "admin",
+        // 管理者招待は所属（staff_store）を作らないため membership/QR は無い
+        membershipId: null,
+        storeId: result.storeId,
+        storeName: result.storeName,
+        tipUrl: null,
+      };
+    }
+
+    // スタッフ招待の受け入れ（従来フロー）。二重消費・一意制約は Repository のトランザクションで担保
     const result = await repo.joinStoreByInvite(authUserId, inviteCode);
     return {
       status: result.outcome,
+      type: "staff",
       membershipId: result.membershipId,
       storeId: result.storeId,
       storeName: result.storeName,
@@ -316,7 +349,8 @@ export async function leaveStoreMembership(
   // 脱退後の最新状態を返す（その店は memberships から消え、receiptStores には残る）
   const memberships = await repo.listMembershipsByAuthUserId(authUserId);
   const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
-  return toStaffMe(profile, memberships, receiptStores, buildUrl);
+  const managesStore = await repo.hasManagedStore(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore);
 }
 
 /**
@@ -339,7 +373,8 @@ export async function updateStaffProfile(
   // 更新後の所属一覧（active）・受取履歴の店一覧も併せて返す（ホーム再描画に使える）
   const memberships = await repo.listMembershipsByAuthUserId(authUserId);
   const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
-  return toStaffMe(profile, memberships, receiptStores, buildUrl);
+  const managesStore = await repo.hasManagedStore(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore);
 }
 
 // 画像を公開バケットへアップロードする infrastructure 関数の型（コンポジションルートで注入）。
@@ -539,6 +574,8 @@ export async function getStaffBalance(
   let sendableAmount = 0;
   let pendingStripeAmount = 0;
   let nextAvailableOn: string | null = null;
+  // 準備中の日付ごとの内訳（available_on の暦日ごとに合算・日付昇順）。未取得時は空配列で画面を壊さない
+  let pendingBuckets: StaffBalance["pendingBuckets"] = [];
   const connect = await repo.findStaffConnect(authUserId);
   if (verified && connect?.stripeAccountId) {
     try {
@@ -549,6 +586,8 @@ export async function getStaffBalance(
       // 準備中も負を表示に出さない（0 未満は 0 とする。負は内部的な調整中であり「準備中」ではない）
       pendingStripeAmount = Math.max(0, balance.pendingAmount);
       nextAvailableOn = balance.nextAvailableOn;
+      // 準備中の日付ごとの内訳をそのまま載せる（infra で暦日集計済み・合計＝pendingAmount）
+      pendingBuckets = balance.pendingBuckets;
     } catch (err) {
       // Stripe 残高取得に失敗しても画面を壊さない（DB 集計は返す）。0 にフォールバックしてログのみ。
       console.error(
@@ -568,6 +607,8 @@ export async function getStaffBalance(
     sendableAmount,
     pendingStripeAmount,
     nextAvailableOn,
+    // 準備中の日付ごとの内訳（UI が「M月D日から ¥金額」を行ごとに出す）
+    pendingBuckets,
   };
 }
 
@@ -679,16 +720,22 @@ export async function createConnectAccountSession(
 
 /**
  * account.updated（Connected Account の状態変化）を反映する（Webhook 経由・本人確認の遷移）。
- * Connected Account ID で本人を引き、payouts_enabled=true なら identity_status を verified に確定し、
- * held の tip を payable へ遷移する。二重遷移はしない（Repository のトランザクションで担保）。
+ * Connected Account ID で本人を引き、payouts_enabled・requirements の各件数から
+ * Model の deriveIdentityStatus で次の状態を導いて反映する:
+ *  - payouts_enabled=true → verified に確定し、held の tip を payable へ遷移（従来どおり）
+ *  - requirements.errors あり → action_required（要対応・審査NG）
+ *  - pending_verification あり → pending（提出済み・Stripe が審査中）
+ *  - currently_due / past_due だけ残っている → none は据え置き（新規口座）・それ以外は action_required
+ *  - それ以外 → none は据え置き・それ以外は pending（再提出で errors が消えれば要対応から戻る）
+ * 二重遷移はしない（Repository のトランザクションで担保）。
  * webhook feature から直接 import せず、コンポジションルートでこの関数を注入して使う。
  */
 export async function applyConnectAccountUpdate(
   repo: StaffRepository,
   stripeAccountId: string,
-  payoutsEnabled: boolean,
+  account: ConnectAccountState,
 ): Promise<ApplyAccountUpdateResult> {
-  return repo.applyAccountUpdate(stripeAccountId, payoutsEnabled);
+  return repo.applyAccountUpdate(stripeAccountId, account);
 }
 
 // Stripe payout を実行する infrastructure 関数の型（コンポジションルートで注入）。
@@ -734,15 +781,22 @@ export class PayoutBelowMinimumError extends Error {
  *  3. payable な tip を古い順（FIFO）に取得し、手取り換算の累計が available を超えない範囲だけを
  *     送金対象に選ぶ（Model の純粋関数 selectPayoutTipsWithinAvailable）。送金額＝選んだ tip の手取り合計。
  *     可否判定（verified必須・最低¥100）。選べる額が最低額未満／0 なら below_minimum。
- *  4. ★先に DB トランザクションで★ payout 行を pending（stripe_payout_id は NULL）で作成し、
- *     選んだ payable tip を paid＋payout_id 紐付けに更新する。ここで失敗したら Stripe を呼ばない
- *     （お金は動かない＝安全）。payout 行の id を取得する。
- *  5. Stripe payout を実行する。amount は available 以下に収めた送金額。idempotency_key と
- *     metadata.payout_id に payout 行の id を使う（再試行で二重送金しない／Webhook 照合のバックアップ）。
+ *  4. ★先に DB トランザクションで★ 選んだ payable tip を claim（payable→paid の実確保）し、
+ *     「実際に確保できた手取り合計」で payout 行を pending（stripe_payout_id は NULL）で作成する。
+ *     staff 単位の advisory lock で直列化し、claim が選定と食い違えば（並行送金・返金レース）
+ *     PayoutConflictError で全ロールバックする。ここで失敗したら Stripe を呼ばない（お金は動かない＝安全）。
+ *  5. Stripe payout を実行する。amount は「実際に claim できた手取り合計」（payout 行の額と必ず一致）。
+ *     idempotency_key と metadata.payout_id に payout 行の id を使う
+ *     （再試行で二重送金しない／Webhook 照合のバックアップ）。
  *  6. Stripe 成功 → payout 行に stripe_payout_id を更新する（status は pending のまま。
  *     確定は payout.paid Webhook を正とする）。
- *  7. Stripe 失敗（例外）→ DB を revert する（payout 行を status=failed＋failure_reason、
- *     対象 tip を payable へ戻す・payout_id=NULL）。エラーは呼び出し元へ再送出する。
+ *  7. Stripe 失敗（例外）→ エラーを分類する（Model の classifyStripePayoutError）。
+ *     - 確定失敗（StripeInvalidRequestError 等＝Stripe 側で payout 未作成が確実）: DB を revert する
+ *       （payout 行を status=failed＋failure_reason、対象 tip を payable へ戻す・payout_id=NULL）。
+ *     - 曖昧（接続断・タイムアウト・5xx＝成立したか不明）: revert しない。payout 行は pending のまま残す
+ *       （tips は paid のままなので再送金は「送れる額なし」で自然にブロックされる。実成立していれば
+ *       payout.paid Webhook（metadata.payout_id）で確定し、未成立なら日次照合が stuck pending を検知する）。
+ *     いずれもエラーは呼び出し元へ再送出する。
  *
  * 着金の確定は payout.paid / payout.failed Webhook を正とする（ここでは pending で記録するだけ）。
  * available に収まらなかった payable 分（pending 由来）は payable のまま残り、available になってから次回送金できる。
@@ -787,7 +841,8 @@ export async function createStaffPayout(
     throw new PayoutBelowMinimumError();
   }
 
-  // 【手順4】先に DB へ pending で記録し、選んだ payable tip を paid＋紐付けへ（トランザクション）。
+  // 【手順4】先に DB で選んだ payable tip を claim（実確保）し、実確保合計で pending の payout 行を作る
+  // （staff 単位の advisory lock で直列化・claim が選定と食い違えば PayoutConflictError で全ロールバック）。
   // ここで失敗すれば例外が伝播して Stripe は呼ばれない（お金は動かない＝安全）。
   const payout = await repo.createPendingPayoutAndMarkTipsPaid({
     staffId: ctx.staffId,
@@ -796,21 +851,28 @@ export async function createStaffPayout(
   });
 
   // 【手順5】Stripe payout を実行（Connected Account の available 残高→銀行。送金手数料は店員から取らない）。
-  // amount は available 以下に収めた送金額（残高不足にならない）。
+  // amount は「実際に claim できた手取り合計」＝payout.amount を使う（DB に記録した額と送金額を必ず一致させる）。
   // idempotency_key・metadata.payout_id に自前 payout 行の id を使う（二重送金防止／Webhook 照合のバックアップ）。
   let stripeResult: StripeCreatePayoutResult;
   try {
     stripeResult = await createPayout({
       connectedAccountId: ctx.stripeAccountId,
-      amount: payoutAmount,
+      amount: payout.amount,
       currency: CURRENCY,
       idempotencyKey: payout.id,
       payoutId: payout.id,
     });
   } catch (err) {
-    // 【手順7】Stripe 失敗 → DB を revert（payout=failed＋tip を payable へ戻す）。原因を記録して再送出する。
-    const reason = err instanceof Error ? err.message : "stripe_payout_failed";
-    await repo.revertPayoutByPayoutId(payout.id, reason);
+    // 【手順7】Stripe 失敗 → エラーを分類してから扱う（Model 純粋関数）。
+    // 確定失敗（Stripe 側で payout 未作成が確実）のみ revert する（payout=failed＋tip を payable へ戻す）。
+    if (classifyStripePayoutError(err) === "definite_failure") {
+      const reason = err instanceof Error ? err.message : "stripe_payout_failed";
+      await repo.revertPayoutByPayoutId(payout.id, reason);
+    }
+    // 曖昧（接続断・タイムアウト・5xx＝成立したか不明）は revert しない。
+    // payout 行は pending（stripe_payout_id 未設定）のまま残し、tips も paid のままにする
+    // （再送金は「送れる額なし」で自然にブロック。実成立なら payout.paid Webhook（metadata.payout_id）で
+    //  確定し、未成立なら日次照合が stuck pending を検知する）。revert→再送金による二重払いを防ぐ。
     throw err;
   }
 

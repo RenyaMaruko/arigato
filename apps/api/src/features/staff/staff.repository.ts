@@ -1,9 +1,13 @@
 import { getDb, sql } from "@arigato/db";
-import type {
-  IdentityStatus,
-  InviteStatus,
-  SettlementStatus,
-  PayoutStatus,
+import {
+  deriveIdentityStatus,
+  verifyPayoutClaim,
+  PayoutConflictError,
+  type ConnectAccountState,
+  type IdentityStatus,
+  type InviteStatus,
+  type SettlementStatus,
+  type PayoutStatus,
 } from "./staff.model.js";
 
 /**
@@ -23,8 +27,18 @@ export type InviteRow = {
   storeId: string;
   storeName: string;
   inviteStatus: InviteStatus;
+  // 招待の種類（staff: 在籍・QR / admin: 店の管理者として参加）。受け入れ時にこの type で分岐する
+  inviteType: "staff" | "admin";
   // 発行元の店が導入承認に同意済みか（adoption_agreed_at が設定されているか）
   storeAdopted: boolean;
+};
+
+// 管理者招待の受け入れ結果（store_admin role=admin を作った/再有効化した/既に管理者だった）。
+// joined: 新たに管理者になった / rejoined: 脱退済み管理者を再有効化した / already_member: 既に active な管理者
+export type AdminJoinResultRow = {
+  outcome: JoinOutcome;
+  storeId: string;
+  storeName: string;
 };
 
 // プロフィール本体（人ごと1つ。所属は別途 membership で持つ）
@@ -206,6 +220,14 @@ export type StaffRepository = {
   // 招待を accepted 化し、当該店への membership を1件作る（既に同店所属なら already_member）。
   // 招待二重消費の防止と membership 一意制約を1トランザクションで担保する。
   joinStoreByInvite: (authUserId: string, code: string) => Promise<JoinResultRow>;
+  // 管理者招待（type='admin'）を受け入れて store_admin role=admin を作る（受け入れ分岐の admin 側）。
+  // 招待を accepted 化し（accepted_auth_user_id に本人を記録）、store_admin を1件作る/再有効化する。
+  //  - 既に active な管理者（owner/admin）なら already_member（二重付与しない・招待は消費しない）
+  //  - 脱退済み（left_at あり）なら left_at→null・role='admin' に再有効化（rejoined）
+  // 招待二重消費の防止と一意制約を1トランザクションで担保する。プロフィール未作成なら staff_not_found。
+  acceptAdminInvite: (authUserId: string, code: string) => Promise<AdminJoinResultRow>;
+  // 自分が active な管理者である営業中の店が1つ以上あるか（モード切替の判定・GET /staff/me の managesStore）
+  hasManagedStore: (authUserId: string) => Promise<boolean>;
   // 自分のプロフィール（display_name・headline・avatar）を更新する。更新後の行を返す
   updateStaffProfile: (
     authUserId: string,
@@ -231,21 +253,24 @@ export type StaffRepository = {
   listSettlementsByAuthUserId: (authUserId: string) => Promise<SettlementRow[]>;
   // 本人の申告データ（受取記録）を年で絞って取得する（本人のみ）。year は西暦
   listTaxRecordsByAuthUserId: (authUserId: string, year: number) => Promise<TaxReportRecord[]>;
-  // account.updated を反映する。Connected Account ID で本人を引き、
+  // account.updated を反映する。Connected Account ID で本人を引き、Model の deriveIdentityStatus で
+  // 次の本人確認状態（verified / action_required / pending / 据え置き）を導いて書き込む。
   // payouts_enabled=true なら identity_status を verified に確定し、held の tip を payable へ遷移する。
   // 1トランザクションで原子的に行い、二重遷移しない（既に verified なら tip も再遷移しない）。
   applyAccountUpdate: (
     stripeAccountId: string,
-    payoutsEnabled: boolean,
+    account: ConnectAccountState,
   ) => Promise<ApplyAccountUpdateResult>;
   // 送金（payout）の本人・Connect 連携状態を取得（送金可否判定・Stripe payout の実行先）。未作成は null
   findPayoutContext: (authUserId: string) => Promise<PayoutContextRow | null>;
   // 本人の着金可能（payable）な成立済み tip の id・額面を取得する（送金額の算出・paid 化の対象特定）
   listPayableTipsByAuthUserId: (authUserId: string) => Promise<PayableTipRow[]>;
-  // 【DB 先行記録】送金記録を pending（stripe_payout_id は NULL）で1件作り、
-  // 対象の payable な tip を paid＋payout_id 紐付けに更新する。1トランザクションで原子的に行う。
-  // ここで失敗したら呼び出し側は Stripe を呼ばない（お金は動かない＝安全）。
-  // 対象 tip は引数の tipIds（事前に算出した payable 集合）かつ今なお payable のものに限定する。
+  // 【DB 先行記録】staff 単位の advisory lock で直列化した上で、対象の payable な tip を先に claim
+  // （payable→paid の実確保）し、「実際に確保できた tip の手取り合計」で送金記録
+  // （pending・stripe_payout_id は NULL）を1件作る。1トランザクションで原子的に行う。
+  // claim 件数が選定件数（tipIds）と不一致・実確保合計が最低送金額未満なら PayoutConflictError で
+  // 全ロールバックする（ここで失敗したら呼び出し側は Stripe を呼ばない＝お金は動かない・安全）。
+  // amount は選定時の見込み額（参考）。返す CreatePayoutRow.amount（実確保合計）を Stripe 送金額に使うこと。
   createPendingPayoutAndMarkTipsPaid: (params: {
     staffId: string;
     amount: number;
@@ -388,6 +413,7 @@ export function createStaffRepository(): StaffRepository {
           i.store_id    AS "storeId",
           st.name       AS "storeName",
           i.status      AS "inviteStatus",
+          i.type        AS "inviteType",
           (st.adoption_agreed_at IS NOT NULL) AS "storeAdopted"
         FROM staff_invite i
         JOIN store st ON st.id = i.store_id
@@ -502,12 +528,14 @@ export function createStaffRepository(): StaffRepository {
           storeName: string;
           status: InviteStatus;
           storeAdopted: boolean;
+          storeClosed: boolean;
         }>(sql`
           SELECT
             i.store_id AS "storeId",
             st.name    AS "storeName",
             i.status   AS "status",
-            (st.adoption_agreed_at IS NOT NULL) AS "storeAdopted"
+            (st.adoption_agreed_at IS NOT NULL) AS "storeAdopted",
+            (st.closed_at IS NOT NULL) AS "storeClosed"
           FROM staff_invite i
           JOIN store st ON st.id = i.store_id
           WHERE i.code = ${code}
@@ -515,7 +543,8 @@ export function createStaffRepository(): StaffRepository {
           FOR UPDATE OF i
         `);
         const invite = inviteRows[0];
-        if (!invite || invite.status !== "pending" || !invite.storeAdopted) {
+        // 招待が pending・店が導入承認済み・かつ店が営業中（閉店していない）のときだけ参加できる
+        if (!invite || invite.status !== "pending" || !invite.storeAdopted || invite.storeClosed) {
           throw new Error("invite_not_usable");
         }
 
@@ -609,6 +638,161 @@ export function createStaffRepository(): StaffRepository {
           storeName: invite.storeName,
         };
       });
+    },
+
+    // 管理者招待（type='admin'）を受け入れて store_admin role=admin を作る（受け入れ分岐の admin 側）。
+    // 1トランザクションで:
+    //  1. 招待を取得（pending かつ type='admin' かつ店が導入承認済み・営業中のときだけ使える）
+    //  2. 本人の staff（人）を引く（未作成なら staff_not_found。§1.5: 全員プロフィールを先に持つ）
+    //  3. 既存 (store, auth_user) の store_admin を在籍状態込みで引く
+    //     - active（left_at IS NULL）→ already_member（owner/admin いずれも二重付与しない・招待は消費しない）
+    //     - 脱退済み（left_at あり）→ left_at→null・role='admin' に再有効化（rejoined）・招待を消費
+    //     - 無ければ store_admin(role='admin') を新規作成（joined）・招待を消費
+    async acceptAdminInvite(authUserId, code) {
+      const db = getDb();
+      return await db.transaction(async (tx) => {
+        // 招待を取得（行ロック）。管理者招待・pending・店が承認済み・営業中のときだけ使える
+        const inviteRows = await tx.execute<{
+          storeId: string;
+          storeName: string;
+          status: InviteStatus;
+          inviteType: "staff" | "admin";
+          storeAdopted: boolean;
+          storeClosed: boolean;
+        }>(sql`
+          SELECT
+            i.store_id AS "storeId",
+            st.name    AS "storeName",
+            i.status   AS "status",
+            i.type     AS "inviteType",
+            (st.adoption_agreed_at IS NOT NULL) AS "storeAdopted",
+            (st.closed_at IS NOT NULL) AS "storeClosed"
+          FROM staff_invite i
+          JOIN store st ON st.id = i.store_id
+          WHERE i.code = ${code}
+          LIMIT 1
+          FOR UPDATE OF i
+        `);
+        const invite = inviteRows[0];
+        if (
+          !invite ||
+          invite.status !== "pending" ||
+          invite.inviteType !== "admin" ||
+          !invite.storeAdopted ||
+          invite.storeClosed
+        ) {
+          throw new Error("invite_not_usable");
+        }
+
+        // 本人の staff（人）を引く（プロフィール未作成は staff_not_found）
+        const staffRows = await tx.execute<{ id: string }>(sql`
+          SELECT id AS "id" FROM staff WHERE auth_user_id = ${authUserId} LIMIT 1
+        `);
+        if (!staffRows[0]) {
+          throw new Error("staff_not_found");
+        }
+        const staffId = staffRows[0].id;
+
+        // 兼任（§11.1）: 管理者は「その店の店員」も兼ねる。受け入れ時に staff_store（所属・QR）を
+        // 作る／再有効化する（既に在籍中なら ON CONFLICT で no-op＝既存流用・重複を作らない）。
+        // 一意制約 (staff_id, store_id) と整合。管理者を外しても staff_store は残す（別処理）。
+        const ensureStaffStore = async () => {
+          await tx.execute(sql`
+            INSERT INTO staff_store (staff_id, store_id)
+            VALUES (${staffId}, ${invite.storeId})
+            ON CONFLICT (staff_id, store_id) DO UPDATE SET left_at = NULL
+          `);
+        };
+
+        // 既存の store_admin（store×人）を在籍状態込みで引く（UNIQUE のため最大1件・行ロック）
+        const existingRows = await tx.execute<{ id: string; leftAt: string | null }>(sql`
+          SELECT id AS "id", left_at AS "leftAt"
+          FROM store_admin
+          WHERE store_id = ${invite.storeId} AND auth_user_id = ${authUserId}
+          LIMIT 1
+          FOR UPDATE
+        `);
+        const existing = existingRows[0];
+
+        // active（owner/admin いずれも）→ already_member（二重付与しない・招待は消費しない）
+        if (existing && existing.leftAt === null) {
+          return {
+            outcome: "already_member" as const,
+            storeId: invite.storeId,
+            storeName: invite.storeName,
+          };
+        }
+
+        // 脱退済み → 再有効化（left_at→null・role='admin'）＋招待を消費
+        if (existing && existing.leftAt !== null) {
+          await tx.execute(sql`
+            UPDATE store_admin
+            SET left_at = NULL, role = 'admin'
+            WHERE id = ${existing.id}
+          `);
+          // 兼任: 店員としての在籍（staff_store）も作る／再有効化する
+          await ensureStaffStore();
+          const accepted = await tx.execute<{ id: string }>(sql`
+            UPDATE staff_invite
+            SET status = 'accepted',
+                accepted_auth_user_id = ${authUserId},
+                accepted_at = now()
+            WHERE code = ${code}
+              AND status = 'pending'
+            RETURNING id AS "id"
+          `);
+          if (accepted.length === 0) {
+            throw new Error("invite_not_usable");
+          }
+          return {
+            outcome: "rejoined" as const,
+            storeId: invite.storeId,
+            storeName: invite.storeName,
+          };
+        }
+
+        // 無ければ store_admin(role='admin') を新規作成する
+        await tx.execute(sql`
+          INSERT INTO store_admin (store_id, auth_user_id, role)
+          VALUES (${invite.storeId}, ${authUserId}, 'admin')
+        `);
+        // 兼任: 店員としての在籍（staff_store）も作る／再有効化する（既に在籍中なら既存流用）
+        await ensureStaffStore();
+        // 招待を消費する（pending のときのみ。二重消費はここで弾く）
+        const accepted = await tx.execute<{ id: string }>(sql`
+          UPDATE staff_invite
+          SET status = 'accepted',
+              accepted_auth_user_id = ${authUserId},
+              accepted_at = now()
+          WHERE code = ${code}
+            AND status = 'pending'
+          RETURNING id AS "id"
+        `);
+        if (accepted.length === 0) {
+          throw new Error("invite_not_usable");
+        }
+        return {
+          outcome: "joined" as const,
+          storeId: invite.storeId,
+          storeName: invite.storeName,
+        };
+      });
+    },
+
+    // 自分が active な管理者である営業中の店が1つ以上あるか（モード切替の判定）
+    async hasManagedStore(authUserId) {
+      const db = getDb();
+      const rows = await db.execute<{ exists: boolean }>(sql`
+        SELECT EXISTS (
+          SELECT 1
+          FROM store_admin sa
+          JOIN store st ON st.id = sa.store_id
+          WHERE sa.auth_user_id = ${authUserId}
+            AND sa.left_at IS NULL
+            AND st.closed_at IS NULL
+        ) AS "exists"
+      `);
+      return rows[0]?.exists ?? false;
     },
 
     // 自分のプロフィールを更新（所属は変更しない）。本人の auth_user_id で限定する
@@ -772,10 +956,10 @@ export function createStaffRepository(): StaffRepository {
       return rows;
     },
 
-    // account.updated を反映する。Connected Account ID で本人を引き、payouts_enabled=true なら
-    // identity_status を verified に確定し、held の tip を payable へ遷移する。
+    // account.updated を反映する。Connected Account ID で本人を引き、Model の deriveIdentityStatus で
+    // 次の本人確認状態を導いて書き込む。verified 確定時のみ held の tip を payable へ遷移する（従来どおり不変）。
     // 既に verified なら tip も再遷移しない（二重遷移の防止）。1トランザクションで原子的に行う。
-    async applyAccountUpdate(stripeAccountId, payoutsEnabled) {
+    async applyAccountUpdate(stripeAccountId, account) {
       const db = getDb();
       return await db.transaction(async (tx) => {
         // 対象 staff を取得（行ロックで競合を避ける）
@@ -791,9 +975,20 @@ export function createStaffRepository(): StaffRepository {
           return { found: false, verified: false, promotedTips: 0 };
         }
 
-        // まだ着金可能でなければ verified への遷移はしない（pending へは寄せず据え置く）。
-        if (!payoutsEnabled) {
-          return { found: true, verified: staffRow.identityStatus === "verified", promotedTips: 0 };
+        // 次の本人確認状態を Model の純粋関数で導く（verified 優先・後退しない・要対応の判定を1か所に集約）
+        const nextStatus = deriveIdentityStatus(staffRow.identityStatus, account);
+
+        // verified 以外（pending / action_required / none 据え置き）は状態の書き込みだけ行う
+        // （held→payable の昇格は verified 確定時のみ＝従来どおり）。
+        if (nextStatus !== "verified") {
+          if (nextStatus !== staffRow.identityStatus) {
+            await tx.execute(sql`
+              UPDATE staff
+              SET identity_status = ${nextStatus}
+              WHERE id = ${staffRow.id}
+            `);
+          }
+          return { found: true, verified: false, promotedTips: 0 };
         }
 
         // 既に verified なら二重遷移しない（冪等。tip も再遷移させない）
@@ -865,26 +1060,26 @@ export function createStaffRepository(): StaffRepository {
       return rows;
     },
 
-    // 【DB 先行記録】送金記録を pending（stripe_payout_id は NULL）で作り、
-    // 対象の payable な tip を paid＋payout_id 紐付けへ更新する。1トランザクションで原子的に行う。
-    // tip は引数の tipIds かつ今なお payable のものに限定し、別リクエストとの競合
-    // （同じ payable を二重送金）を WHERE 条件で弾く。
-    // ここで失敗したら呼び出し側は Stripe を呼ばない（お金は動かない＝安全）。
+    // 【DB 先行記録】選定した payable な tip を先に claim（payable→paid の実確保）し、
+    // 「実際に確保できた tip の手取り合計」で送金記録（pending・stripe_payout_id は NULL）を作る。
+    // 1トランザクションで原子的に行う。ここで失敗したら呼び出し側は Stripe を呼ばない（お金は動かない＝安全）。
+    //
+    // 二重払いを構造的に防ぐ2つの仕掛け:
+    //  1. staff 単位の advisory lock で送金処理を直列化する（並行リクエストの片方はロック待ちになり、
+    //     先行が commit した後に走る＝同じ payable を二重に選べない）。tx 終了で自動解放。
+    //  2. UPDATE ... RETURNING の実更新行数を検証する（claim 件数が選定件数と不一致／実確保合計が
+    //     最低送金額未満なら PayoutConflictError で全ロールバック）。事前選定額は使わず、
+    //     実確保した分の合計を payout.amount（＝Stripe 送金額）にする。
     async createPendingPayoutAndMarkTipsPaid(params) {
       const db = getDb();
       return await db.transaction(async (tx) => {
-        // 送金記録（pending・stripe_payout_id は NULL）を作成する
-        const inserted = await tx.execute<CreatePayoutRow>(sql`
-          INSERT INTO payout (staff_id, amount, status, stripe_payout_id)
-          VALUES (${params.staffId}, ${params.amount}, 'pending', NULL)
-          RETURNING
-            id     AS "id",
-            amount AS "amount",
-            status AS "status"
+        // 【1】staff 単位の advisory lock で送金を直列化する（tx 終了＝commit/rollback で自動解放）。
+        // hashtext で staffId（uuid 文字列）を int にハッシュしてロックキーにする。
+        await tx.execute(sql`
+          SELECT pg_advisory_xact_lock(hashtext(${params.staffId}::text))
         `);
-        const payoutRow = inserted[0]!;
 
-        // 対象の payable な tip を paid＋この payout に紐付け（今なお payable のものだけを更新）。
+        // 【2】先に対象 tip を claim する（payable→paid の実確保。RETURNING で実際に取れた行を得る）。
         //
         // ★実 DB の落とし穴: drizzle(postgres-js) は sql`${jsArray}` を「行（record）」= ($1,$2,…) に
         //   展開するため、`= ANY(${tipIds})` は「op ANY requires array on right side」、
@@ -894,12 +1089,43 @@ export function createStaffRepository(): StaffRepository {
         //   値は ${tipIdsLiteral} として束縛されるため安全（SQL インジェクションにならない）。
         //   空配列のときも '{}'::uuid[] となり「何も更新しない」正しい挙動になる。
         const tipIdsLiteral = `{${params.tipIds.join(",")}}`;
-        await tx.execute(sql`
+        const claimed = await tx.execute<{ id: string; amount: number }>(sql`
           UPDATE tip
-          SET settlement_status = 'paid',
-              payout_id = ${payoutRow.id}
+          SET settlement_status = 'paid'
           WHERE id = ANY(${tipIdsLiteral}::uuid[])
             AND settlement_status = 'payable'
+          RETURNING
+            id     AS "id",
+            amount AS "amount"
+        `);
+
+        // 【3】実確保を検証する（Model 純粋関数）。選定との件数不一致（並行送金・返金レース）や
+        // 実確保合計が最低送金額未満なら例外で全ロールバック（tip は payable のまま・Stripe 未呼出）。
+        const verification = verifyPayoutClaim(
+          params.tipIds.length,
+          claimed.map((c) => c.amount),
+        );
+        if (!verification.ok) {
+          throw new PayoutConflictError(verification.reason);
+        }
+
+        // 【4】実確保した手取り合計で送金記録（pending・stripe_payout_id は NULL）を作成する
+        const inserted = await tx.execute<CreatePayoutRow>(sql`
+          INSERT INTO payout (staff_id, amount, status, stripe_payout_id)
+          VALUES (${params.staffId}, ${verification.amount}, 'pending', NULL)
+          RETURNING
+            id     AS "id",
+            amount AS "amount",
+            status AS "status"
+        `);
+        const payoutRow = inserted[0]!;
+
+        // 【5】claim した tip をこの payout に紐付ける（実際に確保できた行だけを対象にする）
+        const claimedIdsLiteral = `{${claimed.map((c) => c.id).join(",")}}`;
+        await tx.execute(sql`
+          UPDATE tip
+          SET payout_id = ${payoutRow.id}
+          WHERE id = ANY(${claimedIdsLiteral}::uuid[])
         `);
 
         return payoutRow;
@@ -981,7 +1207,10 @@ export function createStaffRepository(): StaffRepository {
             stripe_payout_id = COALESCE(stripe_payout_id, ${params.stripePayoutId})
         WHERE (
             stripe_payout_id = ${params.stripePayoutId}
-            OR id = ${params.payoutId}::uuid
+            -- 自前 id（metadata.payout_id）でのフォールバック照合は pending の行に限定する。
+            -- revert 済み（failed）の行を別 payout の paid Webhook が誤って paid に復活させない
+            -- （failed→tip は payable へ戻り再送金され得るため、復活すると台帳が矛盾する）。
+            OR (id = ${params.payoutId}::uuid AND status = 'pending')
           )
           AND status <> 'paid'
         RETURNING id

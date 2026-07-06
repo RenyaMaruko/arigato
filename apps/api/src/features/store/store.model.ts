@@ -13,6 +13,51 @@ import { randomBytes } from "node:crypto";
 // 招待ステータス（pending: 招待中 / accepted: 所属確定 / revoked: 失効）
 export type StoreInviteStatus = "pending" | "accepted" | "revoked";
 
+// 招待の種類（staff: スタッフ招待＝在籍・QR / admin: 管理者招待＝store_admin role=admin）
+export type StoreInviteType = "staff" | "admin";
+
+// 店舗の管理者ロール（owner: 所有者 / admin: 管理者）
+export type StoreRole = "owner" | "admin";
+
+// owner 自動継承の判定に渡す、残っている active な管理者1件（最古参の判定に created_at を使う）
+export type SuccessionAdmin = {
+  authUserId: string;
+  // その店に管理者として加わった日時（ISO 文字列）。小さいほど古参
+  createdAt: string;
+};
+
+// owner 自動継承の判定結果。
+// - promote: 最古参の管理者を owner へ昇格する（authUserId が昇格対象）
+// - close:   残る管理者がいないので店を論理削除（閉店）する
+export type OwnerSuccessionDecision =
+  | { kind: "promote"; authUserId: string }
+  | { kind: "close" };
+
+/**
+ * owner が抜ける／消えたときの継承先を決める純粋関数（owner ライフサイクルの中核判定）。
+ *
+ * - 残っている active な管理者（admin）がいれば、最古参（created_at 最小）を owner へ昇格する。
+ *   同着（created_at が同値）の場合は authUserId の昇順で決定的に1人を選ぶ（判定を安定させる）。
+ * - 誰もいなければ店を論理削除（閉店）する（owner 不在の店を作らないため）。
+ *
+ * 引数の admins は「現 owner を除いた」残存 active 管理者の集合を渡すこと（呼び出し側で owner を外す）。
+ * DB アクセスはしない（判定だけを担い、実際の昇格/閉店は Service が Repository へ委譲する）。
+ */
+export function decideOwnerSuccession(admins: SuccessionAdmin[]): OwnerSuccessionDecision {
+  if (admins.length === 0) {
+    // 残る管理者がいない → 店を閉店（論理削除）する
+    return { kind: "close" };
+  }
+  // 最古参（created_at 最小）を選ぶ。同着は authUserId 昇順で決定的に選ぶ
+  const oldest = [...admins].sort((a, b) => {
+    const at = new Date(a.createdAt).getTime();
+    const bt = new Date(b.createdAt).getTime();
+    if (at !== bt) return at - bt;
+    return a.authUserId < b.authUserId ? -1 : a.authUserId > b.authUserId ? 1 : 0;
+  })[0]!;
+  return { kind: "promote", authUserId: oldest.authUserId };
+}
+
 /**
  * スタッフ招待コード（リンク/コード用トークン）を生成する純粋関数。
  * URL セーフな英数字（base64url 由来）でランダム生成し、招待リンク /invite/:code に使う。

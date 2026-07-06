@@ -63,6 +63,12 @@ export function StaffProfileCreatePage() {
     joinClaimedRef.current = true;
     joinMutation.mutate(invite.trim(), {
       onSuccess: (result) => {
+        // 管理者招待（type=admin）は所属（QR）を作らず店の管理者になるため、店の管理モード（/store）へ送る。
+        // スタッフ招待（type=staff）は従来どおり参加完了画面へ。
+        if (result.type === "admin") {
+          navigate({ to: "/store" });
+          return;
+        }
         goJoined(
           result.storeName,
           result.status === "already_member" ? "already" : "joined",
@@ -88,7 +94,7 @@ export function StaffProfileCreatePage() {
         // ストレージが使えなくても致命的でない
       }
     }
-    navigate({ to: "/staff/login" });
+    navigate({ to: "/login" });
   }, [authLoading, isAuthenticated, invite, navigate]);
 
   // ガード: プロフィール作成済みなら作成画面を出さず、招待があれば参加、無ければホームへ
@@ -182,7 +188,10 @@ export function StaffProfileCreatePage() {
             )}
             {inviteQuery.data && inviteQuery.data.valid && (
               <span className="text-token-md text-rose">
-                「{inviteQuery.data.storeName}」{t("staff.inviteValid")}
+                「{inviteQuery.data.storeName}」
+                {inviteQuery.data.type === "admin"
+                  ? t("staff.inviteValidAdmin")
+                  : t("staff.inviteValid")}
               </span>
             )}
             {inviteQuery.data && !inviteQuery.data.valid && (

@@ -1,11 +1,13 @@
 import { useTranslation } from "react-i18next";
 import { Link } from "@tanstack/react-router";
+import { StoreModeSwitch } from "../../../components/common/StoreModeSwitch.js";
 
 /**
- * 店員さん画面の共通ボトムナビ（ホーム / 履歴 / 所属店舗 / 設定）。
+ * 店員さん画面の共通ボトムナビ（ホーム / 履歴 / ⇄切替 / 所属店舗 / 設定）。
  * 現在地（active）をローズで強調し、それ以外は淡色にする。モック01/10 共通の下部ナビ。
  * 店側 StoreBottomNav と同じ作法（feature 跨ぎ import はしないため staff 用に新規実装）。
  * 掛け持ち（多対多）対応で、QR は所属店舗ごとに分かれるため、タブは「所属店舗」一覧への入口とする。
+ * 中央には「店舗管理 ⇄ 店員」切替ボタン（StoreModeSwitch・§11.4）を置く。管理店を持つ人だけに出る（純店員は非表示）。
  */
 type NavKey = "home" | "history" | "stores" | "settings";
 
@@ -59,6 +61,9 @@ export function StaffBottomNav({ active }: { active?: NavKey }) {
         </svg>
         <span className="text-[10px]">{t("staff.navHistory")}</span>
       </Link>
+
+      {/* 中央の「店舗管理 ⇄ 店員」切替（管理店を持つ人のみ表示・§11.4） */}
+      <StoreModeSwitch mode="staff" />
 
       {/* 所属店舗（店一覧→店ごとのQR詳細へ） */}
       <Link
