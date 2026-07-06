@@ -325,8 +325,9 @@ export function createInMemoryStoreRepository(): StoreRepository {
     },
 
     // 在籍中スタッフ1人の詳細を返す（脱退済み・他店・存在しないは null）。
-    // インメモリは staff プロフィール（auth_user_id）や store_admin を保持しないため、
-    // authUserId は staff の id で代用し、管理者ロールは null を返す（実 DB は store_admin を左結合して埋める）。
+    // インメモリは staff プロフィール（auth_user_id）や store_admin・staff_store 行を保持しないため、
+    // authUserId / membershipId は staff の id で代用し、管理者ロールは null を返す
+    // （実 DB は store_admin を左結合し、membershipId は staff_store.id を返す）。
     async findStaffDetail(storeId, staffId) {
       const s = (staffByStore.get(storeId) ?? []).find(
         (x) => x.id === staffId && x.leftAt === null,
@@ -338,6 +339,7 @@ export function createInMemoryStoreRepository(): StoreRepository {
         headline: s.headline,
         avatarUrl: s.avatarUrl,
         joinedAt: s.joinedAt,
+        membershipId: s.id,
         authUserId: s.id,
         role: null,
       };

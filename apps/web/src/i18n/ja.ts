@@ -466,6 +466,15 @@ export const ja = {
       staffRemoveCancel: "キャンセル",
       staffRemoving: "処理中…",
       staffRemoveError: "スタッフを外せませんでした。もう一度お試しください。",
+      // スタッフのQR表示（詳細の「QRを表示」→ QR画面。店が印刷して置く用途）
+      staffQrCta: "QRを表示",
+      staffQrTitle: "QRコード",
+      staffQrHeading: "スタッフ専用の投げ銭QR",
+      // 誰のQRかを示すサブ見出し（{{name}} にスタッフ名）
+      staffQrSub: "{{name}} さん用のQR",
+      staffQrNote: "このQRをお客さまに見せてください",
+      staffQrPrint: "印刷する",
+      staffQrUrlLabel: "QRが指すURL",
       // スタッフ招待（04）
       inviteTitle: "招待",
       inviteHeading: "スタッフを招待するための\nリンクを発行します",

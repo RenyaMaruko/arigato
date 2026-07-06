@@ -169,6 +169,17 @@ function StoreStaffDetailContent({ store }: { store: StoreProfile }) {
               </div>
             </div>
 
+            {/* QRを表示（主要アクション。このスタッフの投げ銭QRを表示・印刷する画面へ） */}
+            <button
+              type="button"
+              onClick={() =>
+                navigate({ to: "/store/staff/$staffId/qr", params: { staffId: detail.id } })
+              }
+              className="mt-8 block w-full rounded-xl bg-rose py-4 text-center text-token-md font-bold text-page"
+            >
+              {t("store.staffQrCta")}
+            </button>
+
             {/* このスタッフを外す（在籍解除・控えめなボタン。実行は確認ダイアログを挟む） */}
             <button
               type="button"
@@ -176,7 +187,7 @@ function StoreStaffDetailContent({ store }: { store: StoreProfile }) {
                 setError(null);
                 setPending("removeStaff");
               }}
-              className="mt-8 block w-full rounded-xl border-[1.5px] border-rose-spark py-4 text-center text-token-md font-bold text-rose"
+              className="mt-3 block w-full rounded-xl border-[1.5px] border-rose-spark py-4 text-center text-token-md font-bold text-rose"
             >
               {t("store.staffRemoveCta")}
             </button>

@@ -269,6 +269,10 @@ export const StoreStaffDetailSchema = z.object({
   avatarUrl: z.string().nullable(),
   // その店に参加した日（staff_store.created_at。ISO 文字列）
   joinedAt: z.string(),
+  // その店での所属（staff_store＝membership・人×店）の ID。QR が指す固定 URL の元になる
+  membershipId: z.string().uuid(),
+  // QR が指す固定 URL（/tip/:membershipId）。店側の「スタッフQR表示・印刷」に使う（金額情報は含まない）
+  tipUrl: z.string(),
   // 対象スタッフの人（Supabase auth.users の UUID）。
   // 管理者操作（管理者権限を外す・オーナーにする）は auth_user_id を対象に取るため詳細に含める。
   authUserId: z.string().uuid(),
