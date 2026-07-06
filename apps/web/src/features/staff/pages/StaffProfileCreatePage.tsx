@@ -164,8 +164,15 @@ export function StaffProfileCreatePage() {
   if (authLoading || !isAuthenticated || meQuery.isLoading || hasProfile) {
     return (
       <PhoneFrame>
-        <div className="flex flex-1 items-center justify-center text-token-md text-ink-sub">
-          {joinMutation.isPending ? t("staff.joining") : t("staff.loading")}
+        {/* 既存ユーザーの自動参加・ガード判定中もスピナーを回して「処理が動いている」ことを見せる */}
+        <div className="flex flex-1 flex-col items-center justify-center gap-4">
+          <span
+            className="h-10 w-10 animate-spin rounded-full border-4 border-rose-soft border-t-rose"
+            aria-hidden="true"
+          />
+          <span className="text-token-md text-ink-sub">
+            {joinMutation.isPending ? t("staff.joining") : t("staff.loading")}
+          </span>
         </div>
       </PhoneFrame>
     );
@@ -234,14 +241,22 @@ export function StaffProfileCreatePage() {
           <button
             type="submit"
             disabled={!canSubmit}
-            className="mt-8 rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page disabled:opacity-50"
+            className="mt-8 flex items-center justify-center gap-2.5 rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page disabled:opacity-50"
           >
-            {createMutation.isPending || joinMutation.isPending
-              ? t("staff.joining")
-              : t("staff.createSubmit")}
+            {createMutation.isPending || joinMutation.isPending ? (
+              <>
+                {/* 登録中はスピナーを回して「処理が動いている」ことを見せる
+                    （プロフィール保存＋受け取り用のStripe連結アカウント作成で数秒かかるため） */}
+                <span
+                  className="h-5 w-5 animate-spin rounded-full border-2 border-page/40 border-t-page"
+                  aria-hidden="true"
+                />
+                {t("staff.createSubmitting")}
+              </>
+            ) : (
+              t("staff.createSubmit")
+            )}
           </button>
-          {/* 本人確認は後でよい旨 */}
-          <div className="mt-3 text-center text-token-xs text-muted">{t("staff.createNote")}</div>
           {error && <div className="mt-3 text-center text-token-sm text-rose">{error}</div>}
         </form>
       </div>

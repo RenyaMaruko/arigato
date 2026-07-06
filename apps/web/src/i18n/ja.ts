@@ -107,7 +107,7 @@ export const ja = {
       // サインアップ後（メール確認の案内）
       signupSentTitle: "確認メールを送りました",
       signupSentLead:
-        "メールのリンクを開くと登録が完了します。確認後にログインできます。",
+        "メールのリンクを開くと登録が完了します。\n確認後にログインできます。",
       backToLogin: "ログインへ戻る",
       loginNote: "店の招待リンクからの登録で、所属が確定します",
       // パスワード再設定（申請）
@@ -175,7 +175,8 @@ export const ja = {
       headlineLabel: "一言（任意）",
       headlinePlaceholder: "例）カフェで働いています☕",
       createSubmit: "はじめる",
-      createNote: "本人確認・口座登録は後からで大丈夫です",
+      // 登録処理中のボタン表示（プロフィール保存＋Stripe連結アカウント作成で数秒かかる）
+      createSubmitting: "登録中…",
       createErrorInvite: "招待が無効です。コードを確認してください。",
       createErrorExists: "すでにプロフィールが作成されています。",
       createErrorGeneric: "作成に失敗しました。もう一度お試しください。",
