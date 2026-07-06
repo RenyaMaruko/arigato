@@ -87,6 +87,8 @@ export type StoreStaffRow = {
   displayName: string;
   headline: string | null;
   avatarUrl: string | null;
+  // その人の auth ユーザーID（一覧の「（自分）」表示の判定用）。メモリ実装では省略可
+  authUserId?: string | null;
 };
 
 // 在籍中スタッフ1人の詳細行（店スコープ・金額なし）。参加日は staff_store.created_at。
@@ -97,6 +99,8 @@ export type StoreStaffDetailRow = {
   avatarUrl: string | null;
   // その店に参加した日時（staff_store.created_at。ISO 文字列）
   joinedAt: string;
+  // その店での所属（staff_store＝membership）の ID。QR が指す固定 URL（/tip/:membershipId）の元
+  membershipId: string;
   // 対象スタッフの人（Supabase auth.users の UUID）。管理者操作の対象特定に使う
   authUserId: string;
   // その人のこの店での active な管理者ロール（owner/admin）。管理者でなければ null（出し分け用）
@@ -685,7 +689,8 @@ export function createStoreRepository(): StoreRepository {
           s.id            AS "id",
           s.display_name  AS "displayName",
           s.headline      AS "headline",
-          s.avatar_url    AS "avatarUrl"
+          s.avatar_url    AS "avatarUrl",
+          s.auth_user_id  AS "authUserId"
         FROM staff_store ss
         JOIN staff s ON s.id = ss.staff_id
         WHERE ss.store_id = ${storeId}
@@ -708,6 +713,7 @@ export function createStoreRepository(): StoreRepository {
           s.headline      AS "headline",
           s.avatar_url    AS "avatarUrl",
           to_char(ss.created_at AT TIME ZONE 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "joinedAt",
+          ss.id           AS "membershipId",
           s.auth_user_id  AS "authUserId",
           sa.role         AS "role"
         FROM staff_store ss

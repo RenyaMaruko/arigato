@@ -96,6 +96,60 @@ export function StaffPayoutPage() {
     });
   };
 
+  // 送金完了後: チェック演出の完了画面（投げ銭完了・店舗作成と同じトーン）。
+  // 「閉じる」で送金画面に戻る（残高・送金履歴は反映済みの最新が表示される）
+  if (doneAmount != null) {
+    return (
+      <PhoneFrame>
+        <div className="flex flex-1 min-h-0 flex-col overflow-y-auto [&>*]:shrink-0 px-[26px] pb-[30px] pt-2">
+          {/* 成功チェック（pop アニメ + 周囲の輝き spark） */}
+          <div className="mt-20 flex justify-center">
+            <div className="relative h-[108px] w-[108px] animate-pop">
+              <div className="flex h-[108px] w-[108px] items-center justify-center rounded-full bg-rose text-token-display font-bold text-page">
+                ✓
+              </div>
+              {/* 周囲の輝き（装飾・順に現れる） */}
+              <span className="absolute -left-1 -top-1.5 animate-spark text-token-2xl text-rose-spark [animation-delay:.35s]">
+                ＼
+              </span>
+              <span className="absolute -right-1 -top-1.5 animate-spark text-token-2xl text-rose-spark [animation-delay:.42s]">
+                ／
+              </span>
+              <span className="absolute -left-5 top-3.5 animate-spark text-token-base text-rose-spark [animation-delay:.5s]">
+                ·
+              </span>
+              <span className="absolute -right-5 top-3.5 animate-spark text-token-base text-rose-spark [animation-delay:.55s]">
+                ·
+              </span>
+            </div>
+          </div>
+
+          {/* 送金額＋完了メッセージ・着金タイミングの案内 */}
+          <div className="mt-[30px] text-center text-token-2xl font-bold leading-[1.8] text-ink">
+            {t("staff.payoutDoneTitle", { amount: `¥${doneAmount.toLocaleString()}` })}
+          </div>
+          <div className="mt-2 text-center text-token-md leading-relaxed text-ink-sub">
+            {t("staff.payoutDoneNote")}
+          </div>
+
+          {/* 閉じる（送金画面へ戻る） */}
+          <div className="mt-auto pt-[30px]">
+            <button
+              type="button"
+              onClick={() => setDoneAmount(null)}
+              className="w-full rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
+            >
+              {t("staff.payoutDoneClose")}
+            </button>
+          </div>
+        </div>
+
+        {/* 下部ボトムナビ（完了表示はタブに該当しないため active 未指定） */}
+        <StaffBottomNav />
+      </PhoneFrame>
+    );
+  }
+
   return (
     <PhoneFrame>
       {/* ヘッダー（戻る・タイトル） */}
@@ -151,13 +205,6 @@ export function StaffPayoutPage() {
                   : errorCode === "payout_below_minimum"
                     ? t("staff.payoutErrorBelowMinimum")
                     : t("staff.payoutError")}
-              </div>
-            )}
-
-            {/* 送金完了の表示（送金額の控えから「¥◯◯を送金しました」） */}
-            {doneAmount != null && (
-              <div className="mt-4 rounded-xl border border-line bg-surface-subtle px-4 py-3 text-center text-token-sm leading-relaxed text-ink-sub">
-                {t("staff.payoutDone", { amount: `¥${doneAmount.toLocaleString()}` })}
               </div>
             )}
 

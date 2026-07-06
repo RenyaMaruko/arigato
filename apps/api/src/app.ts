@@ -235,9 +235,11 @@ export function createApp() {
     revokeStoreInvite: (authUserId, storeId, code) =>
       revokeStoreInvite(storeRepo, authUserId, storeId, code),
     listStoreStaff: (authUserId, storeId) => listStoreStaff(storeRepo, authUserId, storeId),
-    // 在籍中スタッフ1人の詳細（基本情報・金額なし・店スコープ）
+    // 在籍中スタッフ1人の詳細（基本情報・金額なし・店スコープ）。
+    // QR が指す固定 URL（tipUrl）の組み立ては staff feature と同じ buildStaffTipUrl をここで注入する
+    // （店側の「スタッフQR表示・印刷」用。feature 同士は直接 import しない）。
     getStoreStaffDetail: (authUserId, storeId, staffId) =>
-      getStoreStaffDetail(storeRepo, authUserId, storeId, staffId),
+      getStoreStaffDetail(storeRepo, buildStaffTipUrl, authUserId, storeId, staffId),
     // 自店のスタッフを在籍解除する（論理削除・店スコープ）。お金は移動しない
     removeStoreStaff: (authUserId, storeId, staffId) =>
       removeStoreStaff(storeRepo, authUserId, storeId, staffId),

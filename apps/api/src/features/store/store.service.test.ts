@@ -51,6 +51,9 @@ import type {
 
 const buildUrl = (code: string) => buildInviteUrl("http://localhost:5173", code);
 
+// QR が指す固定 URL（/tip/:membershipId）を組み立てるテスト用ヘルパ（app.ts の buildStaffTipUrl 相当）
+const buildTip = (membershipId: string) => `http://localhost:5173/tip/${membershipId}`;
+
 // 受取日時が期間（from 含む・to 排他）に入るか判定するテスト用ヘルパ（実 DB の SQL と同じ規則）
 function inPeriod(receivedAt: string, period?: { from?: string; to?: string }): boolean {
   if (!period) return true;
@@ -64,8 +67,12 @@ function inPeriod(receivedAt: string, period?: { from?: string; to?: string }): 
 function createMockRepo() {
   const stores = new Map<string, StoreRow>();
   const invitesByStore = new Map<string, StoreInviteRow[]>();
-  // スタッフ行に authUserId（任意）を持たせ、店員でもある管理者のロール解決（詳細のロール出し分け）を検証できるようにする
-  const staffByStore = new Map<string, (StoreStaffRow & { authUserId?: string })[]>();
+  // スタッフ行に authUserId / membershipId（いずれも任意）を持たせ、店員でもある管理者のロール解決や
+  // 所属（membership）由来の QR 用 URL（tipUrl）の組み立てを検証できるようにする
+  const staffByStore = new Map<
+    string,
+    (StoreStaffRow & { authUserId?: string; membershipId?: string })[]
+  >();
   // 店の管理者（store_admin 相当）。store_id ごとに保持。leftAt は論理削除（null＝active）
   const adminsByStore = new Map<
     string,
@@ -255,6 +262,7 @@ function createMockRepo() {
     },
     // 在籍中スタッフ1人の詳細（参加日付き・金額なし）。脱退済み・他店・存在しないは null。
     // その人の authUserId（無ければ id で代用）から active な管理者ロールを引いて role を埋める（詳細のロール出し分け検証用）。
+    // membershipId（所属＝staff_store の ID 相当）は指定が無ければ id から導出する（tipUrl 組み立ての検証用）。
     async findStaffDetail(storeId, staffId) {
       const s = (staffByStore.get(storeId) ?? []).find((x) => x.id === staffId);
       if (!s || removedStaff.has(removedKey(storeId, staffId))) return null;
@@ -268,6 +276,7 @@ function createMockRepo() {
         headline: s.headline,
         avatarUrl: s.avatarUrl,
         joinedAt: "2026-06-23T00:00:00Z",
+        membershipId: s.membershipId ?? `membership-${s.id}`,
         authUserId,
         role: admin?.role ?? null,
       };
@@ -628,12 +637,16 @@ describe("store.service", () => {
   it("listStoreStaff: 自店の所属スタッフを名簿順で返す（金額・件数なし）", async () => {
     seedOwnedStore(m, "store-1", "owner-1");
     m.staffByStore.set("store-1", [
-      { id: "s1", displayName: "山田 さくら", headline: "ホール", avatarUrl: null },
-      { id: "s2", displayName: "田中 健一", headline: "バリスタ", avatarUrl: null },
+      // owner 自身も店員を兼ねる（authUserId が閲覧者と一致 → isSelf=true で「（自分）」表示）
+      { id: "s1", displayName: "山田 さくら", headline: "ホール", avatarUrl: null, authUserId: "owner-1" },
+      { id: "s2", displayName: "田中 健一", headline: "バリスタ", avatarUrl: null, authUserId: "u-s2" },
     ]);
     const res = await listStoreStaff(m.repo, "owner-1", "store-1");
     expect(res.count).toBe(2);
     expect(res.items[0]!.displayName).toBe("山田 さくら");
+    // 閲覧者自身の行だけ isSelf=true（「（自分）」表示の判定）
+    expect(res.items[0]!.isSelf).toBe(true);
+    expect(res.items[1]!.isSelf).toBe(false);
     // 金額や件数のキーが含まれない
     const json = JSON.stringify(res);
     expect(json).not.toMatch(/amount|customer_total|platform_fee|balance|payout/i);
@@ -644,11 +657,30 @@ describe("store.service", () => {
     m.staffByStore.set("store-1", [
       { id: "s1", displayName: "山田 さくら", headline: "ホール", avatarUrl: null },
     ]);
-    const detail = await getStoreStaffDetail(m.repo, "owner-1", "store-1", "s1");
+    const detail = await getStoreStaffDetail(m.repo, buildTip, "owner-1", "store-1", "s1");
     expect(detail.id).toBe("s1");
     expect(detail.displayName).toBe("山田 さくら");
     expect(detail.joinedAt).toBeTruthy();
     // 金額に関わるキーが含まれない（店はお金に触れない）
+    expect(JSON.stringify(detail)).not.toMatch(/amount|customer_total|platform_fee|balance|payout/i);
+  });
+
+  it("getStoreStaffDetail: membershipId と QR が指す固定 URL（tipUrl）を返す（店側のQR表示・印刷用。金額なし）", async () => {
+    seedOwnedStore(m, "store-1", "owner-1");
+    m.staffByStore.set("store-1", [
+      {
+        id: "s1",
+        displayName: "山田 さくら",
+        headline: null,
+        avatarUrl: null,
+        membershipId: "mem-1",
+      },
+    ]);
+    const detail = await getStoreStaffDetail(m.repo, buildTip, "owner-1", "store-1", "s1");
+    // 所属（membership）と、店員本人のQRと同じ /tip/:membershipId を指す URL を返す
+    expect(detail.membershipId).toBe("mem-1");
+    expect(detail.tipUrl).toBe("http://localhost:5173/tip/mem-1");
+    // QR 情報を足しても金額キーは一切含まれないまま（店はお金に触れない）
     expect(JSON.stringify(detail)).not.toMatch(/amount|customer_total|platform_fee|balance|payout/i);
   });
 
@@ -660,12 +692,12 @@ describe("store.service", () => {
       { id: "s1", displayName: "田中 管理", headline: null, avatarUrl: null, authUserId: "admin-user" },
     ]);
     // owner が見ると、対象のロール(admin)・自分のロール(owner)・対象の authUserId を得られる
-    const asOwner = await getStoreStaffDetail(m.repo, "owner-1", "store-1", "s1");
+    const asOwner = await getStoreStaffDetail(m.repo, buildTip, "owner-1", "store-1", "s1");
     expect(asOwner.role).toBe("admin");
     expect(asOwner.viewerRole).toBe("owner");
     expect(asOwner.authUserId).toBe("admin-user");
     // admin 自身が見ると viewerRole は admin（管理者操作は出せない）
-    const asAdmin = await getStoreStaffDetail(m.repo, "admin-user", "store-1", "s1");
+    const asAdmin = await getStoreStaffDetail(m.repo, buildTip, "admin-user", "store-1", "s1");
     expect(asAdmin.viewerRole).toBe("admin");
   });
 
@@ -674,7 +706,7 @@ describe("store.service", () => {
     m.staffByStore.set("store-1", [
       { id: "s1", displayName: "山田 さくら", headline: null, avatarUrl: null, authUserId: "plain-staff" },
     ]);
-    const detail = await getStoreStaffDetail(m.repo, "owner-1", "store-1", "s1");
+    const detail = await getStoreStaffDetail(m.repo, buildTip, "owner-1", "store-1", "s1");
     expect(detail.role).toBeNull();
     expect(detail.viewerRole).toBe("owner");
   });
@@ -685,7 +717,7 @@ describe("store.service", () => {
       { id: "s1", displayName: "山田 さくら", headline: null, avatarUrl: null },
     ]);
     await expect(
-      getStoreStaffDetail(m.repo, "intruder", "store-1", "s1"),
+      getStoreStaffDetail(m.repo, buildTip, "intruder", "store-1", "s1"),
     ).rejects.toBeInstanceOf(StoreForbiddenError);
   });
 
@@ -707,7 +739,7 @@ describe("store.service", () => {
     expect(after.items[0]!.id).toBe("s2");
     // 在籍解除済みは詳細も 404 相当
     await expect(
-      getStoreStaffDetail(m.repo, "owner-1", "store-1", "s1"),
+      getStoreStaffDetail(m.repo, buildTip, "owner-1", "store-1", "s1"),
     ).rejects.toBeInstanceOf(StoreStaffNotFoundError);
   });
 

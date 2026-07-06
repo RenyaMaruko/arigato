@@ -6,6 +6,7 @@ import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
 import { StaffBottomNav } from "../components/StaffBottomNav.js";
 import { useAuthSession } from "../hooks/useAuthSession.js";
 import { useStaffMe, useLeaveMembership } from "../hooks/useStaff.js";
+import { downloadQrAsImage } from "../../../lib/qr-image.js";
 
 /**
  * 所属店舗の詳細画面（/staff/stores/:membershipId）。
@@ -71,6 +72,18 @@ export function StaffStoreDetailPage() {
     window.print();
   };
 
+  // QRを画像（PNG）として保存する（写真に保存・コンビニ印刷・共有用）
+  const handleSaveImage = async () => {
+    const svg = document.querySelector<SVGSVGElement>('[data-testid="staff-qr"] svg');
+    if (!svg) return;
+    await downloadQrAsImage(
+      svg,
+      `${me.displayName} ${t("staff.san")}`,
+      membership.storeName,
+      `qr-${membership.storeName}-${me.displayName}`,
+    );
+  };
+
   // この店を脱退する（確認ダイアログで実行）。成功したら所属一覧へ戻す（その店は一覧から消える）。
   const handleLeave = () => {
     leaveMutation.mutate(membership.membershipId, {
@@ -110,8 +123,8 @@ export function StaffStoreDetailPage() {
       </div>
 
       <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-[26px] pb-7 pt-5">
-        {/* 見出し（どの店のQRかを併記する） */}
-        <div className="mt-3.5 text-center text-token-lg font-bold text-ink">
+        {/* 見出し（どの店のQRかを併記する）。印刷にはQRと名前だけ出すため print では隠す */}
+        <div className="mt-3.5 text-center text-token-lg font-bold text-ink print:hidden">
           {t("staff.qrHeading")}
         </div>
         <div className="mt-1 text-center text-token-sm text-rose print:hidden">
@@ -169,6 +182,14 @@ export function StaffStoreDetailPage() {
             className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
           >
             {t("staff.qrPrint")}
+          </button>
+          {/* 画像として保存（PNGダウンロード。写真保存・コンビニ印刷・共有用） */}
+          <button
+            type="button"
+            onClick={handleSaveImage}
+            className="rounded-xl bg-rose py-4 text-center text-token-lg font-bold text-page"
+          >
+            {t("staff.qrSaveImage")}
           </button>
           {/* この店を脱退する（脱退＝注意操作なのでローズの枠線ボタン。実行は確認ダイアログを挟む） */}
           <button

@@ -107,7 +107,7 @@ export const ja = {
       // サインアップ後（メール確認の案内）
       signupSentTitle: "確認メールを送りました",
       signupSentLead:
-        "メールのリンクを開くと登録が完了します。確認後にログインできます。",
+        "メールのリンクを開くと登録が完了します。\n確認後にログインできます。",
       backToLogin: "ログインへ戻る",
       loginNote: "店の招待リンクからの登録で、所属が確定します",
       // パスワード再設定（申請）
@@ -175,7 +175,8 @@ export const ja = {
       headlineLabel: "一言（任意）",
       headlinePlaceholder: "例）カフェで働いています☕",
       createSubmit: "はじめる",
-      createNote: "本人確認・口座登録は後からで大丈夫です",
+      // 登録処理中のボタン表示（プロフィール保存＋Stripe連結アカウント作成で数秒かかる）
+      createSubmitting: "登録中…",
       createErrorInvite: "招待が無効です。コードを確認してください。",
       createErrorExists: "すでにプロフィールが作成されています。",
       createErrorGeneric: "作成に失敗しました。もう一度お試しください。",
@@ -222,6 +223,8 @@ export const ja = {
       qrStoreSub: "{{store}} 用のQR",
       qrNote: "このQRをお客さまに見せてください",
       qrPrint: "印刷する",
+      // QRを画像（PNG）として保存する（写真保存・コンビニ印刷・共有用）
+      qrSaveImage: "画像として保存",
       qrUrlLabel: "QRが指すURL",
       // この店を脱退する（所属店舗の詳細＝QR画面）＋確認ダイアログ
       leaveStoreCta: "この店を脱退する",
@@ -313,7 +316,10 @@ export const ja = {
       payoutCancel: "キャンセル",
       payoutSending: "送金中…",
       // {{amount}} に送金額
-      payoutDone: "{{amount}} を送金しました。数営業日で着金します。",
+      // 送金完了画面（チェック演出）。{{amount}} に送金額。「閉じる」で送金画面へ戻る
+      payoutDoneTitle: "{{amount}} の送金が完了しました",
+      payoutDoneNote: "申請から数営業日で登録口座に着金します。",
+      payoutDoneClose: "閉じる",
       // 送金できない理由
       payoutNoBalance: "送金できる残高がありません。",
       // {{min}} に最低送金額（例: ¥100）
@@ -463,10 +469,20 @@ export const ja = {
       staffRemoveCancel: "キャンセル",
       staffRemoving: "処理中…",
       staffRemoveError: "スタッフを外せませんでした。もう一度お試しください。",
+      // スタッフのQR表示（詳細の「QRを表示」→ QR画面。店が印刷して置く用途）
+      staffQrCta: "QRを表示",
+      staffQrTitle: "QRコード",
+      staffQrHeading: "スタッフ専用の投げ銭QR",
+      // 誰のQRかを示すサブ見出し（{{name}} にスタッフ名）
+      staffQrSub: "{{name}} さん用のQR",
+      staffQrNote: "このQRをお客さまに見せてください",
+      staffQrPrint: "印刷する",
+      staffQrSaveImage: "画像として保存",
+      staffQrUrlLabel: "QRが指すURL",
       // スタッフ招待（04）
       inviteTitle: "招待",
       inviteHeading: "スタッフを招待するための\nリンクを発行します",
-      inviteLead: "このリンクから新規登録したスタッフは、\n自動でこのお店に所属します。",
+      inviteLead: "このリンクから参加した人は、\nスタッフとしてこのお店に所属します。",
       // 招待の種類選択（スタッフとして／管理者として）。管理者は owner のみ選べる（§3.2）
       inviteTypeSectionLabel: "招待の種類",
       inviteTypeStaff: "スタッフとして",
@@ -474,7 +490,7 @@ export const ja = {
       inviteTypeAdminOwnerOnly: "管理者として招待できるのはオーナーだけです",
       // 招待者名（任意メモ。誰宛の招待かを見分けるため）
       inviteLabelLabel: "招待者名",
-      inviteLabelPlaceholder: "例：佐藤さん／ホール担当",
+      inviteLabelPlaceholder: "例：佐藤さん",
       inviteLabelHelp: "招待中の一覧で、誰宛の招待かを見分けるためのメモです。空欄でも発行できます。",
       inviteIssue: "招待リンクを発行",
       inviteIssuing: "発行中…",
@@ -532,7 +548,8 @@ export const ja = {
       adminsLead: "このお店を管理する人たちです",
       adminsOwnerBadge: "オーナー",
       adminsAdminBadge: "管理者",
-      adminsSelf: "（あなた）",
+      // 一覧で閲覧者自身の行に添えるラベル（在籍中タブ・管理者タブ共通）
+      adminsSelf: "（自分）",
       adminsNoName: "名前未設定",
       adminsInviteCta: "管理者を招待する",
       adminsLoadError: "管理者を読み込めませんでした",
@@ -570,7 +587,7 @@ export const ja = {
       // 管理者招待（リンク発行・owner のみ）
       adminInviteTitle: "管理者を招待",
       adminInviteHeading: "管理者を招待するための\nリンクを発行します",
-      adminInviteLead: "このリンクから参加した人は、\nこのお店の管理者になります。",
+      adminInviteLead: "このリンクから参加した人は、\n管理者としてこのお店に所属します。",
       adminInviteError: "招待リンクの発行に失敗しました。もう一度お試しください。",
       settingsNotifications: "通知設定",
       settingsFaq: "よくある質問",

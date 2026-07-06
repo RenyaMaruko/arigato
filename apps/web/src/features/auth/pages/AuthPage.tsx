@@ -134,7 +134,7 @@ export function AuthPage() {
           <div className="mt-10 text-center">
             <div className="text-token-3xl font-bold text-ink">{t("auth.signupSentTitle")}</div>
           </div>
-          <div className="mt-8 rounded-xl border-[1.5px] border-line bg-surface-subtle px-5 py-6 text-center text-token-md leading-relaxed text-ink">
+          <div className="mt-8 whitespace-pre-line rounded-xl border-[1.5px] border-line bg-surface-subtle px-5 py-6 text-center text-token-md leading-relaxed text-ink">
             {t("auth.signupSentLead")}
           </div>
           {/* 確認後はログインできる旨。ログイン画面へ戻す */}

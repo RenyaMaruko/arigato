@@ -242,6 +242,8 @@ export const StoreStaffItemSchema = z.object({
   // 一言（任意・お客さま向けの自己紹介。店員一覧の補足行に使う）
   headline: z.string().nullable(),
   avatarUrl: z.string().nullable(),
+  // 閲覧者自身か（一覧で「（自分）」を表示するための判定。owner/管理者も店員を兼ねるため）
+  isSelf: z.boolean(),
 });
 export type StoreStaffItem = z.infer<typeof StoreStaffItemSchema>;
 
@@ -269,6 +271,10 @@ export const StoreStaffDetailSchema = z.object({
   avatarUrl: z.string().nullable(),
   // その店に参加した日（staff_store.created_at。ISO 文字列）
   joinedAt: z.string(),
+  // その店での所属（staff_store＝membership・人×店）の ID。QR が指す固定 URL の元になる
+  membershipId: z.string().uuid(),
+  // QR が指す固定 URL（/tip/:membershipId）。店側の「スタッフQR表示・印刷」に使う（金額情報は含まない）
+  tipUrl: z.string(),
   // 対象スタッフの人（Supabase auth.users の UUID）。
   // 管理者操作（管理者権限を外す・オーナーにする）は auth_user_id を対象に取るため詳細に含める。
   authUserId: z.string().uuid(),

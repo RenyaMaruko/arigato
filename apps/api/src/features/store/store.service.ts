@@ -280,6 +280,11 @@ export async function uploadStoreLogo(
 // 招待リンク URL を組み立てる関数の型（フロントのベース URL から作る・コンポジションルートで注入）
 export type BuildInviteUrl = (code: string) => string;
 
+// QR が指す固定 URL（/tip/:membershipId）を組み立てる関数の型。
+// staff feature と同じ組み立て（buildTipUrl）をコンポジションルート（app.ts）で注入する
+// （feature 同士は直接 import しないため、ここでは関数の契約だけを持つ）。
+export type BuildTipUrl = (membershipId: string) => string;
+
 /**
  * スタッフ招待を発行する（POST /store/:storeId/invites・方式A）。店スコープ。
  * 一意の招待コードを生成して保存し、店員さんに渡す招待リンク URL（/invite/:code）を返す。
@@ -463,6 +468,8 @@ export async function listStoreStaff(
       displayName: s.displayName,
       headline: s.headline,
       avatarUrl: s.avatarUrl,
+      // 閲覧者自身なら「（自分）」を出す（owner/管理者も店員を兼ねるため一覧に自分が載る）
+      isSelf: (s.authUserId ?? null) === authUserId,
     })),
     count: staff.length,
   };
@@ -479,11 +486,14 @@ export class StoreStaffNotFoundError extends Error {
 
 /**
  * 在籍中スタッフ1人の詳細を取得する（GET /store/:storeId/staff/:staffId）。店スコープ。
- * 自店のオーナーであることを確認し、在籍中（left_at IS NULL）のスタッフの基本情報だけを返す。
+ * その店の管理者（owner/admin）であることを確認し、在籍中（left_at IS NULL）のスタッフの基本情報だけを返す。
+ * membershipId（所属＝staff_store の ID）と QR が指す固定 URL（tipUrl）も返し、
+ * 店側の「スタッフQR表示・印刷」に使えるようにする（QR は店員本人の QR と同じ /tip/:membershipId）。
  * 金額・受取件数は一切返さない（店はお金に触れない）。他店・脱退済み・存在しないは StoreStaffNotFoundError。
  */
 export async function getStoreStaffDetail(
   repo: StoreRepository,
+  buildTipUrl: BuildTipUrl,
   authUserId: string,
   storeId: string,
   staffId: string,
@@ -500,6 +510,9 @@ export async function getStoreStaffDetail(
     headline: detail.headline,
     avatarUrl: detail.avatarUrl,
     joinedAt: detail.joinedAt,
+    // 所属（membership）と QR が指す固定 URL（店側のQR表示・印刷用。金額情報は含まない）
+    membershipId: detail.membershipId,
+    tipUrl: buildTipUrl(detail.membershipId),
     // 対象の人（管理者操作の対象）と、その人のこの店でのロール（owner/admin/なし）
     authUserId: detail.authUserId,
     role: detail.role,

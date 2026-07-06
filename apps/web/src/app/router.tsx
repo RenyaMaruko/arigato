@@ -28,6 +28,7 @@ import { StoreSetupPage } from "../features/store/pages/StoreSetupPage.js";
 import { StoreApprovalPage } from "../features/store/pages/StoreApprovalPage.js";
 import { StoreStaffPage } from "../features/store/pages/StoreStaffPage.js";
 import { StoreStaffDetailPage } from "../features/store/pages/StoreStaffDetailPage.js";
+import { StoreStaffQrPage } from "../features/store/pages/StoreStaffQrPage.js";
 import { StoreInviteCreatePage } from "../features/store/pages/StoreInviteCreatePage.js";
 import { StoreInviteResendPage } from "../features/store/pages/StoreInviteResendPage.js";
 import { StoreGratitudePage } from "../features/store/pages/StoreGratitudePage.js";
@@ -299,6 +300,13 @@ const storeStaffDetailRoute = createRoute({
   component: StoreStaffDetailPage,
 });
 
+// "/store/staff/$staffId/qr" スタッフのQR表示（詳細の「QRを表示」から来る。店が印刷して置く用途）
+const storeStaffQrRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/store/staff/$staffId/qr",
+  component: StoreStaffQrPage,
+});
+
 // "/store/invites/new" スタッフ招待（リンク発行）
 const storeInviteCreateRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -366,6 +374,7 @@ const routeTree = rootRoute.addChildren([
   storeApprovalRoute,
   storeStaffRoute,
   storeStaffDetailRoute,
+  storeStaffQrRoute,
   storeInviteCreateRoute,
   storeInviteResendRoute,
   storeGratitudeRoute,
