@@ -468,6 +468,8 @@ export async function listStoreStaff(
       displayName: s.displayName,
       headline: s.headline,
       avatarUrl: s.avatarUrl,
+      // 閲覧者自身なら「（自分）」を出す（owner/管理者も店員を兼ねるため一覧に自分が載る）
+      isSelf: (s.authUserId ?? null) === authUserId,
     })),
     count: staff.length,
   };

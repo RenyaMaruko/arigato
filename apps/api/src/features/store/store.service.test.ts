@@ -637,12 +637,16 @@ describe("store.service", () => {
   it("listStoreStaff: 自店の所属スタッフを名簿順で返す（金額・件数なし）", async () => {
     seedOwnedStore(m, "store-1", "owner-1");
     m.staffByStore.set("store-1", [
-      { id: "s1", displayName: "山田 さくら", headline: "ホール", avatarUrl: null },
-      { id: "s2", displayName: "田中 健一", headline: "バリスタ", avatarUrl: null },
+      // owner 自身も店員を兼ねる（authUserId が閲覧者と一致 → isSelf=true で「（自分）」表示）
+      { id: "s1", displayName: "山田 さくら", headline: "ホール", avatarUrl: null, authUserId: "owner-1" },
+      { id: "s2", displayName: "田中 健一", headline: "バリスタ", avatarUrl: null, authUserId: "u-s2" },
     ]);
     const res = await listStoreStaff(m.repo, "owner-1", "store-1");
     expect(res.count).toBe(2);
     expect(res.items[0]!.displayName).toBe("山田 さくら");
+    // 閲覧者自身の行だけ isSelf=true（「（自分）」表示の判定）
+    expect(res.items[0]!.isSelf).toBe(true);
+    expect(res.items[1]!.isSelf).toBe(false);
     // 金額や件数のキーが含まれない
     const json = JSON.stringify(res);
     expect(json).not.toMatch(/amount|customer_total|platform_fee|balance|payout/i);

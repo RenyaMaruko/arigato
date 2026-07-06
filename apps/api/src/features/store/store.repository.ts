@@ -87,6 +87,8 @@ export type StoreStaffRow = {
   displayName: string;
   headline: string | null;
   avatarUrl: string | null;
+  // その人の auth ユーザーID（一覧の「（自分）」表示の判定用）。メモリ実装では省略可
+  authUserId?: string | null;
 };
 
 // 在籍中スタッフ1人の詳細行（店スコープ・金額なし）。参加日は staff_store.created_at。
@@ -687,7 +689,8 @@ export function createStoreRepository(): StoreRepository {
           s.id            AS "id",
           s.display_name  AS "displayName",
           s.headline      AS "headline",
-          s.avatar_url    AS "avatarUrl"
+          s.avatar_url    AS "avatarUrl",
+          s.auth_user_id  AS "authUserId"
         FROM staff_store ss
         JOIN staff s ON s.id = ss.staff_id
         WHERE ss.store_id = ${storeId}

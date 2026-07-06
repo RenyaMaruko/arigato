@@ -242,6 +242,8 @@ export const StoreStaffItemSchema = z.object({
   // 一言（任意・お客さま向けの自己紹介。店員一覧の補足行に使う）
   headline: z.string().nullable(),
   avatarUrl: z.string().nullable(),
+  // 閲覧者自身か（一覧で「（自分）」を表示するための判定。owner/管理者も店員を兼ねるため）
+  isSelf: z.boolean(),
 });
 export type StoreStaffItem = z.infer<typeof StoreStaffItemSchema>;
 

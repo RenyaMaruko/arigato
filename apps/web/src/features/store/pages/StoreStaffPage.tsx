@@ -159,7 +159,17 @@ function StoreStaffContent({ store }: { store: StoreProfile }) {
                       )}
                     </div>
                     <div className="flex-1">
-                      <div className="text-token-lg font-bold text-ink">{s.displayName}</div>
+                      <div className="flex items-center gap-1.5">
+                        <span className="truncate text-token-lg font-bold text-ink">
+                          {s.displayName}
+                        </span>
+                        {/* 閲覧者自身の行には（自分）を添える（管理者タブと同じ体裁） */}
+                        {s.isSelf && (
+                          <span className="flex-none text-token-xs text-muted">
+                            {t("store.adminsSelf")}
+                          </span>
+                        )}
+                      </div>
                       {s.headline && (
                         <div className="mt-0.5 text-token-sm text-muted">{s.headline}</div>
                       )}

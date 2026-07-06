@@ -545,7 +545,8 @@ export const ja = {
       adminsLead: "このお店を管理する人たちです",
       adminsOwnerBadge: "オーナー",
       adminsAdminBadge: "管理者",
-      adminsSelf: "（あなた）",
+      // 一覧で閲覧者自身の行に添えるラベル（在籍中タブ・管理者タブ共通）
+      adminsSelf: "（自分）",
       adminsNoName: "名前未設定",
       adminsInviteCta: "管理者を招待する",
       adminsLoadError: "管理者を読み込めませんでした",
