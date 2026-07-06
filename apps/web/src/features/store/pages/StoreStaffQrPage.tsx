@@ -79,8 +79,8 @@ function StoreStaffQrContent({ store }: { store: StoreProfile }) {
           </div>
         ) : (
           <>
-            {/* 見出し（誰のQRかを併記する） */}
-            <div className="mt-3.5 text-center text-token-lg font-bold text-ink">
+            {/* 見出し（誰のQRかを併記する）。印刷にはQRと名前だけ出すため print では隠す */}
+            <div className="mt-3.5 text-center text-token-lg font-bold text-ink print:hidden">
               {t("store.staffQrHeading")}
             </div>
             <div className="mt-1 text-center text-token-sm text-rose print:hidden">

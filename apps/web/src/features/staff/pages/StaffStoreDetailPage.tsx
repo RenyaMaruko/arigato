@@ -110,8 +110,8 @@ export function StaffStoreDetailPage() {
       </div>
 
       <div className="flex flex-1 min-h-0 flex-col overflow-y-auto px-[26px] pb-7 pt-5">
-        {/* 見出し（どの店のQRかを併記する） */}
-        <div className="mt-3.5 text-center text-token-lg font-bold text-ink">
+        {/* 見出し（どの店のQRかを併記する）。印刷にはQRと名前だけ出すため print では隠す */}
+        <div className="mt-3.5 text-center text-token-lg font-bold text-ink print:hidden">
           {t("staff.qrHeading")}
         </div>
         <div className="mt-1 text-center text-token-sm text-rose print:hidden">
