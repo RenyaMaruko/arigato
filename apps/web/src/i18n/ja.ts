@@ -479,7 +479,7 @@ export const ja = {
       // スタッフ招待（04）
       inviteTitle: "招待",
       inviteHeading: "スタッフを招待するための\nリンクを発行します",
-      inviteLead: "このリンクから新規登録したスタッフは、\n自動でこのお店に所属します。",
+      inviteLead: "このリンクから参加した人は、\nスタッフとしてこのお店に所属します。",
       // 招待の種類選択（スタッフとして／管理者として）。管理者は owner のみ選べる（§3.2）
       inviteTypeSectionLabel: "招待の種類",
       inviteTypeStaff: "スタッフとして",
@@ -487,7 +487,7 @@ export const ja = {
       inviteTypeAdminOwnerOnly: "管理者として招待できるのはオーナーだけです",
       // 招待者名（任意メモ。誰宛の招待かを見分けるため）
       inviteLabelLabel: "招待者名",
-      inviteLabelPlaceholder: "例：佐藤さん／ホール担当",
+      inviteLabelPlaceholder: "例：佐藤さん",
       inviteLabelHelp: "招待中の一覧で、誰宛の招待かを見分けるためのメモです。空欄でも発行できます。",
       inviteIssue: "招待リンクを発行",
       inviteIssuing: "発行中…",
@@ -584,7 +584,7 @@ export const ja = {
       // 管理者招待（リンク発行・owner のみ）
       adminInviteTitle: "管理者を招待",
       adminInviteHeading: "管理者を招待するための\nリンクを発行します",
-      adminInviteLead: "このリンクから参加した人は、\nこのお店の管理者になります。",
+      adminInviteLead: "このリンクから参加した人は、\n管理者としてこのお店に所属します。",
       adminInviteError: "招待リンクの発行に失敗しました。もう一度お試しください。",
       settingsNotifications: "通知設定",
       settingsFaq: "よくある質問",
