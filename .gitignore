@@ -4,6 +4,7 @@ dist
 *.log
 .env
 .env.local
+.env.production
 .DS_Store
 .playwright-mcp
 .claude/worktrees
