@@ -23,11 +23,11 @@
    | 項目 | 値 |
    |---|---|
    | Root Directory | （リポジトリルートのまま） |
-   | Build Command | `corepack enable && pnpm install --frozen-lockfile` |
-   | Pre-Deploy Command | `pnpm --filter @arigato/db migrate` |
+   | Build Command | `corepack enable && pnpm install --frozen-lockfile && pnpm --filter @arigato/db migrate` |
+   | Pre-Deploy Command | （不要。マイグレーションはビルドに含めている） |
    | Start Command | `pnpm --filter @arigato/api start` |
    | Health Check Path | `/health` |
-   | プラン | Starter 以上（**常時起動**。無料はスリープ→復帰数十秒で決済体験が壊れる） |
+   | プラン | テスト公開は Free でも可（**15分でスリープ→復帰30秒〜1分**。最初の1回が遅いのは仕様）。本番ローンチは Starter 以上（常時起動） |
 3. 環境変数（Environment）:
    | キー | 値 |
    |---|---|
