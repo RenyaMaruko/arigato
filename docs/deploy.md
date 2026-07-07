@@ -23,9 +23,9 @@
    | 項目 | 値 |
    |---|---|
    | Root Directory | （リポジトリルートのまま） |
-   | Build Command | `corepack enable && pnpm install --frozen-lockfile && pnpm --filter @arigato/db migrate` |
+   | Build Command | `corepack pnpm install --frozen-lockfile && corepack pnpm --filter @arigato/db migrate` |
    | Pre-Deploy Command | （不要。マイグレーションはビルドに含めている） |
-   | Start Command | `pnpm --filter @arigato/api start` |
+   | Start Command | `corepack pnpm --filter @arigato/api start` |
    | Health Check Path | `/health` |
    | プラン | テスト公開は Free でも可（**15分でスリープ→復帰30秒〜1分**。最初の1回が遅いのは仕様）。本番ローンチは Starter 以上（常時起動） |
 3. 環境変数（Environment）:
@@ -37,7 +37,9 @@
    | `SUPABASE_URL` | 同ローカル |
    | `SUPABASE_SECRET_KEY` | 同ローカル |
    | `WEB_BASE_URL` | フロントURL（手順2の後に設定。QR/招待URLの生成に使う） |
+   | `COREPACK_ENABLE_DOWNLOAD_PROMPT` | `0`（corepack のダウンロード確認を無効化） |
    ※ `PORT` は Render が自動注入（server.ts は対応済み）
+   ※ Render では `corepack enable` はシステム領域が読み取り専用のため失敗する。`corepack pnpm …` で直接実行する
 4. デプロイ → `https://<app>.onrender.com/health` が 200 なら OK
 
 ## 2. フロントエンド（Cloudflare Workers）
