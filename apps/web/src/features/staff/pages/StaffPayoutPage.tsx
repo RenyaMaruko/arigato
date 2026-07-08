@@ -334,9 +334,10 @@ export function StaffPayoutPage() {
       {/* 下部ボトムナビ（送金はタブに該当しないため active 未指定＝どのタブもハイライトしない） */}
       <StaffBottomNav />
 
-      {/* 送金確認シート（下からせり上がる。スクリムタップ・キャンセルで閉じる） */}
+      {/* 送金確認シート（下からせり上がる。スクリムタップ・キャンセルで閉じる。
+          ドキュメントスクロール方式のためビューポート基準の fixed・ナビ z-30 より上の z-50） */}
       {confirmOpen && (
-        <div className="absolute inset-0 z-10">
+        <div className="fixed inset-0 z-50 flex items-end justify-center">
           {/* 背面スクリム（タップで閉じる） */}
           <button
             type="button"
@@ -344,8 +345,8 @@ export function StaffPayoutPage() {
             onClick={() => setConfirmOpen(false)}
             className="absolute inset-0 animate-scrim-in bg-scrim"
           />
-          {/* シート本体 */}
-          <div className="absolute inset-x-0 bottom-0 animate-sheet-up rounded-t-2xl bg-page px-6 pb-[34px] pt-3.5 shadow-sheet">
+          {/* シート本体（アプリ幅 max-w-app に制約） */}
+          <div className="relative w-full max-w-app animate-sheet-up rounded-t-2xl bg-page px-6 pb-[34px] pt-3.5 shadow-sheet">
             {/* ドラッグハンドル */}
             <div className="mb-4 flex justify-center">
               <span className="h-1 w-[38px] rounded-pill bg-handle" />

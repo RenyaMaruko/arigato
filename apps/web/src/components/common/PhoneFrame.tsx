@@ -9,11 +9,16 @@ export function PhoneFrame({ children }: { children: ReactNode }) {
   return (
     // 端末枠の外側背景・中央寄せ（外側はビューポート最低高さを確保して中央に置く）
     <div className="min-h-screen bg-app-bg flex justify-center font-sans text-ink">
-      {/* スマホ幅のコンテナ。高さをビューポートに固定（h-[100dvh]）し、
-          中身は内部スクロール・ボトムナビは flex-none で画面下に貼り付く。
-          dvh はモバイルのブラウザバー伸縮に追従させるため（min-h-screen だと縦に伸びて
-          ナビが画面外へ流れてしまう）。地から浮かせる影は維持する。 */}
-      <div className="relative flex w-full max-w-app flex-col overflow-hidden bg-page h-[100dvh] shadow-phone">
+      {/* スマホ幅のコンテナ。高さは固定せず min-h-[100dvh] だけ確保し、
+          本文は通常のドキュメントスクロール（body スクロール）に流す方式。
+          iOS 26 の Safari は下部のフローティングバーが「ページに重なるオーバーレイ」で、
+          ページ自体がスクロールしないとバーが畳まれず、下端の要素がバーの裏に隠れて
+          操作できなくなる（100dvh/svh 固定＋内部スクロールでは実機で解決不能だった）。
+          普通のサイトと同じくドキュメントをスクロールさせればバーが畳まれるため、
+          overflow-hidden・高さ固定・セーフエリアのパディングは持たない。
+          ボトムナビは各ナビ側で fixed 配置し、min-h + flex-col は
+          コンテンツが短い画面でも mt-auto の下寄せボタンが機能するよう維持する。 */}
+      <div className="relative flex w-full max-w-app flex-col bg-page min-h-[100dvh] shadow-phone">
         {children}
       </div>
     </div>

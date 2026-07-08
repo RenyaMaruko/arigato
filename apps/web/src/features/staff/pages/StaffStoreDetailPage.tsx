@@ -202,10 +202,11 @@ export function StaffStoreDetailPage() {
         </div>
       </div>
 
-      {/* 脱退の確認ダイアログ（注意書き付き：脱退しても受取履歴で収益を確認できる） */}
+      {/* 脱退の確認ダイアログ（注意書き付き：脱退しても受取履歴で収益を確認できる。
+          ドキュメントスクロール方式のためビューポート基準の fixed・アプリ幅 max-w-app に制約） */}
       {confirmingLeave && (
-        <div className="absolute inset-0 z-20 flex items-end justify-center bg-ink/40 print:hidden">
-          <div className="w-full rounded-t-2xl bg-page px-6 pb-7 pt-6">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40 print:hidden">
+          <div className="w-full max-w-app rounded-t-2xl bg-page px-6 pb-7 pt-6">
             <h2 className="text-token-lg font-bold text-ink">{t("staff.leaveConfirmTitle")}</h2>
             {/* 注意書き（脱退しても受け取った収益は受取履歴で引き続き確認できます） */}
             <p className="mt-3 rounded-xl bg-rose-soft px-4 py-3 text-token-sm leading-relaxed text-rose">

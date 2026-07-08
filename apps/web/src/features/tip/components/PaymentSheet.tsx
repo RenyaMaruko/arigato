@@ -79,8 +79,9 @@ export function PaymentSheet({
   if (!open) return null;
 
   return (
-    // シート全体を端末枠内に絶対配置する（PhoneFrame の relative コンテナが基準）
-    <div className="absolute inset-0 z-10">
+    // シート全体をビューポート基準で固定配置する（ドキュメントスクロール方式のため fixed。
+    // 中身はアプリ幅 max-w-app に制約して中央へ。fixed のボトムナビ z-30 より上の z-50）
+    <div className="fixed inset-0 z-50 flex items-end justify-center">
       {/* 背面スクリム（タップで閉じる） */}
       <button
         type="button"
@@ -90,7 +91,7 @@ export function PaymentSheet({
       />
 
       {/* ボトムシート本体（下からせり上がる） */}
-      <div className="absolute inset-x-0 bottom-0 max-h-[88%] animate-sheet-up overflow-y-auto rounded-t-2xl bg-page px-6 pb-[34px] pt-[14px] shadow-sheet">
+      <div className="relative max-h-[88%] w-full max-w-app animate-sheet-up overflow-y-auto rounded-t-2xl bg-page px-6 pb-[34px] pt-[14px] shadow-sheet">
         {/* ドラッグハンドル */}
         <div className="mb-[14px] flex justify-center">
           <span className="h-1 w-[38px] rounded-pill bg-handle" />

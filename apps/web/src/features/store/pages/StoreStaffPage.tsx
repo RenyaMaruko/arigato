@@ -258,10 +258,11 @@ function StoreStaffContent({ store }: { store: StoreProfile }) {
         )}
       </div>
 
-      {/* owner の危険な操作の確認シート（退任・閉店） */}
+      {/* owner の危険な操作の確認シート（退任・閉店。
+          ドキュメントスクロール方式のためビューポート基準の fixed・アプリ幅 max-w-app に制約） */}
       {ownerAction && (
-        <div className="absolute inset-0 z-20 flex items-end justify-center bg-ink/40">
-          <div className="w-full rounded-t-2xl bg-page px-6 pb-7 pt-6">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40">
+          <div className="w-full max-w-app rounded-t-2xl bg-page px-6 pb-7 pt-6">
             <h2 className="text-center text-token-lg font-bold text-ink">
               {ownerAction.kind === "leave"
                 ? t("store.adminsLeaveConfirmTitle")
