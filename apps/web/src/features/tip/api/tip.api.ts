@@ -31,8 +31,9 @@ export async function fetchStaffDisplayInfo(membershipId: string): Promise<Staff
 
 /**
  * POST /tip/:membershipId/intent — 投げ銭を作成し、Stripe Direct charge の PaymentIntent client_secret を得る。
- * カード情報は自前 API に通さず、返ってきた client_secret でアプリ内に決済 UI を埋め込む
- * （Express Checkout Element ＋ Payment Element）。リダイレクトしない。
+ * deferred intent 方式のため、決済 UI（Elements）の表示時ではなく「支払う操作の確定時」に呼ぶ。
+ * カード情報は自前 API に通さず、返ってきた client_secret を stripe.confirmPayment に渡して
+ * アプリ内で確定する（リダイレクトしない）。
  */
 export async function createTipIntent(
   membershipId: string,
