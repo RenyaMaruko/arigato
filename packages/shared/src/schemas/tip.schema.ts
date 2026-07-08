@@ -73,6 +73,10 @@ export const StaffDisplayInfoSchema = z.object({
   // false のとき投げ銭画面は「現在この QR は受け付けていません」と案内し、送るボタンを出さない
   // （店員さんが再参加すると同じ QR で再開する）。
   accepting: z.boolean(),
+  // Direct charge の課金先 Connected Account ID（未連携なら null）。
+  // ページ表示時に Stripe.js を先読みして Apple Pay 等のウォレットボタンを速く出すために公開する
+  // （intent 応答で既にクライアントへ渡している値であり、金額情報ではない）。
+  connectedAccountId: z.string().nullable(),
 });
 export type StaffDisplayInfo = z.infer<typeof StaffDisplayInfoSchema>;
 

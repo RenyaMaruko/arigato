@@ -110,6 +110,8 @@ describe("tip.service getStaffDisplayInfo", () => {
       storeName: "カフェ Arigato",
       // 在籍中なので受付中（accepting=true）
       accepting: true,
+      // Stripe.js 先読み用の連結アカウントID（金額情報ではない）
+      connectedAccountId: sampleStaff.stripeAccountId,
     });
     // 金額に関わるキーが混入していないこと
     expect(info && "amount" in info).toBe(false);
