@@ -69,6 +69,8 @@ export async function getStaffDisplayInfo(
     avatarUrl: row.avatarUrl,
     storeName: row.storeName,
     accepting: !row.left,
+    // Stripe.js の先読み用（ウォレットボタンの表示を速くする）。未連携は null
+    connectedAccountId: row.stripeAccountId ?? null,
   };
 }
 

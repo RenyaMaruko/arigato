@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useParams } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
@@ -7,6 +7,7 @@ import { useTipFormStore } from "../stores/tipFormStore.js";
 import { AmountSelector } from "../components/AmountSelector.js";
 import { MessageInput } from "../components/MessageInput.js";
 import { PaymentSheet } from "../components/PaymentSheet.js";
+import { getConnectedStripe } from "../lib/stripe.js";
 
 /**
  * 投げ銭画面（/tip/:membershipId、モック 01/02）。
@@ -29,6 +30,15 @@ export function TipPage() {
 
   // サーバー状態: membership から解決した店員さん（人）＋店の表示情報
   const { data: staff, isLoading, isError } = useStaffDisplayInfo(membershipId);
+
+  // Stripe.js を先読みする（Apple Pay / Google Pay のボタンを「送る」押下後すぐ出すため）。
+  // シートを開いてから読み込むとウォレット判定まで数秒かかるので、ページ表示時点で温めておく。
+  // 読み込み結果は口座別にキャッシュされ、シート側の初期化で再利用される。失敗しても無視（シート側で再試行）。
+  useEffect(() => {
+    if (staff?.accepting && staff.connectedAccountId) {
+      void getConnectedStripe(staff.connectedAccountId).catch(() => {});
+    }
+  }, [staff?.accepting, staff?.connectedAccountId]);
   // 投げ銭作成（PaymentIntent 作成・client_secret 取得）ミューテーション
   const createIntent = useCreateTipIntent(membershipId);
 
@@ -198,7 +208,7 @@ export function TipPage() {
       <PaymentSheet
         open={sheetOpen}
         clientSecret={createIntent.data?.clientSecret ?? null}
-        connectedAccountId={createIntent.data?.connectedAccountId ?? null}
+        connectedAccountId={createIntent.data?.connectedAccountId ?? staff?.connectedAccountId ?? null}
         returnUrl={returnUrl}
         preparing={createIntent.isPending}
         hasError={createIntent.isError}
