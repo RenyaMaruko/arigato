@@ -35,8 +35,13 @@ export function getConnectedStripe(connectedAccountId: string): Promise<Stripe |
   // 口座ごとに一度だけ初期化する
   const cached = stripeByAccount.get(connectedAccountId);
   if (cached) return cached;
-  // Connected Account コンテキストで Stripe.js をロード（Direct charge の口座を指定）
-  const promise = loadStripe(publishableKey, { stripeAccount: connectedAccountId });
+  // Connected Account コンテキストで Stripe.js をロード（Direct charge の口座を指定）。
+  // developerTools.assistant: テストモードで画面右下に出る Stripe のテストアシスタント
+  // （オレンジのフローティングバッジ）を非表示にする（本番では元々表示されない）。
+  const promise = loadStripe(publishableKey, {
+    stripeAccount: connectedAccountId,
+    developerTools: { assistant: { enabled: false } },
+  } as Parameters<typeof loadStripe>[1]);
   stripeByAccount.set(connectedAccountId, promise);
   return promise;
 }
