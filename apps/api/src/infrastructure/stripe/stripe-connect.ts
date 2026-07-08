@@ -38,6 +38,111 @@ import { CURRENCY } from "@arigato/shared";
  */
 
 /**
+ * WEB_BASE_URL（フロントのベース URL）から、決済手段ドメイン登録に使うホスト名を導出する純粋関数。
+ *
+ * Apple Pay / Google Pay のドメイン検証は「実在する https のドメイン」に対してしか成立しないため、
+ * 以下のケースでは null を返し、呼び出し側は登録自体をスキップする:
+ *  - 未設定・空文字（本番 URL が configure されていない環境）
+ *  - URL として解釈できない文字列（scheme 無しの "localhost:5173" など）
+ *  - localhost 系（localhost / *.localhost。ポート付き localhost:5173 も hostname は localhost なので同様にスキップ）
+ *  - IP アドレス（127.0.0.1 等。Apple Pay のドメイン検証対象にならない）
+ *
+ * ホスト名のみ返す（URL のポートやパスは含めない。Stripe の domain_name はホスト名を要求する）。
+ * DBアクセス・env 読み取りをしない純粋関数（Vitest の単体テスト対象）。
+ */
+export function deriveWalletDomain(webBaseUrl: string | undefined | null): string | null {
+  // 未設定・空文字はスキップ（ローカル開発など本番 URL が無い環境）
+  if (!webBaseUrl) return null;
+
+  // URL として解釈できなければスキップ（"localhost:5173" のような scheme 無し文字列を含む）
+  let url: URL;
+  try {
+    url = new URL(webBaseUrl);
+  } catch {
+    return null;
+  }
+
+  // hostname を取り出す（ポートは hostname に含まれないため自然に落ちる）
+  const host = url.hostname.toLowerCase();
+  if (!host) return null;
+
+  // localhost 系はスキップ（ローカル開発では Apple Pay 自体が動かない・検証も通らない）
+  if (host === "localhost" || host.endsWith(".localhost")) return null;
+
+  // IP アドレス（IPv4 / IPv6 ループバック等）はスキップ（ドメイン検証の対象にならない）
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(host)) return null;
+  if (host.includes(":") || host === "[::1]") return null;
+
+  return host;
+}
+
+/**
+ * 連結アカウントに「決済手段ドメイン」を登録する（infrastructure 層）。
+ *
+ * なぜ連結アカウント側に必要か:
+ *  - Direct charge では PaymentIntent が連結アカウント上に作られるため、
+ *    Apple Pay / Google Pay を表示できるかどうかの判定（ドメイン検証）も
+ *    「連結アカウントに登録された payment_method_domains」に対して行われる。
+ *  - プラットフォーム側にドメイン登録があっても、連結アカウント側に登録が無いと
+ *    Express Checkout Element に Apple Pay ボタンが出ない（実機で確認済み）。
+ *
+ * そのため Stripe-Account ヘッダ（stripeAccount）付きでドメインを登録する。
+ * 同一ドメインの再登録は Stripe 側で既存返却／再検証となるため冪等で安全。
+ */
+export async function registerPaymentMethodDomain(
+  connectedAccountId: string,
+  domainName: string,
+): Promise<void> {
+  const stripe = getStripe();
+
+  // 連結アカウントのコンテキストでドメインを登録する（= その口座での Apple Pay 可否判定に効く）
+  await stripe.paymentMethodDomains.create(
+    { domain_name: domainName },
+    { stripeAccount: connectedAccountId },
+  );
+}
+
+/**
+ * 連結アカウント作成直後に呼ぶ「決済手段ドメイン登録」の共通ヘルパ（非致命）。
+ *
+ * 連結アカウントを作る全経路（createConnectedAccount / createConnectOnboardingLink の
+ * フォールバック作成）から呼び、今後作られる口座すべてで Apple Pay が出ない問題を塞ぐ。
+ *
+ * 方針:
+ *  - ドメインは WEB_BASE_URL（env）から導出する。localhost / 未設定 / IP のときは登録しない
+ *    （ローカル開発では Apple Pay 自体が動かないため）。
+ *  - 登録失敗は非致命。アカウント作成自体は成立させ、console.error のログだけ残す
+ *    （Apple Pay ボタンが出ないだけで、カード決済は問題なく可能なため）。
+ *
+ * webBaseUrl / register はテストのために注入可能にしている（既定は env と実 Stripe 呼び出し）。
+ */
+export async function registerWalletDomainSafely(
+  connectedAccountId: string,
+  webBaseUrl: string | undefined = process.env.WEB_BASE_URL,
+  register: (
+    connectedAccountId: string,
+    domainName: string,
+  ) => Promise<void> = registerPaymentMethodDomain,
+): Promise<void> {
+  // WEB_BASE_URL からホスト名を導出する。localhost / 未設定 / IP なら登録をスキップ
+  const domainName = deriveWalletDomain(webBaseUrl);
+  if (!domainName) return;
+
+  try {
+    // 連結アカウント側にドメインを登録する（Apple Pay / Google Pay の可否判定に必須）
+    await register(connectedAccountId, domainName);
+  } catch (error) {
+    // 非致命: アカウント作成は成立させる（Apple Pay が出ないだけで決済自体は可能）。
+    // 後追い対応（手動登録）ができるようログにアカウント ID とドメインを残す
+    console.error(
+      `[stripe-connect] 決済手段ドメイン登録に失敗しました（account: ${connectedAccountId}, domain: ${domainName}）。` +
+        `Apple Pay / Google Pay が表示されない可能性があります。`,
+      error,
+    );
+  }
+}
+
+/**
  * 店員さんの Connected Account に対する Direct charge の PaymentIntent を作成する。
  * 返り値の clientSecret をフロントの Stripe Elements に渡し、アプリ内で決済を確定してもらう。
  * 決済の確定はブラウザの戻り値ではなく Webhook を正とする（ここでは pending の PaymentIntent を作るだけ）。
@@ -132,6 +237,10 @@ export async function createConnectOnboardingLink(
   if (!connectedAccountId) {
     const account = await stripe.accounts.create(buildConnectedAccountParams(params.staffDisplayName));
     connectedAccountId = account.id;
+
+    // 作成直後に決済手段ドメインを登録する（Apple Pay / Google Pay の可否は連結アカウント側で判定されるため）。
+    // 失敗しても非致命（アカウント作成・オンボーディングは続行する）
+    await registerWalletDomainSafely(connectedAccountId);
   }
 
   // オンボーディングリンク（account_onboarding）を発行する。
@@ -532,6 +641,13 @@ function sumBalanceForCurrency(
 function buildConnectedAccountParams(
   displayName: string,
 ): Stripe.AccountCreateParams {
+  // Apple Pay のドメイン検証は「アカウントにビジネス URL があること」が前提
+  // （無いと payment_method_domains 登録時に apple_pay が inactive のまま:
+  //   "you must provide a business URL for this account" を実 Stripe で確認）。
+  // そのため作成時点で WEB_BASE_URL 由来の URL（投げ銭ページが動く実ドメイン）を設定する。
+  // localhost / 未設定のときは URL を付けない（ドメイン登録自体もスキップされる）
+  const walletDomain = deriveWalletDomain(process.env.WEB_BASE_URL);
+
   return {
     country: "JP",
     // controller で責務を明示（Accounts v2 の思想・legacy type は使わない）。
@@ -552,7 +668,11 @@ function buildConnectedAccountParams(
       card_payments: { requested: true },
       transfers: { requested: true },
     },
-    business_profile: { name: displayName },
+    business_profile: {
+      name: displayName,
+      // Apple Pay 有効化の前提となるビジネス URL（公開ドメインがあるときだけ設定）
+      ...(walletDomain ? { url: `https://${walletDomain}` } : {}),
+    },
   };
 }
 
@@ -630,6 +750,7 @@ function buildChargesEnabledPrefill(nowSeconds: number): Stripe.AccountUpdatePar
  *
  * 流れ:
  *  1. controller（application 収集・dashboard none）＋ capabilities（card_payments / transfers）で作成。
+ *  1.5. 決済手段ドメインを連結アカウント側に登録する（Apple Pay / Google Pay の表示に必須・非致命）。
  *  2. テスト用 prefill（本人情報・口座・ToS 同意）を投入し、charges_enabled を満たす。
  *  3. 万一まだ charges_enabled でなければ警告ログを残す（呼び出し元の判断材料）。
  */
@@ -640,6 +761,12 @@ export async function createConnectedAccount(
 
   // 1. Connected Account を作成（controller / capabilities を明示）
   const account = await stripe.accounts.create(buildConnectedAccountParams(displayName));
+
+  // 1.5. 作成直後に決済手段ドメインを登録する。
+  //    Direct charge では Apple Pay / Google Pay の可否が「連結アカウント側」のドメイン登録で
+  //    判定されるため、プラットフォーム登録だけでは Apple Pay ボタンが出ない（実機で確認済み）。
+  //    失敗しても非致命（アカウント作成は成立させる。決済自体はカードで可能）
+  await registerWalletDomainSafely(account.id);
 
   // 2. charges_enabled を満たすためのテスト用 prefill を投入する
   const updated = await stripe.accounts.update(
