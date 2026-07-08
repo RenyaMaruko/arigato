@@ -1,7 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   groupPendingByAvailableDate,
   reconcilePendingBuckets,
+  deriveWalletDomain,
+  registerWalletDomainSafely,
   type PendingTransactionLike,
 } from "./stripe-connect.js";
 
@@ -120,5 +122,93 @@ describe("reconcilePendingBuckets", () => {
     const input = [{ ...d1 }, { ...d2 }];
     reconcilePendingBuckets(input, 350);
     expect(input[0]!.amount).toBe(200);
+  });
+});
+
+/**
+ * WEB_BASE_URL から決済手段ドメイン（Apple Pay / Google Pay の可否判定に使うホスト名）を
+ * 導出する純粋関数のテスト。https 本番ホスト・localhost・未設定・ポート付きの分岐を検証する。
+ */
+describe("deriveWalletDomain", () => {
+  it("https の本番ホストからホスト名を導出する", () => {
+    expect(deriveWalletDomain("https://arigato-web.unkuncunk.workers.dev")).toBe(
+      "arigato-web.unkuncunk.workers.dev",
+    );
+  });
+
+  it("パス付きでもホスト名だけ返す（ポート・パスは含めない）", () => {
+    expect(deriveWalletDomain("https://example.com/app/")).toBe("example.com");
+  });
+
+  it("未設定（undefined / null / 空文字）は null（登録スキップ）", () => {
+    expect(deriveWalletDomain(undefined)).toBeNull();
+    expect(deriveWalletDomain(null)).toBeNull();
+    expect(deriveWalletDomain("")).toBeNull();
+  });
+
+  it("localhost は null（ローカル開発では Apple Pay 自体が動かない）", () => {
+    expect(deriveWalletDomain("http://localhost")).toBeNull();
+    // ポート付き localhost:5173 もスキップ対象（hostname は localhost）
+    expect(deriveWalletDomain("http://localhost:5173")).toBeNull();
+    // サブドメイン形式の *.localhost も同様
+    expect(deriveWalletDomain("http://app.localhost:5173")).toBeNull();
+  });
+
+  it("scheme 無しの 'localhost:5173' のような文字列も null（URL として不正）", () => {
+    expect(deriveWalletDomain("localhost:5173")).toBeNull();
+    expect(deriveWalletDomain("not a url")).toBeNull();
+  });
+
+  it("IP アドレスは null（ドメイン検証の対象にならない）", () => {
+    expect(deriveWalletDomain("http://127.0.0.1:8787")).toBeNull();
+    expect(deriveWalletDomain("http://192.168.1.10")).toBeNull();
+    expect(deriveWalletDomain("http://[::1]:5173")).toBeNull();
+  });
+});
+
+/**
+ * 連結アカウント作成直後に呼ぶドメイン登録ヘルパ（registerWalletDomainSafely）のテスト。
+ * 「登録失敗が非致命であること」「localhost / 未設定では登録しないこと」を、
+ * 実 Stripe を叩かずに（register を注入して）検証する。
+ */
+describe("registerWalletDomainSafely", () => {
+  it("本番ホストなら導出したドメインで register を呼ぶ", async () => {
+    const register = vi.fn().mockResolvedValue(undefined);
+    await registerWalletDomainSafely(
+      "acct_test123",
+      "https://arigato-web.unkuncunk.workers.dev",
+      register,
+    );
+    expect(register).toHaveBeenCalledTimes(1);
+    expect(register).toHaveBeenCalledWith("acct_test123", "arigato-web.unkuncunk.workers.dev");
+  });
+
+  it("localhost（ポート付き含む）では register を呼ばない", async () => {
+    const register = vi.fn().mockResolvedValue(undefined);
+    await registerWalletDomainSafely("acct_test123", "http://localhost:5173", register);
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it("WEB_BASE_URL 未設定では register を呼ばない", async () => {
+    const register = vi.fn().mockResolvedValue(undefined);
+    await registerWalletDomainSafely("acct_test123", undefined, register);
+    expect(register).not.toHaveBeenCalled();
+  });
+
+  it("register が失敗しても throw しない（非致命）。console.error にログを残す", async () => {
+    const register = vi.fn().mockRejectedValue(new Error("stripe error"));
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      // 失敗しても reject されない＝アカウント作成フローを止めない
+      await expect(
+        registerWalletDomainSafely("acct_test123", "https://example.com", register),
+      ).resolves.toBeUndefined();
+      // 後追い対応できるようエラーログは残す
+      expect(errorSpy).toHaveBeenCalledTimes(1);
+      expect(String(errorSpy.mock.calls[0]![0])).toContain("acct_test123");
+      expect(String(errorSpy.mock.calls[0]![0])).toContain("example.com");
+    } finally {
+      errorSpy.mockRestore();
+    }
   });
 });
