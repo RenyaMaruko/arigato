@@ -228,10 +228,11 @@ function StoreStaffDetailContent({ store }: { store: StoreProfile }) {
         )}
       </div>
 
-      {/* 確認ダイアログ（下からのシート・アクションごとに文言を出し分ける） */}
+      {/* 確認ダイアログ（下からのシート・アクションごとに文言を出し分ける。
+          ドキュメントスクロール方式のためビューポート基準の fixed・アプリ幅 max-w-app に制約） */}
       {pending && detail && (
-        <div className="absolute inset-0 z-20 flex items-end justify-center bg-ink/40">
-          <div className="w-full rounded-t-2xl bg-page px-6 pb-7 pt-6">
+        <div className="fixed inset-0 z-50 flex items-end justify-center bg-ink/40">
+          <div className="w-full max-w-app rounded-t-2xl bg-page px-6 pb-7 pt-6">
             <h2 className="text-center text-token-lg font-bold text-ink">
               {confirmTitle(pending, t)}
             </h2>

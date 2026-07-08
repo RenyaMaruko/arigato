@@ -94,9 +94,11 @@ export function StoreModeSwitch({ mode }: { mode: "staff" | "store" }) {
         </span>
       </div>
 
-      {/* 初回チュートリアル（コーチマーク）。スマホ枠を覆うスクリム＋中央ボタン上の吹き出しで1回だけ案内する */}
+      {/* 初回チュートリアル（コーチマーク）。画面全体を覆うスクリム＋中央ボタン上の吹き出しで1回だけ案内する。
+          ドキュメントスクロール方式のためビューポート基準の fixed（ナビは fixed で常に画面下にあるので、
+          viewport 下端からの bottom 指定で吹き出しが中央ボタンの真上に来る） */}
       {showTutorial && (
-        <div className="absolute inset-0 z-50">
+        <div className="fixed inset-0 z-50">
           {/* 背面スクリム（タップで閉じる＝見たことにする） */}
           <button
             type="button"
@@ -123,9 +125,10 @@ export function StoreModeSwitch({ mode }: { mode: "staff" | "store" }) {
         </div>
       )}
 
-      {/* 管理店が複数のときの選択シート（選んだ店の管理画面へ） */}
+      {/* 管理店が複数のときの選択シート（選んだ店の管理画面へ）。
+          ドキュメントスクロール方式のためビューポート基準の fixed・シートはアプリ幅 max-w-app に制約 */}
       {sheetOpen && (
-        <div className="absolute inset-0 z-50 flex flex-col justify-end">
+        <div className="fixed inset-0 z-50 flex flex-col items-center justify-end">
           {/* 背面スクリム */}
           <button
             type="button"
@@ -134,7 +137,7 @@ export function StoreModeSwitch({ mode }: { mode: "staff" | "store" }) {
             className="absolute inset-0 cursor-default bg-scrim"
           />
           {/* シート本体（管理店の一覧） */}
-          <div className="relative max-h-[70%] overflow-y-auto rounded-t-2xl bg-page px-5 pb-8 pt-4">
+          <div className="relative max-h-[70%] w-full max-w-app overflow-y-auto rounded-t-2xl bg-page px-5 pb-8 pt-4">
             <div className="mx-auto mb-3 h-1 w-9 rounded-pill bg-handle" />
             <div className="mb-3 text-center text-token-md font-bold text-ink">
               {t("mode.selectStoreTitle")}
