@@ -34,7 +34,8 @@ export function useStaffDisplayInfo(membershipId: string) {
 
 /**
  * 投げ銭を作成（PaymentIntent 作成・client_secret 取得）するミューテーション。
- * 成功すると tipId を含む結果が返り、呼び出し側が完了画面へ遷移する。
+ * deferred intent 方式のため、支払いの確定操作（ウォレット承認・カード送信）の瞬間に呼ぶ。
+ * 成功すると tipId と client_secret が返り、呼び出し側が confirmPayment で確定する。
  */
 export function useCreateTipIntent(membershipId: string) {
   return useMutation({
