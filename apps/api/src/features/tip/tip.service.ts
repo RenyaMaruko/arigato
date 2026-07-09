@@ -268,3 +268,57 @@ export async function recordTipChargeSettlement(
   });
   return updated > 0;
 }
+
+// (c') 自己修復で1回に扱う tip の上限。送金・残高表示の入口で毎回呼ばれるため、
+// Stripe API 呼び出し回数を bounded にする（残りは次回の呼び出しでまた埋める）。
+export const SETTLEMENT_HEAL_MAX_TIPS = 20;
+
+/**
+ * (c') bt 未反映 tip の自己修復（self-heal）。Webhook 設定に依存せず、送金フローの入口で
+ * balance_transaction の鏡（bt_status / available_on / balance_transaction_id）を Stripe から埋め直す。
+ *
+ * 背景: 決済 Webhook（payment_intent.succeeded）到着時点では charge に balance_transaction が
+ * まだ付与されていないことがあり、その場合 bt 系は null のまま「後続の charge.updated で埋める」設計。
+ * だが Webhook エンドポイントが charge.updated / charge.succeeded を購読していないと恒久に埋まらず、
+ * 送金候補（bt_status='available' 等の条件）から tip が永久に除外されてしまう。その恒久対策。
+ *
+ * 流れ:
+ *  1. 本人の「succeeded・payable・bt_status IS NULL・charge 保存済み」の tip を上限件数まで列挙する。
+ *  2. 対象が無ければ Stripe を一切呼ばず 0 を返す（通常時のオーバーヘッドなし）。
+ *  3. 各 tip について既存の鏡保存（recordTipChargeSettlement）を再利用して埋め直す。
+ *     Stripe 側でまだ bt 未付与なら null のまま保存され、次回また試みる（COALESCE で既存維持）。
+ *  4. 1件の失敗（Stripe エラー等）で全体を止めない（ログのみで続行）。
+ * 修復を試みて保存できた件数を返す。
+ */
+export async function healTipSettlementMirrors(
+  repo: TipRepository,
+  retrieveChargeSettlement: RetrieveChargeSettlement,
+  authUserId: string,
+): Promise<number> {
+  // 【1】修復対象を列挙する（本人スコープ・上限つき）
+  const targets = await repo.listTipsNeedingSettlementHeal(authUserId, SETTLEMENT_HEAL_MAX_TIPS);
+
+  // 【2】対象が無ければ Stripe を呼ばずに終わる
+  if (targets.length === 0) return 0;
+
+  // 【3】各 tip を既存の鏡保存ロジックで埋め直す（1件の失敗で全体を止めない）
+  let healed = 0;
+  for (const target of targets) {
+    try {
+      const ok = await recordTipChargeSettlement(repo, retrieveChargeSettlement, {
+        tipId: target.tipId,
+        paymentIntentId: null,
+        chargeId: target.stripeChargeId,
+        connectedAccountId: target.connectedAccountId,
+      });
+      if (ok) healed += 1;
+    } catch (err) {
+      // 【4】失敗は握ってログのみ（残りの tip の修復と、呼び出し元の送金・表示は続行する）
+      console.error(
+        `[tip.service] bt 鏡の自己修復に失敗しました（tipId=${target.tipId}・続行）:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return healed;
+}

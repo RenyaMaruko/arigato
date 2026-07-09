@@ -56,6 +56,11 @@ import type {
 // infrastructure 関数の型（コンポジションルートで注入）。送金可能額の正＝ Stripe available。
 export type GetConnectBalance = (connectedAccountId: string) => Promise<ConnectBalance>;
 
+// (c') bt 未反映 tip の自己修復（tip feature の healTipSettlementMirrors）をコンポジションルートで
+// 注入する型。staff feature から tip feature を直接 import しないための注入点（配線は app.ts）。
+// 修復できた件数を返す。失敗しても呼び出し側（送金・残高表示）は握って続行する。
+export type HealSettlementMirror = (authUserId: string) => Promise<number>;
+
 /**
  * staff feature の Service 層（ユースケースの指揮者・アクセス制御）。
  * Model（招待判定・URL組み立て）と Repository（DB）を組み合わせて店員さんのユースケースを実現する。
@@ -553,14 +558,31 @@ export async function getStaffTips(
  * sendable / pending は 0 にフォールバックし、画面（残高表示）を壊さない（DB 側の集計は必ず返す）。
  * 残高・本人確認は人ごとに集約する（全所属店をまとめる）。金額を返すのは本人スコープのこの経路だけ。
  * プロフィール未作成なら null。
+ *
+ * 自己修復（healSettlementMirror・任意注入）: 集計の前に bt 未反映 tip の鏡（bt_status 等）を
+ * Stripe から埋め直す。表示の時点で修復しておくことで、続く送金実行が候補を正しく選べる。
+ * 修復の失敗は残高表示を壊さない（ログのみで続行）。
  */
 export async function getStaffBalance(
   repo: StaffRepository,
   getConnectBalance: GetConnectBalance,
   authUserId: string,
+  healSettlementMirror?: HealSettlementMirror,
 ): Promise<StaffBalance | null> {
   const me = await repo.findStaffByAuthUserId(authUserId);
   if (!me) return null;
+
+  // (c') 集計の前に bt 未反映 tip を自己修復する（注入時のみ）。失敗しても表示は壊さない
+  if (healSettlementMirror) {
+    try {
+      await healSettlementMirror(authUserId);
+    } catch (err) {
+      console.error(
+        "[staff.service] bt 鏡の自己修復に失敗しました（残高表示は続行）:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 
   // 成立済み tip の settlement 状態と金額を取得し、Model で合算する（受取総額・参考表示の正）
   const settlements = await repo.listSettlementsByAuthUserId(authUserId);
@@ -801,12 +823,18 @@ export class PayoutBelowMinimumError extends Error {
  * 着金の確定は payout.paid / payout.failed Webhook を正とする（ここでは pending で記録するだけ）。
  * available に収まらなかった payable 分（pending 由来）は payable のまま残り、available になってから次回送金できる。
  * プロフィール未作成なら null。
+ *
+ * 自己修復（healSettlementMirror・任意注入）: 候補取得（手順3）の前に bt 未反映 tip の鏡
+ * （bt_status / available_on）を Stripe から埋め直す。Webhook（charge.updated）の取りこぼしで
+ * bt が恒久に埋まらず「available はあるのに送金候補0件→ payout_below_minimum」になる事故の恒久対策。
+ * 修復の失敗は送金フローを壊さない（ログのみで続行。修復できなかった分は候補に入らないだけ）。
  */
 export async function createStaffPayout(
   repo: StaffRepository,
   createPayout: CreatePayout,
   getConnectBalance: GetConnectBalance,
   authUserId: string,
+  healSettlementMirror?: HealSettlementMirror,
 ): Promise<CreatePayoutResult | null> {
   // 【手順1】本人の Connect 連携状態を取得（未作成なら null → 404）
   const ctx = await repo.findPayoutContext(authUserId);
@@ -825,6 +853,20 @@ export async function createStaffPayout(
   // 送金可能額・送金上限は「今の Stripe available」を正とする（DB の payable 合計ではない）。
   const balance = await getConnectBalance(ctx.stripeAccountId);
   const availableAmount = balance.availableAmount;
+
+  // 【手順2.5】(c') 候補取得の前に bt 未反映 tip を自己修復する（注入時のみ）。
+  // Webhook 取りこぼしで bt_status が null のままの tip を Stripe から埋め直し、送金候補に復帰させる。
+  // 修復の失敗は送金フローを壊さない（ログのみで続行）。
+  if (healSettlementMirror) {
+    try {
+      await healSettlementMirror(authUserId);
+    } catch (err) {
+      console.error(
+        "[staff.service] bt 鏡の自己修復に失敗しました（送金フローは続行）:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
 
   // 【手順3】payable な tip を古い順（FIFO）に取得し、available に収まる範囲だけを送金対象に選ぶ。
   // 送金額＝選んだ tip の手取り合計（必ず available 以下＝残高不足にならない）。

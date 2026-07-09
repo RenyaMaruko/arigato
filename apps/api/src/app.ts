@@ -18,6 +18,7 @@ import {
   createTipIntent,
   getTipComplete,
   recordTipChargeSettlement,
+  healTipSettlementMirrors,
 } from "./features/tip/tip.service.js";
 import { createTipRepository } from "./features/tip/tip.repository.js";
 import { createInMemoryTipRepository } from "./features/tip/tip.repository.memory.js";
@@ -139,6 +140,12 @@ export function createApp() {
   // Supabase JWT 検証ミドルウェア（JWKS）。infrastructure の verifier を注入して配線する
   const authMiddleware = createAuthMiddleware((token) => verifySupabaseJwt(token));
 
+  // (c') bt 未反映 tip の自己修復（送金・残高表示の入口で Stripe から鏡を埋め直す）。
+  // staff feature から tip feature を直接 import しないため、ここで tip のユースケースを配線して
+  // staff の Service へコールバック注入する（recordTipSettlementMirror と同じ配線パターン）。
+  const healSettlementMirror = (authUserId: string) =>
+    healTipSettlementMirrors(tipRepo, retrieveChargeSettlement, authUserId);
+
   // 各 feature の Service を注入してルーターを構築
   const healthRoute = createHealthRoute({ checkHealth });
   const tipRoute = createTipRoute({
@@ -179,8 +186,9 @@ export function createApp() {
     getStaffTips: (authUserId, query) => getStaffTips(staffRepo, authUserId, query),
     // 残高3段（送金できる＝Stripe available / 準備中 pending / 本人確認待ち held）。
     // 送金可能額の正は Stripe の実 available。infrastructure の残高取得を注入する（feature は Stripe を直接知らない）。
+    // 表示の入口で bt 未反映 tip の自己修復（healSettlementMirror）も行う（送金候補の事前復帰）。
     getStaffBalance: (authUserId) =>
-      getStaffBalance(staffRepo, retrieveConnectBalance, authUserId),
+      getStaffBalance(staffRepo, retrieveConnectBalance, authUserId, healSettlementMirror),
     getStaffTaxReport: (authUserId, year) => getStaffTaxReport(staffRepo, authUserId, year),
     // Connect オンボーディング（infrastructure のリンク発行を注入。feature は Stripe SDK を直接知らない）
     startConnectOnboarding: (authUserId) =>
@@ -205,8 +213,16 @@ export function createApp() {
     // available に収まる範囲の payable 分だけを銀行へ（残高不足の構造的回避＝#5）。
     // verified必須・最低額・available 上限の選定ロジックは Service（Model）に集約する。
     // 申請時点の available 再取得（TOCTOU 回避）のため retrieveConnectBalance も注入する。
+    // 候補取得の前に bt 未反映 tip の自己修復（healSettlementMirror）を行う
+    // （Webhook 取りこぼしで送金候補0件→ payout_below_minimum になる事故の恒久対策）。
     createStaffPayout: (authUserId) =>
-      createStaffPayout(staffRepo, createPayout, retrieveConnectBalance, authUserId),
+      createStaffPayout(
+        staffRepo,
+        createPayout,
+        retrieveConnectBalance,
+        authUserId,
+        healSettlementMirror,
+      ),
     // 送金履歴（本人のみ）
     getStaffPayouts: (authUserId) => getStaffPayouts(staffRepo, authUserId),
   });
