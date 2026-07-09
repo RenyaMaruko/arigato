@@ -80,7 +80,8 @@ export function StoreModeSwitch({ mode }: { mode: "staff" | "store" }) {
   return (
     <>
       {/* 中央の切替ボタン（一段目立つローズの丸ボタン・少し持ち上げる） */}
-      <div className="relative flex flex-none flex-col items-center">
+      {/* ナビの他タブと同じ等幅の区画にする（flex-1）。丸ボタンは区画中央に浮かせる */}
+      <div className="relative flex flex-1 flex-col items-center">
         <button
           type="button"
           onClick={handlePress}

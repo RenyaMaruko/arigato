@@ -31,9 +31,9 @@ export function StaffBottomNav({ active }: { active?: NavKey }) {
         aria-hidden="true"
         className="h-[calc(65px+max(1rem,env(safe-area-inset-bottom,0px)))] flex-none"
       />
-      <nav className="fixed bottom-0 left-0 right-0 z-30 mx-auto flex w-full max-w-app items-center justify-around border-t border-line-soft bg-page px-1.5 pb-[max(1rem,env(safe-area-inset-bottom,0px))] pt-2.5">
+      <nav className="fixed bottom-0 left-0 right-0 z-30 mx-auto flex w-full max-w-app items-stretch border-t border-line-soft bg-page">
         {/* ホーム */}
-        <Link to="/staff" className={`flex flex-col items-center gap-[3px] ${colorFor("home")}`}>
+        <Link to="/staff" className={`flex flex-1 flex-col items-center gap-[3px] pt-2.5 pb-[max(1rem,env(safe-area-inset-bottom,0px))] ${colorFor("home")}`}>
           <svg
             width="23"
             height="23"
@@ -54,7 +54,7 @@ export function StaffBottomNav({ active }: { active?: NavKey }) {
         {/* 履歴（受取履歴） */}
         <Link
           to="/staff/history"
-          className={`flex flex-col items-center gap-[3px] ${colorFor("history")}`}
+          className={`flex flex-1 flex-col items-center gap-[3px] pt-2.5 pb-[max(1rem,env(safe-area-inset-bottom,0px))] ${colorFor("history")}`}
         >
           <svg
             width="23"
@@ -79,7 +79,7 @@ export function StaffBottomNav({ active }: { active?: NavKey }) {
         {/* 所属店舗（店一覧→店ごとのQR詳細へ） */}
         <Link
           to="/staff/stores"
-          className={`flex flex-col items-center gap-[3px] ${colorFor("stores")}`}
+          className={`flex flex-1 flex-col items-center gap-[3px] pt-2.5 pb-[max(1rem,env(safe-area-inset-bottom,0px))] ${colorFor("stores")}`}
         >
           <svg
             width="23"
@@ -103,7 +103,7 @@ export function StaffBottomNav({ active }: { active?: NavKey }) {
         {/* 設定 */}
         <Link
           to="/staff/settings"
-          className={`flex flex-col items-center gap-[3px] ${colorFor("settings")}`}
+          className={`flex flex-1 flex-col items-center gap-[3px] pt-2.5 pb-[max(1rem,env(safe-area-inset-bottom,0px))] ${colorFor("settings")}`}
         >
           <svg
             width="23"
