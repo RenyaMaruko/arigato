@@ -1,9 +1,11 @@
+import { useEffect } from "react";
 import {
   createRootRoute,
   createRoute,
   createRouter,
   Outlet,
   redirect,
+  useRouterState,
 } from "@tanstack/react-router";
 import { HomePage } from "../features/home/HomePage.js";
 import { TipPage } from "../features/tip/pages/TipPage.js";
@@ -51,9 +53,27 @@ import { StoreProfilePage } from "../features/store/pages/StoreProfilePage.js";
  * 認証ガードは StaffPage 系の各画面で session を見て出し分ける（未ログインはログインへ誘導）。
  */
 
+/**
+ * 画面遷移のたびにスクロール位置をトップへ戻す。
+ * ドキュメントスクロール方式（PhoneFrame 参照）では SPA 遷移で前画面のスクロール位置が
+ * 引き継がれ、「ホームが少し下にスクロールされた状態で表示される」ため、パス変更で必ず先頭に戻す。
+ */
+function ScrollToTop() {
+  const pathname = useRouterState({ select: (s) => s.location.pathname });
+  useEffect(() => {
+    window.scrollTo(0, 0);
+  }, [pathname]);
+  return null;
+}
+
 // ルートルート（全画面の親。Outlet に子ルートを描画する）
 const rootRoute = createRootRoute({
-  component: () => <Outlet />,
+  component: () => (
+    <>
+      <ScrollToTop />
+      <Outlet />
+    </>
+  ),
 });
 
 // "/" にホーム画面を割り当てる
