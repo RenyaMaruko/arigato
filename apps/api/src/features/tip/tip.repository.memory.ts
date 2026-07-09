@@ -146,6 +146,12 @@ export function createInMemoryTipRepository(): TipRepository {
       return 1;
     },
 
+    // (c') 自己修復対象の tip を列挙する。インメモリ実装は bt 系の鏡列・Connected Account を
+    //   保持しないため修復対象なし（空配列。実 DB 接続時に検証する）。
+    async listTipsNeedingSettlementHeal() {
+      return [];
+    },
+
     // (f) 返金・チャージバックでメモリ上の tip を refunded / disputed へ遷移する。
     //   charge ID を保持しないインメモリでは PaymentIntent ID 経由で特定する（charge は DB 接続時のみ逆引き）。
     async applySettlementCorrectionToTip(params) {

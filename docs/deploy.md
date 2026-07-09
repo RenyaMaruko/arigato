@@ -69,6 +69,7 @@
    - `account.updated`
    - `payout.paid` / `payout.failed`
    - `charge.refunded` / `charge.dispute.created`
+   - `charge.succeeded` / `charge.updated`（bt 鏡保存の埋め直しに必要。決済直後は balance_transaction 未付与のことがあり、後続の charge.updated で埋める）
 5. 作成後に表示される **署名シークレット（whsec_...）** を Render の `STRIPE_WEBHOOK_SECRET` に設定 → 再デプロイ
 
 ## 4. Supabase の URL 設定

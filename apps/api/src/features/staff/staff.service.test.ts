@@ -1915,6 +1915,82 @@ describe("staff.service", () => {
     expect(callArg.payoutId).toBe(result!.id);
   });
 
+  // --- bt 未反映 tip の自己修復（self-heal）: 送金・残高表示の入口で Stripe から鏡を埋め直す ---
+
+  it("createStaffPayout: 自己修復（healSettlementMirror）を候補取得の前に呼び、修復後の候補で送金を選定する", async () => {
+    await setupVerifiedWithPayable();
+    // Webhook（charge.updated）取りこぼしで bt 未反映のままの状況を模す:
+    // 修復（heal）が走るまで listPayableTips が候補を返さない（bt_status IS NULL で候補から除外される実 DB の挙動）。
+    let healed = false;
+    const repoWithBtGate: StaffRepository = {
+      ...mock.repo,
+      async listPayableTipsByAuthUserId(authUserId) {
+        // 修復前は候補0件（bt 未反映）。修復後は本来の候補を返す（bt が埋まった）
+        if (!healed) return [];
+        return mock.repo.listPayableTipsByAuthUserId(authUserId);
+      },
+    };
+    // heal が bt を埋めて候補に復帰させたことを模す
+    const heal = vi.fn(async (_authUserId: string) => {
+      healed = true;
+      return 2;
+    });
+    const stripePayout = makeStripePayout("po_heal_1");
+
+    const result = await createStaffPayout(
+      repoWithBtGate,
+      stripePayout,
+      makeGetConnectBalance(),
+      "auth-A",
+      heal,
+    );
+
+    // heal は本人スコープで呼ばれ、修復後の候補（手取り 255+425=680）が送金される。
+    // heal 無しなら候補0件→ PayoutBelowMinimumError になる状況＝修復が候補取得の前に効いている証拠
+    expect(heal).toHaveBeenCalledWith("auth-A");
+    expect(result!.amount).toBe(680);
+    expect(stripePayout).toHaveBeenCalledTimes(1);
+  });
+
+  it("createStaffPayout: 自己修復が失敗（例外）しても送金フローは継続する", async () => {
+    await setupVerifiedWithPayable();
+    // 修復が Stripe エラーで失敗するケース（握ってログのみ・送金は続行）
+    const heal = vi.fn(async () => {
+      throw new Error("stripe_unavailable");
+    });
+    const stripePayout = makeStripePayout("po_heal_2");
+
+    const result = await createStaffPayout(
+      mock.repo,
+      stripePayout,
+      makeGetConnectBalance(),
+      "auth-A",
+      heal,
+    );
+    // heal の例外は握られ、送金は従来どおり成立する
+    expect(heal).toHaveBeenCalledTimes(1);
+    expect(result!.amount).toBe(680);
+    expect(result!.status).toBe("pending");
+  });
+
+  it("getStaffBalance: 表示の入口でも自己修復を呼ぶ。修復が失敗しても残高表示を壊さない", async () => {
+    await setupVerifiedWithPayable();
+    // 正常時: heal が本人スコープで呼ばれ、残高は従来どおり返る
+    const heal = vi.fn(async (_authUserId: string) => 0);
+    const balance = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A", heal);
+    expect(heal).toHaveBeenCalledWith("auth-A");
+    expect(balance!.payableAmount).toBe(680);
+
+    // 失敗時: 例外は握られ、残高表示は壊れない（ログのみで続行）
+    const failingHeal = vi.fn(async () => {
+      throw new Error("stripe_unavailable");
+    });
+    const after = await getStaffBalance(mock.repo, makeGetConnectBalance(), "auth-A", failingHeal);
+    expect(failingHeal).toHaveBeenCalledTimes(1);
+    expect(after!.payableAmount).toBe(680);
+    expect(after!.canPayout).toBe(true);
+  });
+
   it("applyPayoutWebhookUpdate: stripe_payout_id 未補完でも metadata.payout_id（自前 id）で確定できる（照合バックアップ）", async () => {
     await setupVerifiedWithPayable();
 

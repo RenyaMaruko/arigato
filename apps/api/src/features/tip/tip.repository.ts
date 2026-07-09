@@ -63,6 +63,17 @@ export type PendingTipForReconcile = {
   createdAt: Date;
 };
 
+// (c') bt 未反映 tip の自己修復（self-heal）対象1件分。
+// Webhook（charge.updated 等）を取りこぼして balance_transaction が埋まらなかった tip を、
+// 送金フローの入口で Stripe から埋め直すための最小情報。
+export type TipSettlementHealRow = {
+  tipId: string;
+  // charge を読み直すキー（決済確定時に保存済み）
+  stripeChargeId: string;
+  // charge の所在口座（tip の店員の Connected Account）。Stripe を読むコンテキスト
+  connectedAccountId: string;
+};
+
 // 保存後・完了画面表示に使う tip の行
 export type TipRow = {
   id: string;
@@ -137,6 +148,15 @@ export type TipRepository = {
     btStatus: "pending" | "available" | null;
     connectedAccountId?: string | null;
   }) => Promise<number>;
+  // (c') 自己修復対象の tip を列挙する（本人スコープ・件数上限つき）。
+  //   「成立済み・payable なのに bt 未反映（bt_status IS NULL）で charge は保存済み」の tip が対象
+  //   （Webhook 到着時点で balance_transaction 未付与＋後続イベント未購読だと恒久に埋まらないため、
+  //    送金フローの入口で Stripe から埋め直す）。Stripe API 呼び出しを bounded にするため limit を必須にする。
+  //   古い受取から順に返す（送金候補の FIFO 選定と整合）。
+  listTipsNeedingSettlementHeal: (
+    authUserId: string,
+    limit: number,
+  ) => Promise<TipSettlementHealRow[]>;
   // (f) 返金・チャージバックで tip を refunded / disputed へ遷移する（残高・履歴・送金候補から除外）。
   //   charge ID（主）または PaymentIntent ID（従）で対象 tip を特定する。
   //   connectedAccountId（イベントの発生元口座）が非 null のときは tip の店員の口座と一致する場合だけ遷移する（多層防御）。
@@ -444,6 +464,31 @@ export function createTipRepository(): TipRepository {
         return rows.length;
       }
       return 0;
+    },
+
+    // (c') 自己修復対象の tip を列挙する（本人スコープ・件数上限つき）。
+    //   本人（auth_user_id）の succeeded かつ payable で、bt_status が未反映（NULL）のまま
+    //   charge ID は保存済みの tip を古い受取から limit 件返す（FIFO・Stripe 呼び出しの上限）。
+    //   charge を読み直す口座（店員の stripe_account_id）が無い行は修復できないため除外する。
+    async listTipsNeedingSettlementHeal(authUserId, limit) {
+      const db = getDb();
+      const rows = await db.execute<TipSettlementHealRow>(sql`
+        SELECT
+          t.id                AS "tipId",
+          t.stripe_charge_id  AS "stripeChargeId",
+          s.stripe_account_id AS "connectedAccountId"
+        FROM tip t
+        JOIN staff s ON s.id = t.staff_id
+        WHERE s.auth_user_id = ${authUserId}
+          AND t.status = 'succeeded'
+          AND t.settlement_status = 'payable'
+          AND t.bt_status IS NULL
+          AND t.stripe_charge_id IS NOT NULL
+          AND s.stripe_account_id IS NOT NULL
+        ORDER BY COALESCE(t.succeeded_at, t.created_at) ASC
+        LIMIT ${limit}
+      `);
+      return rows;
     },
 
     // (f) 返金・チャージバックで tip を refunded / disputed へ遷移する（残高・履歴・送金候補から除外）。

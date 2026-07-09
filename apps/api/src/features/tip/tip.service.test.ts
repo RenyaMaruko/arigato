@@ -91,6 +91,8 @@ function makeRepo(overrides: Partial<TipRepository> = {}): {
     failStalePendingTipsWithoutIntent: vi.fn(async () => 0),
     // (c)(f) 鏡保存・返金補正は本テストでは検証対象外（投げ銭作成・表示のテスト）。最小実装で契約を満たす。
     saveTipChargeSettlement: vi.fn(async () => 0),
+    // (c') 自己修復対象の列挙も既定は空（自己修復のテストで overrides から差し替える）
+    listTipsNeedingSettlementHeal: vi.fn(async () => []),
     applySettlementCorrectionToTip: vi.fn(async () => null),
     ...overrides,
   };
@@ -363,6 +365,123 @@ describe("recordTipChargeSettlement（c: 確定見込みの鏡保存）", () => 
       availableOn: null,
       btStatus: null,
       connectedAccountId: "acct_2",
+    });
+  });
+});
+
+import { healTipSettlementMirrors, SETTLEMENT_HEAL_MAX_TIPS } from "./tip.service.js";
+
+/**
+ * (c') bt 未反映 tip の自己修復（self-heal）の契約テスト。
+ * Webhook（charge.updated 等）の取りこぼしで bt_status が null のままの tip を、
+ * 送金フローの入口で Stripe から埋め直す。infra（charge expand）と repo をモックで差し替えて検証する。
+ */
+describe("healTipSettlementMirrors（c': bt 未反映 tip の自己修復）", () => {
+  it("修復対象の各 tip について charge を読み直し、既存の鏡保存で bt を埋める（件数上限つき列挙）", async () => {
+    const saveTipChargeSettlement = vi.fn(async () => 1);
+    const listTipsNeedingSettlementHeal = vi.fn(async () => [
+      { tipId: "tip_1", stripeChargeId: "ch_1", connectedAccountId: "acct_1" },
+      { tipId: "tip_2", stripeChargeId: "ch_2", connectedAccountId: "acct_1" },
+    ]);
+    const { repo } = makeRepo({ saveTipChargeSettlement, listTipsNeedingSettlementHeal });
+    const availableOn = new Date("2026-07-10T00:00:00Z");
+    const retrieve = vi.fn(async (chargeId: string) => ({
+      chargeId,
+      balanceTransactionId: `txn_${chargeId}`,
+      availableOn,
+      btStatus: "available" as const,
+    }));
+
+    const healed = await healTipSettlementMirrors(repo, retrieve, "auth-A");
+
+    // 列挙は本人スコープ＋上限（Stripe 呼び出しを bounded にする）
+    expect(listTipsNeedingSettlementHeal).toHaveBeenCalledWith("auth-A", SETTLEMENT_HEAL_MAX_TIPS);
+    // 各 tip の charge を Connected Account コンテキストで読み直す
+    expect(retrieve).toHaveBeenCalledTimes(2);
+    expect(retrieve).toHaveBeenCalledWith("ch_1", "acct_1");
+    expect(retrieve).toHaveBeenCalledWith("ch_2", "acct_1");
+    // 既存の鏡保存（recordTipChargeSettlement 経由）で tipId 主・帰属口座つきで保存する
+    expect(saveTipChargeSettlement).toHaveBeenCalledWith({
+      tipId: "tip_1",
+      paymentIntentId: null,
+      chargeId: "ch_1",
+      balanceTransactionId: "txn_ch_1",
+      availableOn,
+      btStatus: "available",
+      connectedAccountId: "acct_1",
+    });
+    expect(healed).toBe(2);
+  });
+
+  it("修復対象が無ければ Stripe を一切呼ばない（通常時のオーバーヘッドなし）", async () => {
+    const { repo } = makeRepo({ listTipsNeedingSettlementHeal: vi.fn(async () => []) });
+    const retrieve = vi.fn(async () => ({
+      chargeId: "ch_x",
+      balanceTransactionId: null,
+      availableOn: null,
+      btStatus: null,
+    }));
+
+    const healed = await healTipSettlementMirrors(repo, retrieve, "auth-A");
+
+    expect(retrieve).not.toHaveBeenCalled();
+    expect(healed).toBe(0);
+  });
+
+  it("1件の修復失敗（Stripe エラー）で全体を止めない（残りは続行・例外は投げない）", async () => {
+    const saveTipChargeSettlement = vi.fn(async () => 1);
+    const listTipsNeedingSettlementHeal = vi.fn(async () => [
+      { tipId: "tip_1", stripeChargeId: "ch_bad", connectedAccountId: "acct_1" },
+      { tipId: "tip_2", stripeChargeId: "ch_ok", connectedAccountId: "acct_1" },
+    ]);
+    const { repo } = makeRepo({ saveTipChargeSettlement, listTipsNeedingSettlementHeal });
+    // 1件目は Stripe エラー、2件目は成功する
+    const retrieve = vi.fn(async (chargeId: string) => {
+      if (chargeId === "ch_bad") throw new Error("stripe_unavailable");
+      return {
+        chargeId,
+        balanceTransactionId: "txn_ok",
+        availableOn: new Date("2026-07-10T00:00:00Z"),
+        btStatus: "available" as const,
+      };
+    });
+
+    // 例外は投げず、成功した1件だけを数える
+    const healed = await healTipSettlementMirrors(repo, retrieve, "auth-A");
+    expect(healed).toBe(1);
+    // 失敗の後も残りの tip を修復している
+    expect(retrieve).toHaveBeenCalledTimes(2);
+    expect(saveTipChargeSettlement).toHaveBeenCalledTimes(1);
+    expect(saveTipChargeSettlement).toHaveBeenCalledWith(
+      expect.objectContaining({ tipId: "tip_2", chargeId: "ch_ok" }),
+    );
+  });
+
+  it("Stripe 側でまだ bt 未付与なら null のまま保存する（次回の呼び出しでまた試みる）", async () => {
+    const saveTipChargeSettlement = vi.fn(async () => 1);
+    const listTipsNeedingSettlementHeal = vi.fn(async () => [
+      { tipId: "tip_1", stripeChargeId: "ch_1", connectedAccountId: "acct_1" },
+    ]);
+    const { repo } = makeRepo({ saveTipChargeSettlement, listTipsNeedingSettlementHeal });
+    // bt がまだ付与されていない charge（PI 直後など）
+    const retrieve = vi.fn(async () => ({
+      chargeId: "ch_1",
+      balanceTransactionId: null,
+      availableOn: null,
+      btStatus: null,
+    }));
+
+    await healTipSettlementMirrors(repo, retrieve, "auth-A");
+
+    // null のまま保存する（COALESCE で既存維持。bt_status は null のままなので次回また対象になる）
+    expect(saveTipChargeSettlement).toHaveBeenCalledWith({
+      tipId: "tip_1",
+      paymentIntentId: null,
+      chargeId: "ch_1",
+      balanceTransactionId: null,
+      availableOn: null,
+      btStatus: null,
+      connectedAccountId: "acct_1",
     });
   });
 });
