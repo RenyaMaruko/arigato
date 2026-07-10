@@ -228,6 +228,10 @@ export type StaffRepository = {
   acceptAdminInvite: (authUserId: string, code: string) => Promise<AdminJoinResultRow>;
   // 自分が active な管理者である営業中の店が1つ以上あるか（モード切替の判定・GET /staff/me の managesStore）
   hasManagedStore: (authUserId: string) => Promise<boolean>;
+  // 本人が既読にしたチュートリアルのキー一覧を取得する（GET /staff/me の seenTutorials）
+  listSeenTutorialsByAuthUserId: (authUserId: string) => Promise<string[]>;
+  // チュートリアルを既読にする（本人スコープ・冪等）。既に既読でも成功扱い（重複行は作らない）
+  markTutorialSeen: (authUserId: string, tutorialKey: string) => Promise<void>;
   // 自分のプロフィール（display_name・headline・avatar）を更新する。更新後の行を返す
   updateStaffProfile: (
     authUserId: string,
@@ -793,6 +797,30 @@ export function createStaffRepository(): StaffRepository {
         ) AS "exists"
       `);
       return rows[0]?.exists ?? false;
+    },
+
+    // 本人が既読にしたチュートリアルのキー一覧を取得する（GET /staff/me の seenTutorials）。
+    // 既読順（seen_at 昇順）で返す（並びに意味は無いが安定させる）。
+    async listSeenTutorialsByAuthUserId(authUserId) {
+      const db = getDb();
+      const rows = await db.execute<{ tutorialKey: string }>(sql`
+        SELECT ut.tutorial_key AS "tutorialKey"
+        FROM user_tutorial ut
+        WHERE ut.auth_user_id = ${authUserId}
+        ORDER BY ut.seen_at ASC
+      `);
+      return rows.map((r) => r.tutorialKey);
+    },
+
+    // チュートリアルを既読にする（本人スコープ・冪等）。
+    // 複合主キー (auth_user_id, tutorial_key) の ON CONFLICT DO NOTHING で二重挿入を無害化する。
+    async markTutorialSeen(authUserId, tutorialKey) {
+      const db = getDb();
+      await db.execute(sql`
+        INSERT INTO user_tutorial (auth_user_id, tutorial_key)
+        VALUES (${authUserId}, ${tutorialKey})
+        ON CONFLICT (auth_user_id, tutorial_key) DO NOTHING
+      `);
     },
 
     // 自分のプロフィールを更新（所属は変更しない）。本人の auth_user_id で限定する

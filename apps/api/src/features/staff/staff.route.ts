@@ -1,10 +1,14 @@
 import { Hono } from "hono";
+import { z } from "zod";
 import { zValidator } from "@hono/zod-validator";
 import {
   CreateStaffProfileInputSchema,
   UpdateStaffProfileInputSchema,
   JoinStoreInputSchema,
   StaffTipsQuerySchema,
+  TutorialKeySchema,
+  type TutorialKey,
+  type TutorialSeenResponse,
   type StaffMe,
   type InviteInfo,
   type JoinStoreResult,
@@ -85,6 +89,8 @@ type StaffDeps = {
   createStaffPayout: (authUserId: string) => Promise<CreatePayoutResult | null>;
   // 送金履歴（金額・状態・申請日時・着金日時・本人のみ）。未作成なら null
   getStaffPayouts: (authUserId: string) => Promise<PayoutList | null>;
+  // チュートリアルを既読にする（本人スコープ・冪等。既に既読でも成功扱い）
+  markTutorialSeen: (authUserId: string, key: TutorialKey) => Promise<TutorialSeenResponse>;
 };
 
 /**
@@ -264,6 +270,20 @@ export function createStaffRoute(deps: StaffDeps) {
         throw err;
       }
     })
+    // チュートリアルを既読にする（本人スコープ・冪等）。
+    // :key は shared のホワイトリスト（TutorialKeySchema）で検証し、未知のキーは 400 で弾く。
+    // 既に既読でも成功扱い（フロントは楽観更新済みのため、失敗時のみ次回再表示になる）。
+    .post(
+      "/me/tutorials/:key/seen",
+      zValidator("param", z.object({ key: TutorialKeySchema })),
+      async (c) => {
+        const authUser = c.get("authUser");
+        const { key } = c.req.valid("param");
+        // 本人の auth_user_id にのみ書く（他人の既読状態は変えられない）
+        const result = await deps.markTutorialSeen(authUser.id, key);
+        return c.json(result);
+      },
+    )
     // 送金履歴（いつ・いくら・状態 pending/paid/failed・着金日。本人のみ）
     .get("/me/payouts", async (c) => {
       const authUser = c.get("authUser");

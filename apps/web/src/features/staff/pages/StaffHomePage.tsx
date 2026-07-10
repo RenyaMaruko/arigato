@@ -3,7 +3,9 @@ import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
 import type { StaffMe } from "@arigato/shared";
 import { PhoneFrame } from "../../../components/common/PhoneFrame.js";
+import { shouldShowWelcomeTutorial } from "../../../lib/tutorial-visibility.js";
 import { StaffBottomNav } from "../components/StaffBottomNav.js";
+import { WelcomeTutorial } from "../components/WelcomeTutorial.js";
 import { useStaffBalance } from "../hooks/useStaff.js";
 
 /**
@@ -208,6 +210,12 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
 
       {/* 下部ボトムナビ（モック01・現在地＝ホーム） */}
       <StaffBottomNav active="home" />
+
+      {/* 初回アカウント作成チュートリアル（welcome・2ステップ）。
+          me（ロード済み）の seenTutorials に welcome が無いときだけ1回出す（DB・アカウント紐づけ）。
+          閉じると既読化され、この条件が外れて自動的に消える。
+          中央ナビのコーチマーク（mode_switch）は welcome 既読まで出ないため2枚重ならない。 */}
+      {shouldShowWelcomeTutorial(me.seenTutorials) && <WelcomeTutorial />}
     </PhoneFrame>
   );
 }

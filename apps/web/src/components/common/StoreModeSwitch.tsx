@@ -2,10 +2,12 @@ import { useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { useNavigate } from "@tanstack/react-router";
 import { useTranslation } from "react-i18next";
-import { StoreManagedListResponseSchema } from "@arigato/shared";
+import { StoreManagedListResponseSchema, StaffMeSchema } from "@arigato/shared";
 import { apiClient } from "../../lib/api-client.js";
 import { useAuthSession } from "../../lib/use-auth-session.js";
 import { useStoreSwitcher } from "../../lib/store-switcher.js";
+import { shouldShowModeSwitchTutorial } from "../../lib/tutorial-visibility.js";
+import { useMarkTutorialSeen } from "../../lib/use-mark-tutorial-seen.js";
 
 /**
  * ボトムナビ中央の「店舗管理 ⇄ 店員」切替ボタン（§11.4）。
@@ -19,13 +21,17 @@ import { useStoreSwitcher } from "../../lib/store-switcher.js";
  *  - mode="staff"（店員モード）→ 店の管理へ。管理店が1件ならそのまま /store へ直行、
  *    複数件なら一覧シートを開いて選ばせ、選んだ店を選択して /store へ。
  *  - mode="store"（管理モード）→ 店員モード（/staff）へ戻す。
- * 初回のみ（switchTutorialSeen=false）、中央ボタンで切り替えられる旨のコーチマークを1回だけ出す。
+ * 初回のみ、中央ボタンで切り替えられる旨のコーチマークを1回だけ出す。
+ * 既読状態は me API の seenTutorials（DB・アカウント紐づけ）を正とし、localStorage は使わない
+ * （プライベートモード・別端末での再表示を防ぐ）。既読情報のロード完了までは表示しない。
  */
 export function StoreModeSwitch({ mode }: { mode: "staff" | "store" }) {
   const { t } = useTranslation();
   const navigate = useNavigate();
   const { isAuthenticated } = useAuthSession();
-  const { setSelectedStoreId, switchTutorialSeen, markSwitchTutorialSeen } = useStoreSwitcher();
+  const { setSelectedStoreId } = useStoreSwitcher();
+  // チュートリアルの既読化（キャッシュの楽観更新＋裏で既読API・冪等）
+  const markTutorialSeen = useMarkTutorialSeen();
 
   // 選択シート（複数店の選択）の開閉
   const [sheetOpen, setSheetOpen] = useState(false);
@@ -39,6 +45,26 @@ export function StoreModeSwitch({ mode }: { mode: "staff" | "store" }) {
         throw new Error(`store mine request failed: ${res.status}`);
       }
       return StoreManagedListResponseSchema.parse(await res.json());
+    },
+    enabled: isAuthenticated,
+    retry: false,
+  });
+
+  // 自分のプロフィール（GET /staff/me）。チュートリアルの既読一覧（seenTutorials）を見るために引く。
+  // features/staff の useStaffMe と同じキー・同じ null 扱い（404）でキャッシュを共有する
+  // （店員側画面では取得済みのことが多く、追加リクエストは通常発生しない）。
+  const meQuery = useQuery({
+    queryKey: ["staff", "me"],
+    queryFn: async () => {
+      const res = await apiClient.staff.me.$get();
+      // プロフィール未作成は null（既読情報なし＝チュートリアルは出さない）
+      if (res.status === 404) {
+        return null;
+      }
+      if (!res.ok) {
+        throw new Error(`staff me request failed: ${res.status}`);
+      }
+      return StaffMeSchema.parse(await res.json());
     },
     enabled: isAuthenticated,
     retry: false,
@@ -75,7 +101,16 @@ export function StoreModeSwitch({ mode }: { mode: "staff" | "store" }) {
 
   // 初回のみのチュートリアル（コーチマーク）。中央ボタンが初めて見えたモードで1回だけ出す
   // （店作成後の着地は店舗管理＝store モードなので、モードを限定しない。文言もモード中立）。
-  const showTutorial = !switchTutorialSeen && !sheetOpen;
+  // 既読は me API の seenTutorials を正とし、ロード完了までは出さない（既読者へのチラ見え防止）。
+  // 店員モードでは welcome チュートリアルを優先し、2枚重ねない（welcome を閉じると続けて出る）。
+  const showTutorial = shouldShowModeSwitchTutorial({
+    mode,
+    seenTutorials: meQuery.data?.seenTutorials,
+    sheetOpen,
+  });
+
+  // コーチマークを閉じる（＝mode_switch を既読にする。楽観更新で即時に消える）
+  const closeTutorial = () => markTutorialSeen("mode_switch");
 
   return (
     <>
@@ -104,7 +139,7 @@ export function StoreModeSwitch({ mode }: { mode: "staff" | "store" }) {
           <button
             type="button"
             aria-label={t("mode.tutorialGotIt")}
-            onClick={markSwitchTutorialSeen}
+            onClick={closeTutorial}
             className="absolute inset-0 cursor-default bg-scrim"
           />
           {/* 吹き出し本体（下部ナビの中央ボタンの真上あたり） */}
@@ -115,7 +150,7 @@ export function StoreModeSwitch({ mode }: { mode: "staff" | "store" }) {
             </div>
             <button
               type="button"
-              onClick={markSwitchTutorialSeen}
+              onClick={closeTutorial}
               className="mt-3 w-full rounded-xl bg-rose py-2.5 text-token-sm font-bold text-page"
             >
               {t("mode.tutorialGotIt")}

@@ -12,3 +12,4 @@ export { tip } from "./tip.js";
 export { payout } from "./payout.js";
 export { payoutLedger } from "./payout-ledger.js";
 export { webhookEvent } from "./webhook-event.js";
+export { userTutorial } from "./user-tutorial.js";

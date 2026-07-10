@@ -48,6 +48,8 @@ export function createInMemoryStaffRepository(): StaffRepository {
     { storeId: string; authUserId: string; role: "owner" | "admin"; leftAt: number | null }
   >();
   const adminKey = (storeId: string, authUserId: string) => `${storeId}::${authUserId}`;
+  // チュートリアル既読（user_tutorial 相当）。authUserId → 既読キーの集合（Set で冪等を担保）
+  const seenTutorialsByAuth = new Map<string, Set<string>>();
 
   // 開発用シード招待（任意）。導入承認に同意済みの店の pending 招待を1件用意する
   const seedCode = process.env.SEED_INVITE_CODE;
@@ -238,6 +240,18 @@ export function createInMemoryStaffRepository(): StaffRepository {
         if (a.authUserId === authUserId && a.leftAt === null) return true;
       }
       return false;
+    },
+
+    // 本人が既読にしたチュートリアルのキー一覧を返す（未記録は空配列）
+    async listSeenTutorialsByAuthUserId(authUserId) {
+      return [...(seenTutorialsByAuth.get(authUserId) ?? new Set<string>())];
+    },
+
+    // チュートリアルを既読にする（Set への追加＝冪等。既に既読でも成功扱い）
+    async markTutorialSeen(authUserId, tutorialKey) {
+      const seen = seenTutorialsByAuth.get(authUserId) ?? new Set<string>();
+      seen.add(tutorialKey);
+      seenTutorialsByAuth.set(authUserId, seen);
     },
 
     async updateStaffProfile(authUserId, params) {

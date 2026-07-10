@@ -19,6 +19,29 @@ export const DISPLAY_NAME_MAX_LENGTH = 40;
 export const HEADLINE_MAX_LENGTH = 60;
 
 /**
+ * チュートリアルのキー一覧（ホワイトリスト）。
+ * 既読はアカウント（auth_user_id）×キーで DB（user_tutorial）に永続する。
+ * チュートリアルを増やすときはここにキーを足すだけでよい（DB 変更は不要）。
+ *  - mode_switch: ボトムナビ中央の「店員 ⇄ 店舗管理」切替のコーチマーク
+ *  - welcome:     初回アカウント作成後、店員ホームに初めて入ったときの案内（2ステップ）
+ */
+export const TUTORIAL_KEYS = ["mode_switch", "welcome"] as const;
+
+// 既読化 API（POST /staff/me/tutorials/:key/seen）の :key 検証に使うホワイトリスト。
+// 未知のキーは 400 で弾き、ゴミデータの書き込みを防ぐ。
+export const TutorialKeySchema = z.enum(TUTORIAL_KEYS);
+export type TutorialKey = z.infer<typeof TutorialKeySchema>;
+
+/**
+ * POST /staff/me/tutorials/:key/seen の応答。
+ * 既読化は冪等（既に既読でも成功扱い）のため、確定したキーだけを返す。
+ */
+export const TutorialSeenResponseSchema = z.object({
+  key: TutorialKeySchema,
+});
+export type TutorialSeenResponse = z.infer<typeof TutorialSeenResponseSchema>;
+
+/**
  * 初回プロフィール作成（POST /staff/me）で店員さん本人から受け取る入力。
  * display_name・headline（任意）・avatar_url（任意）のみ。プロフィールは人ごとに1つ。
  * 所属の確定は別途 POST /staff/me/join（招待コード）に集約するため、ここでは招待コードを受け取らない。
@@ -132,6 +155,11 @@ export const StaffMeSchema = z.object({
   // 兼任者（店員かつ管理者）だけにモード切替導線「店の管理へ」を出すための判定に使う。
   // false のときは店員側に「店を開設する」導線を出す（全員デフォルトは店員ホーム）。
   managesStore: z.boolean(),
+  // 既読にしたチュートリアルのキー一覧（DB の user_tutorial 由来・アカウント紐づけ）。
+  // me 応答に同乗させて追加リクエストを増やさない。フロントはこの一覧のロード完了までは
+  // チュートリアルを表示しない（既読者への一瞬のチラ見え防止）。
+  // 過去に使っていた古いキーが残っても壊れないよう、検証はホワイトリストでなく文字列配列にする。
+  seenTutorials: z.array(z.string()),
 });
 export type StaffMe = z.infer<typeof StaffMeSchema>;
 
