@@ -10,6 +10,8 @@ import type {
   ConnectAccountSessionResponse,
   CreatePayoutResult,
   PayoutList,
+  TutorialKey,
+  TutorialSeenResponse,
 } from "@arigato/shared";
 import { CURRENCY, STAFF_TIPS_DEFAULT_LIMIT, STAFF_TIPS_MAX_LIMIT } from "@arigato/shared";
 import { randomUUID } from "node:crypto";
@@ -93,6 +95,8 @@ function toStaffMe(
   buildUrl: BuildTipUrl,
   // 兼任者（active な store_admin を持つ人）か。true のときだけ店員側に「店の管理へ」を出す
   managesStore: boolean,
+  // 既読チュートリアルのキー一覧（me 応答に同乗させて追加リクエストを増やさない）
+  seenTutorials: string[],
 ): StaffMe {
   return {
     id: profile.id,
@@ -117,6 +121,8 @@ function toStaffMe(
       storeId: r.storeId,
       storeName: r.storeName,
     })),
+    // 既読チュートリアル（フロントは未ロード中の表示を避け、ここに無いキーだけ案内を出す）
+    seenTutorials,
   };
 }
 
@@ -161,7 +167,9 @@ export async function getStaffMe(
   const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
   // 兼任者（active な store_admin を持つ人）か（モード切替導線の出し分け）
   const managesStore = await repo.hasManagedStore(authUserId);
-  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore);
+  // 既読チュートリアル一覧も同乗させる（追加リクエストを増やさない）
+  const seenTutorials = await repo.listSeenTutorialsByAuthUserId(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore, seenTutorials);
 }
 
 // プロフィール作成・参加で起こりうる業務エラー（Route で HTTP ステータスに変換する）
@@ -245,7 +253,9 @@ export async function createStaffProfile(
   // 作成直後は所属なし・受取も無し。どちらも空配列で返す（後続の join で追加される）。
   // 稀に「先に店を作成（owner）してからプロフィール作成」した人もいるため managesStore は問い合わせる。
   const managesStore = await repo.hasManagedStore(authUserId);
-  return toStaffMe(profile, [], [], buildUrl, managesStore);
+  // 既読チュートリアル（作成直後は通常空。welcome チュートリアルの表示判定に使う）
+  const seenTutorials = await repo.listSeenTutorialsByAuthUserId(authUserId);
+  return toStaffMe(profile, [], [], buildUrl, managesStore, seenTutorials);
 }
 
 /**
@@ -355,7 +365,8 @@ export async function leaveStoreMembership(
   const memberships = await repo.listMembershipsByAuthUserId(authUserId);
   const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
   const managesStore = await repo.hasManagedStore(authUserId);
-  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore);
+  const seenTutorials = await repo.listSeenTutorialsByAuthUserId(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore, seenTutorials);
 }
 
 /**
@@ -379,7 +390,25 @@ export async function updateStaffProfile(
   const memberships = await repo.listMembershipsByAuthUserId(authUserId);
   const receiptStores = await repo.listReceiptStoresByAuthUserId(authUserId);
   const managesStore = await repo.hasManagedStore(authUserId);
-  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore);
+  const seenTutorials = await repo.listSeenTutorialsByAuthUserId(authUserId);
+  return toStaffMe(profile, memberships, receiptStores, buildUrl, managesStore, seenTutorials);
+}
+
+/**
+ * チュートリアルを既読にする（POST /staff/me/tutorials/:key/seen・本人スコープ・冪等）。
+ * 認証済みの authUserId にのみ書き込み、他人の既読状態は変えられない。
+ * キーのホワイトリスト検証（TutorialKeySchema）は Route 層の zValidator が担う（未知キーは 400）。
+ * 既に既読でも成功扱い（Repository の ON CONFLICT DO NOTHING で重複行を作らない）。
+ * プロフィール未作成でも既読化できる（既読はアカウント＝auth_user_id 紐づけで、staff 行に依存しない）。
+ */
+export async function markTutorialSeen(
+  repo: StaffRepository,
+  authUserId: string,
+  key: TutorialKey,
+): Promise<TutorialSeenResponse> {
+  // 冪等な既読記録（二度呼んでも成功・行は1つ）
+  await repo.markTutorialSeen(authUserId, key);
+  return { key };
 }
 
 // 画像を公開バケットへアップロードする infrastructure 関数の型（コンポジションルートで注入）。

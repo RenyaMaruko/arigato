@@ -44,6 +44,7 @@ import {
   applyPayoutWebhookUpdate,
   recordPayoutLedger,
   recordSettlementCorrectionLedger,
+  markTutorialSeen,
 } from "./features/staff/staff.service.js";
 import { createStaffRepository } from "./features/staff/staff.repository.js";
 import { createInMemoryStaffRepository } from "./features/staff/staff.repository.memory.js";
@@ -225,6 +226,8 @@ export function createApp() {
       ),
     // 送金履歴（本人のみ）
     getStaffPayouts: (authUserId) => getStaffPayouts(staffRepo, authUserId),
+    // チュートリアルの既読化（本人スコープ・冪等）。キー検証は Route の zValidator（shared のホワイトリスト）
+    markTutorialSeen: (authUserId, key) => markTutorialSeen(staffRepo, authUserId, key),
   });
   // 招待検証（認証不要）。店員さんのアカウント作成画面で所属先を表示するために使う。
   const inviteRoute = createInviteRoute({
