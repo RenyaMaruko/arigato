@@ -347,6 +347,8 @@ export async function createPayout(params: CreatePayoutParams): Promise<CreatePa
  *  - 準備中（pending）がある場合は、balance_transactions を auto-pagination で全件リスト取得し、
  *    available_on を暦日（Asia/Tokyo 基準）ごとにバケット集計する（pendingBuckets・日付昇順）。
  *    日付ごとにAPIを叩かないことでレート負荷を抑えつつ、100件超でも内訳を取りこぼさない。
+ *    集計は net（手取り＝fee 控除後）ベースで行う。balance.pending 自体が net の合計であり、
+ *    総額（amount）で集計するとバケット合計が pendingAmount と食い違ってしまうため。
  *    最も早い日付を nextAvailableOn（「◯月◯日から送金できます」）に使い、
  *    バケット合計は pendingAmount と必ず一致させる（差が出る場合は最早バケットへ寄せる）。
  *
@@ -379,7 +381,8 @@ export async function retrieveConnectBalance(
       txns.push({
         status: txn.status,
         currency: txn.currency,
-        amount: txn.amount,
+        // net（手取り）を使う。balance.pending は net の合計なので、総額（amount）だと合わない
+        net: txn.net,
         available_on: txn.available_on,
       });
     }
@@ -400,8 +403,9 @@ export type PendingTransactionLike = {
   status: string;
   // 通貨コード（jpy 以外は除外する）
   currency: string;
-  // 金額（円）。準備中の入金系は正の値
-  amount: number;
+  // 手取り額（円・fee 控除後の net）。準備中の入金系は正の値。
+  // balance.pending が net の合計なので、内訳集計も net で行う（総額 amount は使わない）
+  net: number;
   // available になる予定の epoch 秒
   available_on: number;
 };
@@ -412,6 +416,7 @@ export type PendingTransactionLike = {
  *
  * 仕様:
  *  - status=pending かつ available_on が未来（nowSeconds より後）かつ JPY のものだけを対象にする。
+ *  - 金額は net（手取り＝fee 控除後）を合算する。balance.pending と同じベースに揃えるため。
  *  - 暦日は Asia/Tokyo（UTC+9）基準でまとめる（UI が「M月D日」で表示するため）。
  *  - 同じ暦日のものは合算し、availableOn はその日の 0:00（JST）を ISO 文字列で表す。
  *  - 日付昇順で返す。対象が無ければ空配列。
@@ -431,9 +436,9 @@ export function groupPendingByAvailableDate(
     if (txn.currency !== CURRENCY) continue;
     if (txn.available_on <= nowSeconds) continue;
 
-    // available_on（epoch 秒）を JST の暦日の 0:00（epoch 秒）に丸める
+    // available_on（epoch 秒）を JST の暦日の 0:00（epoch 秒）に丸め、手取り（net）を合算する
     const dayStartSeconds = toJstDayStartSeconds(txn.available_on);
-    byDay.set(dayStartSeconds, (byDay.get(dayStartSeconds) ?? 0) + txn.amount);
+    byDay.set(dayStartSeconds, (byDay.get(dayStartSeconds) ?? 0) + txn.net);
   }
 
   // 日付昇順に並べ、各日の 0:00（JST）を ISO 文字列にして返す

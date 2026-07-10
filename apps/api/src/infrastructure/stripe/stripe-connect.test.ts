@@ -19,12 +19,12 @@ function jst(iso: string): number {
   return Math.floor(new Date(iso).getTime() / 1000);
 }
 
-// テスト用の pending トランザクションを作る（既定は JPY・pending）
+// テスト用の pending トランザクションを作る（既定は JPY・pending・net=手取り）
 function txn(overrides: Partial<PendingTransactionLike>): PendingTransactionLike {
   return {
     status: "pending",
     currency: "jpy",
-    amount: 100,
+    net: 100,
     available_on: jst("2026-07-01T12:00:00+09:00"),
     ...overrides,
   };
@@ -41,10 +41,10 @@ describe("groupPendingByAvailableDate", () => {
   it("available_on を暦日（JST）でまとめ、同じ日は合算する", () => {
     const txns = [
       // 7/1 の午前と午後（JST 上は同じ暦日）→ 合算される
-      txn({ amount: 100, available_on: jst("2026-07-01T09:00:00+09:00") }),
-      txn({ amount: 200, available_on: jst("2026-07-01T23:30:00+09:00") }),
+      txn({ net: 100, available_on: jst("2026-07-01T09:00:00+09:00") }),
+      txn({ net: 200, available_on: jst("2026-07-01T23:30:00+09:00") }),
       // 7/3
-      txn({ amount: 50, available_on: jst("2026-07-03T10:00:00+09:00") }),
+      txn({ net: 50, available_on: jst("2026-07-03T10:00:00+09:00") }),
     ];
     const buckets = groupPendingByAvailableDate(txns, now);
     expect(buckets).toHaveLength(2);
@@ -59,8 +59,8 @@ describe("groupPendingByAvailableDate", () => {
   it("UTC 跨ぎ（JST 0:30）でも JST の暦日でまとまる", () => {
     // JST 7/2 0:30（UTC では 7/1 15:30）→ JST 暦日は 7/2 に入る
     const txns = [
-      txn({ amount: 100, available_on: jst("2026-07-02T00:30:00+09:00") }),
-      txn({ amount: 100, available_on: jst("2026-07-02T20:00:00+09:00") }),
+      txn({ net: 100, available_on: jst("2026-07-02T00:30:00+09:00") }),
+      txn({ net: 100, available_on: jst("2026-07-02T20:00:00+09:00") }),
     ];
     const buckets = groupPendingByAvailableDate(txns, now);
     expect(buckets).toHaveLength(1);
@@ -70,9 +70,9 @@ describe("groupPendingByAvailableDate", () => {
 
   it("日付昇順で返す（入力順に依らない）", () => {
     const txns = [
-      txn({ amount: 30, available_on: jst("2026-07-05T10:00:00+09:00") }),
-      txn({ amount: 10, available_on: jst("2026-07-01T10:00:00+09:00") }),
-      txn({ amount: 20, available_on: jst("2026-07-03T10:00:00+09:00") }),
+      txn({ net: 30, available_on: jst("2026-07-05T10:00:00+09:00") }),
+      txn({ net: 10, available_on: jst("2026-07-01T10:00:00+09:00") }),
+      txn({ net: 20, available_on: jst("2026-07-03T10:00:00+09:00") }),
     ];
     const buckets = groupPendingByAvailableDate(txns, now);
     expect(buckets.map((b) => b.amount)).toEqual([10, 20, 30]);
@@ -81,17 +81,42 @@ describe("groupPendingByAvailableDate", () => {
   it("pending 以外・既に available（過去）・JPY 以外は除外する", () => {
     const txns = [
       // available（pending でない）→ 除外
-      txn({ status: "available", amount: 999, available_on: jst("2026-07-01T10:00:00+09:00") }),
+      txn({ status: "available", net: 999, available_on: jst("2026-07-01T10:00:00+09:00") }),
       // available_on が過去（now 以前）→ 除外
-      txn({ amount: 999, available_on: jst("2026-06-29T10:00:00+09:00") }),
+      txn({ net: 999, available_on: jst("2026-06-29T10:00:00+09:00") }),
       // JPY 以外 → 除外
-      txn({ currency: "usd", amount: 999, available_on: jst("2026-07-01T10:00:00+09:00") }),
+      txn({ currency: "usd", net: 999, available_on: jst("2026-07-01T10:00:00+09:00") }),
       // 有効な pending（残るのはこれだけ）
-      txn({ amount: 100, available_on: jst("2026-07-01T10:00:00+09:00") }),
+      txn({ net: 100, available_on: jst("2026-07-01T10:00:00+09:00") }),
     ];
     const buckets = groupPendingByAvailableDate(txns, now);
     expect(buckets).toHaveLength(1);
     expect(buckets[0]!.amount).toBe(100);
+  });
+
+  it("本番実測ケース: net（手取り）で集計し、reconcile 後も変わらない（diff=0）", () => {
+    // 実測: ¥300決済（net=255・7/16）＋ ¥3,000決済×2（net=2550・7/17）、balance.pending=5355（net 合計）
+    const txns = [
+      txn({ net: 255, available_on: jst("2026-07-16T09:00:00+09:00") }),
+      txn({ net: 2550, available_on: jst("2026-07-17T09:00:00+09:00") }),
+      txn({ net: 2550, available_on: jst("2026-07-17T18:00:00+09:00") }),
+    ];
+    const buckets = groupPendingByAvailableDate(txns, now);
+    // 「7月16日から ¥255」「7月17日から ¥5,100」になる（総額 300/6,000 ではない）
+    expect(buckets).toEqual([
+      {
+        availableOn: new Date(jst("2026-07-16T00:00:00+09:00") * 1000).toISOString(),
+        amount: 255,
+      },
+      {
+        availableOn: new Date(jst("2026-07-17T00:00:00+09:00") * 1000).toISOString(),
+        amount: 5100,
+      },
+    ]);
+    // net ベースならバケット合計＝pendingAmount で diff=0 → reconcile してもそのまま（¥0行は生まれない）
+    const reconciled = reconcilePendingBuckets(buckets, 5355);
+    expect(reconciled).toEqual(buckets);
+    expect(reconciled.reduce((s, b) => s + b.amount, 0)).toBe(5355);
   });
 });
 
