@@ -50,7 +50,10 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
         {/* 残高カード。受け取った投げ銭の残高（保留＋着金可能の合計）を1つの「残高」として表示する。
             着金（銀行送金）には本人確認が要るため、未確認なら一言＋本人確認ボタンを残高のすぐ下に置く。
             金額は本人のみ表示（横断ルール）。本人の画面なのでアバター・名前・一言は出さない。 */}
-        <div className="w-full rounded-2xl border border-rose-spark/50 bg-rose-soft px-5 py-[18px]">
+        <div
+          data-tutorial-target="balance"
+          className="w-full rounded-2xl border border-rose-spark/50 bg-rose-soft px-5 py-[18px]"
+        >
           {/* 残高（保留 held ＋ 着金可能 payable の合計）を主役に大きく見せる */}
           <div className="text-token-sm font-semibold text-rose/80">
             {t("staff.homeBalanceLabel")}
@@ -106,6 +109,7 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
             // 表示し、修正・再提出できる。注意が伝わるようローズ枠線＋ローズ文字（トークン準拠）にする
             <button
               type="button"
+              data-tutorial-target="verify"
               onClick={() => navigate({ to: "/staff/identity" })}
               className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-xl border-[1.5px] border-rose bg-page py-3 text-token-md font-bold text-rose"
             >
@@ -121,6 +125,7 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
           ) : (
             <button
               type="button"
+              data-tutorial-target="verify"
               onClick={() => navigate({ to: "/staff/identity" })}
               className="mt-3.5 flex w-full items-center justify-center gap-1.5 rounded-xl bg-rose py-3 text-token-md font-bold text-page"
             >
@@ -204,6 +209,7 @@ export function StaffHomePage({ me }: { me: StaffMe }) {
             label={t("staff.homeCreateStore")}
             onClick={() => navigate({ to: "/store/new" })}
             icon={<StoreCreateIcon />}
+            tutorialTarget="create-store"
           />
         </div>
       </div>
@@ -228,14 +234,18 @@ function FeatureTile({
   label,
   icon,
   onClick,
+  tutorialTarget,
 }: {
   label: string;
   icon: ReactNode;
   onClick: () => void;
+  // 初回チュートリアルの吹き出しが指す目印（例: 店舗作成タイル）。不要なら省略
+  tutorialTarget?: string;
 }) {
   return (
     <button
       type="button"
+      data-tutorial-target={tutorialTarget}
       onClick={onClick}
       className="flex flex-col items-center gap-2 text-rose"
     >

@@ -176,15 +176,14 @@ export const ja = {
       createErrorInvite: "招待が無効です。コードを確認してください。",
       createErrorExists: "すでにプロフィールが作成されています。",
       createErrorGeneric: "作成に失敗しました。もう一度お試しください。",
-      // 初回アカウント作成チュートリアル（welcome・2ステップ。店員ホームで1回だけ）
-      // ステップ1: 本人確認をすると送金できる（ホームの本人確認ボタンへの導線を案内）
-      welcomeTutorialStep1Title: "本人確認で送金できるようになります",
+      // 初回アカウント作成チュートリアル（welcome・2ステップの吹き出し。店員ホームで1回だけ）
+      // 吹き出しに収まるよう短く。ステップ1は残高カードの本人確認ボタン付近を指す
+      welcomeTutorialStep1Title: "本人確認で送金できます",
       welcomeTutorialStep1Body:
-        "受け取ったチップを銀行口座へ送金するには、本人確認が必要です。ホームの「本人確認をする」ボタンから、いつでも手続きできます。",
-      // ステップ2: 店舗を管理する人は店舗を作成できる（作成後は中央の「店舗管理」切替を案内）
-      welcomeTutorialStep2Title: "お店を管理する方はこちら",
-      welcomeTutorialStep2Body:
-        "お店をつくって管理する方は、ホームの「店舗作成」からお店をつくれます。作成すると、画面下・中央の「店舗管理」ボタンでいつでも切り替えられます。",
+        "本人確認をすると、受け取ったチップを銀行口座へ送金できます。",
+      // ステップ2: ホームの「店舗作成」タイルを指す（お店を管理する人向け）
+      welcomeTutorialStep2Title: "お店の管理はこちら",
+      welcomeTutorialStep2Body: "お店を管理する方は、ここから店舗を作成できます。",
       welcomeTutorialNext: "次へ",
       welcomeTutorialStart: "はじめる",
       // ホーム
