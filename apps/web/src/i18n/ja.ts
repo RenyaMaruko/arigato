@@ -42,10 +42,6 @@ export const ja = {
       preparingPay: "決済を準備しています…",
       // 支払い方法を選ぶシートの各ボタン
       payWithCard: "💳 カードで支払う",
-      payWithPaypay: "PayPay で支払う",
-      // PayPay は Stripe 審査前で未有効のため、案内文言を出して無効化する
-      paypayComingSoon: "準備中",
-      paypayNotReady: "PayPay は現在ご利用いただけません。カードまたはウォレットでお支払いください。",
       // カード入力ステップのタイトル・戻る
       cardStepTitle: "カードで支払う",
       backToMethods: "← 支払い方法に戻る",

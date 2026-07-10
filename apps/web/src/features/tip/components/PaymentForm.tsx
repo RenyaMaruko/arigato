@@ -324,10 +324,12 @@ export function PaymentForm({ membershipId, open, onPaid }: Props) {
         }}
       />
 
-      {/* ウォレットとカード/PayPay の間の余白 */}
+      {/* ウォレットとカードの間の余白 */}
       <div className="mt-[22px]" />
 
       {/* クレジットカードで支払う（押すとカード入力ステップを展開する） */}
+      {/* PayPay は Stripe Connect が対応したら（現在プレビュー中）ここにボタンを追加し、
+          PayPay の payment method で confirmPayment（return_url 必須・リダイレクト）を実装する想定 */}
       <button
         type="button"
         onClick={goToCardStep}
@@ -335,21 +337,6 @@ export function PaymentForm({ membershipId, open, onPaid }: Props) {
         className="flex w-full items-center justify-center gap-2 rounded-xl border-[1.5px] border-line bg-page py-[17px] text-center text-token-md font-bold text-ink disabled:opacity-60"
       >
         {t("tip.payWithCard")}
-      </button>
-
-      {/* PayPay で支払う（Stripe 審査前で未有効のため「準備中」で無効化）。
-          Stripe で PayPay が有効化されたら disabled を外し、PayPay の payment method で
-          confirmPayment（return_url 必須・リダイレクト）に差し替える想定。今は押せない。 */}
-      <button
-        type="button"
-        disabled
-        title={t("tip.paypayNotReady")}
-        className="mt-3 flex w-full cursor-not-allowed items-center justify-center gap-2 rounded-xl border-[1.5px] border-line bg-page py-[17px] text-center text-token-md font-bold text-muted opacity-60"
-      >
-        <span>{t("tip.payWithPaypay")}</span>
-        <span className="rounded-pill bg-stamp-bg px-2 py-0.5 text-token-xs font-medium text-muted">
-          {t("tip.paypayComingSoon")}
-        </span>
       </button>
 
       {/* 案内・エラー（決済開始失敗・ウォレット確定失敗など） */}
