@@ -7,7 +7,6 @@ import {
   redirect,
   useRouterState,
 } from "@tanstack/react-router";
-import { HomePage } from "../features/home/HomePage.js";
 import { TipPage } from "../features/tip/pages/TipPage.js";
 import { TipCompletePage } from "../features/tip/pages/TipCompletePage.js";
 import { StaffPage } from "../features/staff/pages/StaffPage.js";
@@ -76,11 +75,14 @@ const rootRoute = createRootRoute({
   ),
 });
 
-// "/" にホーム画面を割り当てる
+// "/" はログイン画面へリダイレクトする（旧・開発用ホームは廃止。
+// ログイン済みなら /login 側の判定でそのまま店員ホームへ進む）
 const indexRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/",
-  component: HomePage,
+  beforeLoad: () => {
+    throw redirect({ to: "/login" });
+  },
 });
 
 // "/tip/$membershipId" に投げ銭画面を割り当てる（membership＝人×店。URL パラメータ）
