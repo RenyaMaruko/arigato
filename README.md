@@ -100,64 +100,6 @@ Route（HTTP・認証・Zod検証）
 └── docs/             # 仕様・設計・運用ドキュメント
 ```
 
-## セットアップ（ローカル開発）
-
-### 必要なもの
-
-- Node.js 20 以上 / pnpm 8（`corepack enable` 推奨）
-- [Supabase](https://supabase.com/) プロジェクト（無料枠でOK）
-- [Stripe](https://stripe.com/jp) アカウント（テストモード）＋ [Stripe CLI](https://docs.stripe.com/stripe-cli)
-
-### 手順
-
-```bash
-# 1. 依存をインストール
-pnpm install
-
-# 2. 環境変数を用意（各 .env.example をコピーして実値を記入）
-cp apps/api/.env.example apps/api/.env
-cp apps/web/.env.example apps/web/.env
-cp packages/db/.env.example packages/db/.env
-
-# 3. DBマイグレーションを適用
-pnpm --filter @arigato/db migrate
-
-# 4. 開発サーバーを起動（web: 5173 / api: 8787）
-pnpm dev
-
-# 5. 別ターミナルで Stripe Webhook をローカル転送
-stripe listen --forward-to localhost:8787/webhooks/stripe
-# 表示された whsec_... を apps/api/.env の STRIPE_WEBHOOK_SECRET に設定して再起動
-```
-
-Supabase 側は Email+Password 認証の有効化・メール確認ON・Redirect URL（`http://localhost:5173/**`）・`media` バケット（public）の作成が必要です。
-
-> **シークレットの扱い**: APIキー等の実値は `.env` にのみ書き、絶対にコミットしないでください（`.gitignore` 済み）。
-
-### テスト決済
-
-Stripe テストモードでは実際の請求は発生しません。代表的なテストカード:
-
-| カード番号 | 用途 |
-|---|---|
-| `4242 4242 4242 4242` | 通常の成功（資金確定まで数日相当） |
-| `4000 0000 0000 0077` | 即時に送金可能（available）になる |
-
-## 開発コマンド
-
-```bash
-pnpm dev          # 全アプリの開発サーバー
-pnpm build        # 全パッケージのビルド（型チェック込み）
-pnpm test         # 全パッケージのテスト
-pnpm typecheck    # 型チェックのみ
-pnpm lint         # Lint
-pnpm db:generate  # Drizzle マイグレーション生成（スキーマ変更後）
-
-# 個別実行の例
-pnpm --filter @arigato/api test
-pnpm --filter @arigato/web dev
-```
-
 ## デプロイ
 
 テスト公開（ステージング）の構成・手順・本番ローンチ時のチェックリストは [docs/deploy.md](docs/deploy.md) にまとめています。
